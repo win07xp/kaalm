@@ -111,9 +111,9 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	u.OutputTokens = chunk.UsageMetadata.CandidatesTokenCount
 }
 
-// fixupRequestBody is a no-op: Vertex carries the model in the URL, not the
-// body, and the streaming toggle is a query parameter (see upstreamPath).
-func (vertexAdapter) fixupRequestBody(map[string]any) {}
+// streamUsageOption is false: a Vertex request needs no body change, since
+// the streaming toggle is a query parameter (see upstreamPath).
+func (vertexAdapter) streamUsageOption() bool { return false }
 
 // upstreamPath rewrites the {model} URL segment from the qualified name to the
 // raw model ID and appends ?alt=sse to streaming requests when absent, so the

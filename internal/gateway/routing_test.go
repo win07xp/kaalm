@@ -84,22 +84,17 @@ func TestOpenAIStreamUsageAndFixup(t *testing.T) {
 		t.Errorf("openai stream usage wrong: %+v", u)
 	}
 
-	body := map[string]any{"stream": true}
-	o.fixupRequestBody(body)
-	if _, ok := body["stream_options"]; !ok {
-		t.Error("include_usage fixup not injected")
+	if got := prepareBody(t, o, `{"stream":true}`); got != `{"stream":true,"stream_options":{"include_usage":true}}` {
+		t.Errorf("include_usage not added: %s", got)
 	}
-	// Absent stream flag: no injection.
-	body = map[string]any{}
-	o.fixupRequestBody(body)
-	if _, ok := body["stream_options"]; ok {
-		t.Error("fixup must not fire on non-streaming requests")
+	// Absent stream flag: nothing added.
+	if got := prepareBody(t, o, `{}`); got != `{}` {
+		t.Errorf("stream_options must not be added to a non-streaming request: %s", got)
 	}
 	// Caller-provided stream_options preserved.
-	body = map[string]any{"stream": true, "stream_options": map[string]any{"include_usage": false}}
-	o.fixupRequestBody(body)
-	if body["stream_options"].(map[string]any)["include_usage"] != false {
-		t.Error("caller-provided stream_options must be preserved")
+	body := `{"stream":true,"stream_options":{"include_usage":false}}`
+	if got := prepareBody(t, o, body); got != body {
+		t.Errorf("caller-provided stream_options must be preserved: %s", got)
 	}
 }
 

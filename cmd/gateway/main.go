@@ -167,34 +167,7 @@ func main() {
 	// requests per second. The defaults are 100 and 200.
 	restCfg.QPS = float32(clientQPS)
 	restCfg.Burst = clientBurst
-	// Secrets are never read through the shared informer cache. The gateway
-	// holds only get/watch on Secrets in kaalm-system plus dynamic
-	// resourceNames-scoped grants on individual channel Secrets (no
-	// cluster-wide list), so a cached Secret informer would issue a forbidden
-	// cluster-scoped LIST and the read would hang waiting for a sync that
-	// never lands. Secret reads go through secretwatch.Watcher instead: one
-	// GET-backed, name-filtered watch per referenced Secret. See
-	// docs/src/security/rbac.md#namespaced-grants-in-kaalm-system.
-	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
-		o.Scheme = scheme
-		o.Client.Cache = &client.CacheOptions{
-			DisableFor: []client.Object{&corev1.Secret{}},
-		}
-		// Nothing in the gateway reads managedFields, and on a Pod they
-		// are the largest single field; dropping them at the informer
-		// shrinks every cached object and every copy made of one.
-		o.Cache.DefaultTransform = cache.TransformStripManagedFields()
-		// The ConfigMap informer (budget watch-fold) must be scoped to the
-		// operator namespace: the gateway's Role grants list/watch there
-		// only, and an unscoped informer would issue a forbidden
-		// cluster-wide LIST and hang, the same failure mode the Secret
-		// comment above describes.
-		o.Cache.ByObject = map[client.Object]cache.ByObject{
-			&corev1.ConfigMap{}: {Namespaces: map[string]cache.Config{
-				operatorNamespace: {},
-			}},
-		}
-	})
+	cl, err := cluster.New(restCfg, clusterOptions(scheme, operatorNamespace))
 	if err != nil {
 		logger.Error("building cluster cache", "error", err)
 		os.Exit(1)
@@ -581,4 +554,50 @@ func setupTracing(ctx context.Context, server *gateway.Server,
 	server.Tracing = tracing
 	logger.Info("tracing enabled", "endpoint", endpoint, "sampleRatio", sampleRatio)
 	return func() { _ = tracing.Shutdown(context.Background()) }
+}
+
+// clusterOptions configures the gateway's shared cache and client.
+func clusterOptions(scheme *runtime.Scheme, operatorNamespace string) func(*cluster.Options) {
+	return func(o *cluster.Options) {
+		o.Scheme = scheme
+		// Secrets are never read through the shared informer cache. The
+		// gateway holds only get/watch on Secrets in kaalm-system plus
+		// dynamic resourceNames-scoped grants on individual channel
+		// Secrets (no cluster-wide list), so a cached Secret informer would
+		// issue a forbidden cluster-scoped LIST and the read would hang
+		// waiting for a sync that never lands. Secret reads go through
+		// secretwatch.Watcher instead: one GET-backed, name-filtered watch
+		// per referenced Secret. See
+		// docs/src/security/rbac.md#namespaced-grants-in-kaalm-system.
+		o.Client.Cache = &client.CacheOptions{
+			DisableFor: []client.Object{&corev1.Secret{}},
+		}
+		// Nothing in the gateway reads managedFields, and on a Pod they
+		// are the largest single field; dropping them at the informer
+		// shrinks every cached object and every copy made of one.
+		o.Cache.DefaultTransform = cache.TransformStripManagedFields()
+		noDeepCopy := true
+		readOnly := cache.ByObject{UnsafeDisableDeepCopy: &noDeepCopy}
+		// The ConfigMap informer (budget watch-fold) must be scoped to the
+		// operator namespace: the gateway's Role grants list/watch there
+		// only, and an unscoped informer would issue a forbidden
+		// cluster-wide LIST and hang, the same failure mode the Secret
+		// comment above describes.
+		o.Cache.ByObject = map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}: {Namespaces: map[string]cache.Config{
+				operatorNamespace: {},
+			}},
+			// The request paths Get each of these kinds once or more per
+			// request, and a deep copy per Get was a tenth of the gateway's
+			// allocations. No gateway code changes these objects; a reader
+			// that must, deep copies first (the async and platform intake
+			// do before handing objects to goroutines). The budget
+			// publisher's ModelProvider List shares memory the same way.
+			&kaalmv1beta1.Agent{}:         readOnly,
+			&kaalmv1beta1.AgentTask{}:     readOnly,
+			&kaalmv1beta1.AgentClass{}:    readOnly,
+			&kaalmv1beta1.ModelProvider{}: readOnly,
+			&kaalmv1beta1.ToolProvider{}:  readOnly,
+		}
+	}
 }

@@ -8,6 +8,11 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 )
 
 func TestParseBackoff(t *testing.T) {
@@ -81,5 +86,47 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 		if err := validatePlatformBaseURL(bad); err == nil {
 			t.Errorf("validatePlatformBaseURL(%q) must error", bad)
 		}
+	}
+}
+
+// The request-path kinds are served from the cache without a deep copy;
+// the options that keep Secrets out of the cache and scope ConfigMaps
+// stay as they were.
+func TestClusterOptionsShareRequestPathObjects(t *testing.T) {
+	scheme := runtime.NewScheme()
+	var o cluster.Options
+	clusterOptions(scheme, "kaalm-system")(&o)
+
+	if o.Scheme != scheme {
+		t.Error("scheme not set")
+	}
+	if o.Cache.DefaultTransform == nil {
+		t.Error("managedFields transform not set")
+	}
+	if o.Client.Cache == nil || len(o.Client.Cache.DisableFor) != 1 {
+		t.Fatalf("client cache options = %+v, want Secrets read uncached", o.Client.Cache)
+	}
+	if _, ok := o.Client.Cache.DisableFor[0].(*corev1.Secret); !ok {
+		t.Errorf("DisableFor = %T, want *corev1.Secret", o.Client.Cache.DisableFor[0])
+	}
+	byKind := map[string]cache.ByObject{}
+	for obj, cfg := range o.Cache.ByObject {
+		byKind[reflect.TypeOf(obj).Elem().Name()] = cfg
+	}
+	for _, kind := range []string{"Agent", "AgentTask", "AgentClass", "ModelProvider", "ToolProvider"} {
+		cfg, ok := byKind[kind]
+		if !ok || cfg.UnsafeDisableDeepCopy == nil || !*cfg.UnsafeDisableDeepCopy {
+			t.Errorf("%s: deep copy not disabled (%+v)", kind, cfg)
+		}
+	}
+	cm, ok := byKind["ConfigMap"]
+	if !ok {
+		t.Fatal("ConfigMap has no cache options")
+	}
+	if _, scoped := cm.Namespaces["kaalm-system"]; !scoped || len(cm.Namespaces) != 1 {
+		t.Errorf("ConfigMap namespaces = %v, want the operator namespace only", cm.Namespaces)
+	}
+	if cm.UnsafeDisableDeepCopy != nil {
+		t.Error("ConfigMap reads must keep their deep copy")
 	}
 }

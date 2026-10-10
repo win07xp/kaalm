@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -201,34 +202,56 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 // line reads through to the limit, where the caller can tell an over-limit
 // body from a malformed one.
 func ParseResponse(contentType string, r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
+	resp, _, err := ParseResponseRaw(contentType, r, rawID, maxLineBytes)
+	return resp, err
+}
+
+// ParseResponseRaw is ParseResponse that also returns the bytes the
+// response was decoded from: the JSON body, or the matching event's data.
+// A relay that does not change the response can send them on as they are.
+func ParseResponseRaw(contentType string, r io.Reader, rawID []byte, maxLineBytes int) (Response, []byte, error) {
 	if strings.HasPrefix(contentType, "text/event-stream") {
 		return readSSEResponse(r, rawID, maxLineBytes)
 	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
-		return Response{}, err
+		return Response{}, nil, err
 	}
 	var resp Response
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return Response{}, err
+		return Response{}, nil, err
 	}
-	return resp, nil
+	return resp, raw, nil
 }
 
+// sseBufPool reuses readSSEResponse's 64 KiB scanner start buffer. The
+// capacity stays fixed, because a Scanner's line cap is the larger of its
+// maximum and its buffer's capacity; a Scanner that outgrows the buffer
+// allocates its own, and only the original goes back.
+var sseBufPool = sync.Pool{New: func() any {
+	b := make([]byte, 64*1024)
+	return &b
+}}
+
 // readSSEResponse scans an SSE stream for the JSON-RPC response whose id
-// matches the request. Other events (server notifications, unrelated ids)
-// are skipped; the stream ending without a match is an error.
-func readSSEResponse(r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
+// matches the request, and returns it with the event's data. Other events
+// (server notifications, unrelated ids) are skipped; the stream ending
+// without a match is an error. An event's data lines are joined as they
+// come, each with one leading space removed.
+func readSSEResponse(r io.Reader, rawID []byte, maxLineBytes int) (Response, []byte, error) {
+	buf := sseBufPool.Get().(*[]byte)
+	defer sseBufPool.Put(buf)
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
-	var data strings.Builder
-	flush := func() (Response, bool) {
-		defer data.Reset()
-		if data.Len() == 0 {
+	scanner.Buffer((*buf)[:0], maxLineBytes)
+	// data is the current event's data; it never aliases the scanner's
+	// buffer, so it outlives the scan.
+	var data []byte
+	match := func() (Response, bool) {
+		if len(data) == 0 {
 			return Response{}, false
 		}
 		var resp Response
-		if err := json.Unmarshal([]byte(data.String()), &resp); err != nil {
+		if err := json.Unmarshal(data, &resp); err != nil {
 			return Response{}, false
 		}
 		if !IDEqual(resp.ID, rawID) {
@@ -237,21 +260,25 @@ func readSSEResponse(r io.Reader, rawID []byte, maxLineBytes int) (Response, err
 		return resp, true
 	}
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := scanner.Bytes()
 		switch {
-		case line == "":
-			if resp, ok := flush(); ok {
-				return resp, nil
+		case len(line) == 0:
+			if resp, ok := match(); ok {
+				return resp, data, nil
 			}
-		case strings.HasPrefix(line, "data:"):
-			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			data = data[:0]
+		case bytes.HasPrefix(line, sseDataPrefix):
+			data = append(data, bytes.TrimPrefix(line[len(sseDataPrefix):], []byte(" "))...)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return Response{}, err
+		return Response{}, nil, err
 	}
-	if resp, ok := flush(); ok {
-		return resp, nil
+	if resp, ok := match(); ok {
+		return resp, data, nil
 	}
-	return Response{}, fmt.Errorf("stream ended without a response for request id %s", string(rawID))
+	return Response{}, nil, fmt.Errorf("stream ended without a response for request id %s", string(rawID))
 }
+
+// sseDataPrefix opens an SSE data line.
+var sseDataPrefix = []byte("data:")

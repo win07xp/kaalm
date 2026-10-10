@@ -41,7 +41,7 @@ func (u Usage) isZero() bool {
 
 // providerAdapter carries the per-provider knowledge: request-format paths,
 // credential header shape, usage extraction (buffered and streamed), and
-// streaming request fixups. Anthropic and OpenAI/OpenAI-compatible are the
+// whether a streaming request needs the usage option. Anthropic and OpenAI/OpenAI-compatible are the
 // served types; google-vertex is reserved and keeps only its
 // outbound adapter pieces.
 type providerAdapter interface {
@@ -54,9 +54,9 @@ type providerAdapter interface {
 	// accumulateStreamUsage inspects one SSE data payload and folds any usage
 	// it carries into u.
 	accumulateStreamUsage(data []byte, u *Usage)
-	// fixupRequestBody may rewrite the (already model-rewritten) request body
-	// map before forwarding, for example injecting stream_options.
-	fixupRequestBody(body map[string]any)
+	// streamUsageOption reports whether a streaming request in this format
+	// needs stream_options.include_usage set for the stream to carry usage.
+	streamUsageOption() bool
 	// upstreamPath rewrites the inbound request path for the upstream. Most
 	// adapters pass it through; Vertex embeds the model in the path and
 	// injects ?alt=sse.
@@ -161,6 +161,9 @@ func serverToolCounts(raw json.RawMessage) map[string]int64 {
 // output_tokens (and cumulative server_tool_use counts) on message_delta.
 // message_stop carries no usage.
 func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
+	if !mayBeAnthropicUsageEvent(data) {
+		return
+	}
 	var evt struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -190,7 +193,18 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	}
 }
 
-func (anthropicAdapter) fixupRequestBody(map[string]any) {}
+// mayBeAnthropicUsageEvent reports whether an Anthropic stream payload can
+// be a message_start or message_delta event, the only events whose usage
+// accumulateStreamUsage reads, so the other events (the text deltas) skip
+// the decode. The decoder compares the type value exactly, so it must hold
+// one of the two names as written, or a \u escape that could spell one.
+func mayBeAnthropicUsageEvent(data []byte) bool {
+	return bytes.Contains(data, []byte("message_start")) ||
+		bytes.Contains(data, []byte("message_delta")) ||
+		bytes.Contains(data, []byte(`\u`))
+}
+
+func (anthropicAdapter) streamUsageOption() bool { return false }
 
 func (anthropicAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
 
@@ -222,9 +236,12 @@ func (openaiAdapter) extractUsage(body []byte) (Usage, bool) {
 
 // accumulateStreamUsage: a usage object appears in the final chunk preceding
 // [DONE], present only when stream_options.include_usage was set (which
-// fixupRequestBody guarantees).
+// the proxy adds to a streaming request without stream_options).
 func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
+		return
+	}
+	if !mayCarryOpenAIUsage(data) {
 		return
 	}
 	var chunk struct {
@@ -240,17 +257,39 @@ func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	u.OutputTokens = chunk.Usage.CompletionTokens
 }
 
-// fixupRequestBody injects stream_options: {include_usage: true} into
-// streaming requests when absent; without it OpenAI-format streams emit no
-// usage at all. The extra terminal usage chunk is backward-compatible.
-func (openaiAdapter) fixupRequestBody(body map[string]any) {
-	stream, _ := body["stream"].(bool)
-	if !stream {
-		return
+// mayCarryOpenAIUsage reports whether an OpenAI stream payload can hold a
+// usage member, so the content chunks skip the decode. encoding/json matches
+// a member name to a field case-insensitively, with Unicode folding (the
+// long s, U+017F, matches s), and after unescaping, so the payload must
+// hold a folded spelling of "usage" or a \u escape that could spell one.
+func mayCarryOpenAIUsage(data []byte) bool {
+	if bytes.Contains(data, []byte(`\u`)) {
+		return true
 	}
-	if _, present := body["stream_options"]; !present {
-		body["stream_options"] = map[string]any{"include_usage": true}
+	for i := 0; i+5 <= len(data); i++ {
+		if data[i]|0x20 != 'u' {
+			continue
+		}
+		j := i + 1
+		switch {
+		case data[j]|0x20 == 's':
+			j++
+		case data[j] == 0xc5 && j+1 < len(data) && data[j+1] == 0xbf: // U+017F
+			j += 2
+		default:
+			continue
+		}
+		if j+3 <= len(data) && data[j]|0x20 == 'a' && data[j+1]|0x20 == 'g' && data[j+2]|0x20 == 'e' {
+			return true
+		}
 	}
+	return false
 }
+
+// streamUsageOption: without stream_options.include_usage, OpenAI-format
+// streams emit no usage at all, so a streaming request without its own
+// stream_options gets it (see needsStreamOptions). The extra terminal usage
+// chunk is backward-compatible.
+func (openaiAdapter) streamUsageOption() bool { return true }
 
 func (openaiAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }

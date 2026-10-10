@@ -34,7 +34,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 
 | Status | `error.type` | `retryable` | `Retry-After` | Raised when |
 |---|---|---|---|---|
-| 400 | `invalid_request` | no | | The body is not JSON, `model` is not `{providerRef}/{modelId}`, the provider type is not built into this gateway, or the broker request is not a single JSON-RPC message on `/v1/mcp/{toolProvider}` |
+| 400 | `invalid_request` | no | | The body is not JSON, `model` is not `{providerRef}/{modelId}`, the body repeats the `model`, `stream`, or `stream_options` field (step 3 of [Request flow](../llm/request-handling.md#request-flow) gives the reason), the provider type is not built into this gateway, or the broker request is not a single JSON-RPC message on `/v1/mcp/{toolProvider}` |
 | 401 | `unauthorized` | no | | No client certificate and no bearer token, a bearer token from a Kaalm-managed Pod, a token `TokenReview` rejects, or a source IP outside the authenticated namespace |
 | 403 | `invalid_cert` | no | | A client certificate whose SAN is not an Agent or AgentTask identity |
 | 403 | `access_denied` | no | | The tenancy chain denies the provider ([Multi-tenancy](../../concepts/tenancy-and-tiers.md#multi-tenancy)); on the broker, the workload is not found, a namespace or class check denies the ToolProvider, or the caller sends a session id bound to another caller |

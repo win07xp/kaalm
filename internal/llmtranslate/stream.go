@@ -19,6 +19,7 @@ package llmtranslate
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -46,14 +47,36 @@ func NewStream(from, to Format, model string) Stream {
 	return nil
 }
 
-func sseEvent(name string, payload any) [][]byte {
-	data, _ := json.Marshal(payload)
-	return [][]byte{[]byte("event: " + name), append([]byte("data: "), data...), {}}
+// sseLines renders SSE lines for one stream. Payloads are typed structs
+// whose fields are in key order, so each renders exactly as the same keys in
+// a map would. Not safe for concurrent use, like the Stream that owns it.
+type sseLines struct {
+	buf bytes.Buffer
+	enc *json.Encoder
 }
 
-func sseData(payload any) [][]byte {
-	data, _ := json.Marshal(payload)
-	return [][]byte{append([]byte("data: "), data...), {}}
+// event appends an event line, the payload's data line, and the blank line
+// that ends the event. Each line is a new slice with one spare byte of
+// capacity, so a writer that appends the newline does not copy it again.
+func (w *sseLines) event(out [][]byte, name string, payload any) [][]byte {
+	b := make([]byte, 0, len("event: ")+len(name)+1)
+	return w.data(append(out, append(append(b, "event: "...), name...)), payload)
+}
+
+// data appends the payload's data line and the blank line that ends the
+// event.
+func (w *sseLines) data(out [][]byte, payload any) [][]byte {
+	if w.enc == nil {
+		w.enc = json.NewEncoder(&w.buf)
+	}
+	w.buf.Reset()
+	if err := w.enc.Encode(payload); err != nil {
+		w.buf.Reset()
+	}
+	// Encode ends the value with a newline, which the line does not carry.
+	payloadJSON := bytes.TrimSuffix(w.buf.Bytes(), []byte("\n"))
+	b := make([]byte, 0, len("data: ")+len(payloadJSON)+1)
+	return append(out, append(append(b, "data: "...), payloadJSON...), []byte{})
 }
 
 // ---- OpenAI chunks -> Anthropic events ----
@@ -70,6 +93,7 @@ type openAIToAnthropicStream struct {
 	stopped      bool
 	outputTokens int64
 	inputTokens  int64
+	lines        sseLines
 }
 
 type openAIChunk struct {
@@ -94,6 +118,70 @@ type openAIChunk struct {
 	} `json:"usage"`
 }
 
+// The Anthropic events this direction writes. Fields are in key order.
+type (
+	anthropicUsage struct {
+		InputTokens  int64 `json:"input_tokens"`
+		OutputTokens int64 `json:"output_tokens"`
+	}
+	anthropicMessageStart struct {
+		Message struct {
+			Content      [0]struct{}    `json:"content"`
+			ID           string         `json:"id"`
+			Model        string         `json:"model"`
+			Role         string         `json:"role"`
+			StopReason   *string        `json:"stop_reason"`
+			StopSequence *string        `json:"stop_sequence"`
+			Type         string         `json:"type"`
+			Usage        anthropicUsage `json:"usage"`
+		} `json:"message"`
+		Type string `json:"type"`
+	}
+	anthropicTextBlock struct {
+		Text string `json:"text"`
+		Type string `json:"type"`
+	}
+	anthropicToolUseBlock struct {
+		ID    string   `json:"id"`
+		Input struct{} `json:"input"`
+		Name  string   `json:"name"`
+		Type  string   `json:"type"`
+	}
+	anthropicBlockStart struct {
+		ContentBlock any    `json:"content_block"`
+		Index        int    `json:"index"`
+		Type         string `json:"type"`
+	}
+	anthropicTextDelta struct {
+		Text string `json:"text"`
+		Type string `json:"type"`
+	}
+	anthropicInputJSONDelta struct {
+		PartialJSON string `json:"partial_json"`
+		Type        string `json:"type"`
+	}
+	anthropicBlockDelta struct {
+		Delta any    `json:"delta"`
+		Index int    `json:"index"`
+		Type  string `json:"type"`
+	}
+	anthropicBlockStop struct {
+		Index int    `json:"index"`
+		Type  string `json:"type"`
+	}
+	anthropicMessageDelta struct {
+		Delta struct {
+			StopReason   string  `json:"stop_reason"`
+			StopSequence *string `json:"stop_sequence"`
+		} `json:"delta"`
+		Type  string         `json:"type"`
+		Usage anthropicUsage `json:"usage"`
+	}
+	anthropicMessageStop struct {
+		Type string `json:"type"`
+	}
+)
+
 func (s *openAIToAnthropicStream) Feed(line []byte) [][]byte {
 	data, ok := bytes.CutPrefix(line, []byte("data:"))
 	if !ok {
@@ -113,14 +201,11 @@ func (s *openAIToAnthropicStream) Feed(line []byte) [][]byte {
 		if chunk.Model != "" {
 			s.model = chunk.Model
 		}
-		out = append(out, sseEvent("message_start", map[string]any{
-			"type": "message_start",
-			"message": map[string]any{
-				"id": s.id, "type": "message", "role": roleAssistant, "model": s.model, "content": []any{},
-				"stop_reason": nil, stopSequence: nil,
-				keyUsage: map[string]any{"input_tokens": 0, "output_tokens": 0},
-			},
-		})...)
+		var start anthropicMessageStart
+		start.Type = "message_start"
+		start.Message.ID, start.Message.Type, start.Message.Role, start.Message.Model =
+			s.id, "message", roleAssistant, s.model
+		out = s.lines.event(out, "message_start", &start)
 	}
 	if chunk.Usage != nil {
 		s.inputTokens, s.outputTokens = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
@@ -128,12 +213,12 @@ func (s *openAIToAnthropicStream) Feed(line []byte) [][]byte {
 	for _, choice := range chunk.Choices {
 		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
 			if !s.blockOpen || s.blockIsTool {
-				out = append(out, s.openBlock(map[string]any{"type": typeText, typeText: ""}, false)...)
+				out = s.openBlock(out, &anthropicTextBlock{Type: typeText}, false)
 			}
-			out = append(out, sseEvent("content_block_delta", map[string]any{
-				"type": "content_block_delta", "index": s.blockIndex,
-				"delta": map[string]any{"type": "text_delta", typeText: *choice.Delta.Content},
-			})...)
+			out = s.lines.event(out, "content_block_delta", &anthropicBlockDelta{
+				Type: "content_block_delta", Index: s.blockIndex,
+				Delta: &anthropicTextDelta{Type: "text_delta", Text: *choice.Delta.Content},
+			})
 		}
 		for _, call := range choice.Delta.ToolCalls {
 			if s.toolIndexes == nil {
@@ -144,15 +229,14 @@ func (s *openAIToAnthropicStream) Feed(line []byte) [][]byte {
 				if call.Function != nil {
 					name = call.Function.Name
 				}
-				out = append(out, s.openBlock(map[string]any{
-					"type": typeToolUse, "id": call.ID, "name": name, keyInput: map[string]any{}}, true)...)
+				out = s.openBlock(out, &anthropicToolUseBlock{Type: typeToolUse, ID: call.ID, Name: name}, true)
 				s.toolIndexes[call.Index] = s.blockIndex
 			}
 			if call.Function != nil && call.Function.Arguments != "" {
-				out = append(out, sseEvent("content_block_delta", map[string]any{
-					"type": "content_block_delta", "index": s.toolIndexes[call.Index],
-					"delta": map[string]any{"type": "input_json_delta", "partial_json": call.Function.Arguments},
-				})...)
+				out = s.lines.event(out, "content_block_delta", &anthropicBlockDelta{
+					Type: "content_block_delta", Index: s.toolIndexes[call.Index],
+					Delta: &anthropicInputJSONDelta{Type: "input_json_delta", PartialJSON: call.Function.Arguments},
+				})
 			}
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -162,26 +246,24 @@ func (s *openAIToAnthropicStream) Feed(line []byte) [][]byte {
 	// The usage chunk (empty choices) follows the finish chunk: emit the
 	// delta once both are known, or at Finish.
 	if s.finish != "" && chunk.Usage != nil && !s.deltaSent {
-		out = append(out, s.messageDelta()...)
+		out = s.messageDelta(out)
 	}
 	return out
 }
 
-func (s *openAIToAnthropicStream) openBlock(block map[string]any, isTool bool) [][]byte {
-	var out [][]byte
+func (s *openAIToAnthropicStream) openBlock(out [][]byte, block any, isTool bool) [][]byte {
 	if s.blockOpen {
-		out = append(out, sseEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": s.blockIndex})...)
+		out = s.lines.event(out, "content_block_stop", &anthropicBlockStop{Type: "content_block_stop", Index: s.blockIndex})
 		s.blockIndex++
 	}
 	s.blockOpen, s.blockIsTool = true, isTool
-	return append(out, sseEvent("content_block_start", map[string]any{
-		"type": "content_block_start", "index": s.blockIndex, "content_block": block})...)
+	return s.lines.event(out, "content_block_start", &anthropicBlockStart{
+		Type: "content_block_start", Index: s.blockIndex, ContentBlock: block})
 }
 
-func (s *openAIToAnthropicStream) messageDelta() [][]byte {
-	var out [][]byte
+func (s *openAIToAnthropicStream) messageDelta(out [][]byte) [][]byte {
 	if s.blockOpen {
-		out = append(out, sseEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": s.blockIndex})...)
+		out = s.lines.event(out, "content_block_stop", &anthropicBlockStop{Type: "content_block_stop", Index: s.blockIndex})
 		s.blockOpen = false
 	}
 	stop := finishToStop[s.finish]
@@ -192,11 +274,10 @@ func (s *openAIToAnthropicStream) messageDelta() [][]byte {
 		stop = typeToolUse
 	}
 	s.deltaSent = true
-	return append(out, sseEvent("message_delta", map[string]any{
-		"type":   "message_delta",
-		"delta":  map[string]any{"stop_reason": stop, stopSequence: nil},
-		keyUsage: map[string]any{"input_tokens": s.inputTokens, "output_tokens": s.outputTokens},
-	})...)
+	delta := anthropicMessageDelta{Type: "message_delta",
+		Usage: anthropicUsage{InputTokens: s.inputTokens, OutputTokens: s.outputTokens}}
+	delta.Delta.StopReason = stop
+	return s.lines.event(out, "message_delta", &delta)
 }
 
 func (s *openAIToAnthropicStream) Finish() [][]byte {
@@ -209,9 +290,9 @@ func (s *openAIToAnthropicStream) Finish() [][]byte {
 		return nil
 	}
 	if !s.deltaSent {
-		out = append(out, s.messageDelta()...)
+		out = s.messageDelta(out)
 	}
-	return append(out, sseEvent("message_stop", map[string]any{"type": "message_stop"})...)
+	return s.lines.event(out, "message_stop", &anthropicMessageStop{Type: "message_stop"})
 }
 
 // ---- Anthropic events -> OpenAI chunks ----
@@ -225,13 +306,88 @@ type anthropicToOpenAIStream struct {
 	usage     struct{ in, out int64 }
 	finished  bool
 	done      bool
+	lines     sseLines
 }
 
-func (s *anthropicToOpenAIStream) chunk(delta map[string]any, finish any) [][]byte {
-	return sseData(map[string]any{
-		"id": s.id, "object": "chat.completion.chunk", keyCreated: s.created, "model": s.model,
-		keyChoices: []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}},
-	})
+// anthropicEvent is one Anthropic stream event. The per-token fields are
+// typed. The fields of the once-per-stream events stay generic, read as the
+// map lookups below, and the pass-through values (text, partial_json, error)
+// keep whatever JSON type the upstream sent.
+type anthropicEvent struct {
+	Type  string  `json:"type"`
+	Index float64 `json:"index"`
+	Delta struct {
+		Type        string `json:"type"`
+		Text        any    `json:"text"`
+		PartialJSON any    `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
+	} `json:"delta"`
+	Message      any `json:"message"`
+	ContentBlock any `json:"content_block"`
+	Usage        any `json:"usage"`
+	Error        any `json:"error"`
+}
+
+// The OpenAI chunks this direction writes. Fields are in key order.
+type (
+	openAIChoice struct {
+		Delta        any `json:"delta"`
+		FinishReason any `json:"finish_reason"`
+		Index        int `json:"index"`
+	}
+	openAIStreamChunk struct {
+		Choices [1]openAIChoice `json:"choices"`
+		Created int64           `json:"created"`
+		ID      string          `json:"id"`
+		Model   string          `json:"model"`
+		Object  string          `json:"object"`
+	}
+	openAIUsageChunk struct {
+		Choices [0]struct{} `json:"choices"`
+		Created int64       `json:"created"`
+		ID      string      `json:"id"`
+		Model   string      `json:"model"`
+		Object  string      `json:"object"`
+		Usage   struct {
+			CompletionTokens int64 `json:"completion_tokens"`
+			PromptTokens     int64 `json:"prompt_tokens"`
+			TotalTokens      int64 `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	openAIRoleDelta struct {
+		Content string `json:"content"`
+		Role    string `json:"role"`
+	}
+	openAIContentDelta struct {
+		Content any `json:"content"`
+	}
+	openAIToolStart struct {
+		Function struct {
+			Arguments string `json:"arguments"`
+			Name      any    `json:"name"`
+		} `json:"function"`
+		ID    any    `json:"id"`
+		Index int    `json:"index"`
+		Type  string `json:"type"`
+	}
+	openAIToolArguments struct {
+		Function struct {
+			Arguments any `json:"arguments"`
+		} `json:"function"`
+		Index int `json:"index"`
+	}
+	openAIToolCallsDelta[T any] struct {
+		ToolCalls [1]T `json:"tool_calls"`
+	}
+	openAIErrorChunk struct {
+		Error any `json:"error"`
+	}
+)
+
+func (s *anthropicToOpenAIStream) chunk(delta, finish any) [][]byte {
+	c := openAIStreamChunk{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model}
+	c.Choices[0] = openAIChoice{Delta: delta, FinishReason: finish}
+	return s.lines.data(nil, &c)
 }
 
 func (s *anthropicToOpenAIStream) Feed(line []byte) [][]byte {
@@ -243,54 +399,57 @@ func (s *anthropicToOpenAIStream) Feed(line []byte) [][]byte {
 	if !ok {
 		return nil
 	}
-	var ev map[string]any
-	if err := json.Unmarshal(bytes.TrimSpace(data), &ev); err != nil {
-		return nil
+	data = bytes.TrimSpace(data)
+	var ev anthropicEvent
+	if err := json.Unmarshal(data, &ev); err != nil {
+		// A field of the wrong JSON type reads as absent, as a failed map
+		// lookup did; anything that is not an object, or not JSON, drops.
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) || data[0] != '{' {
+			return nil
+		}
 	}
-	typ, _ := ev["type"].(string)
+	typ := ev.Type
 	if typ == "" {
 		typ = s.event
 	}
 	switch typ {
 	case "message_start":
-		msg, _ := ev["message"].(map[string]any)
+		msg, _ := ev.Message.(map[string]any)
 		if m, ok := msg["model"].(string); ok && m != "" {
 			s.model = m
 		}
 		if u, ok := msg[keyUsage].(map[string]any); ok {
 			s.usage.in, _ = numberOf(u["input_tokens"])
 		}
-		return s.chunk(map[string]any{"role": roleAssistant, "content": ""}, nil)
+		return s.chunk(&openAIRoleDelta{Role: roleAssistant}, nil)
 	case "content_block_start":
-		block, _ := ev["content_block"].(map[string]any)
+		block, _ := ev.ContentBlock.(map[string]any)
 		if block["type"] != typeToolUse {
 			return nil
 		}
-		idx, _ := numberOf(ev["index"])
 		if s.blocks == nil {
 			s.blocks = map[int]int{}
 		}
-		s.blocks[int(idx)] = s.toolIndex
-		out := s.chunk(map[string]any{keyToolCalls: []any{map[string]any{
-			"index": s.toolIndex, "id": block["id"], "type": typeFunction,
-			typeFunction: map[string]any{"name": block["name"], keyArguments: ""},
-		}}}, nil)
+		s.blocks[int(int64(ev.Index))] = s.toolIndex
+		var call openAIToolCallsDelta[openAIToolStart]
+		call.ToolCalls[0].Index, call.ToolCalls[0].ID, call.ToolCalls[0].Type = s.toolIndex, block["id"], typeFunction
+		call.ToolCalls[0].Function.Name = block["name"]
+		out := s.chunk(&call, nil)
 		s.toolIndex++
 		return out
 	case "content_block_delta":
-		delta, _ := ev["delta"].(map[string]any)
-		switch delta["type"] {
+		switch ev.Delta.Type {
 		case "text_delta":
-			return s.chunk(map[string]any{"content": delta[typeText]}, nil)
+			return s.chunk(&openAIContentDelta{Content: ev.Delta.Text}, nil)
 		case "input_json_delta":
-			idx, _ := numberOf(ev["index"])
-			return s.chunk(map[string]any{keyToolCalls: []any{map[string]any{
-				"index": s.blocks[int(idx)], typeFunction: map[string]any{keyArguments: delta["partial_json"]},
-			}}}, nil)
+			var call openAIToolCallsDelta[openAIToolArguments]
+			call.ToolCalls[0].Index = s.blocks[int(int64(ev.Index))]
+			call.ToolCalls[0].Function.Arguments = ev.Delta.PartialJSON
+			return s.chunk(&call, nil)
 		}
 	case "message_delta":
-		delta, _ := ev["delta"].(map[string]any)
-		if u, ok := ev[keyUsage].(map[string]any); ok {
+		if u, ok := ev.Usage.(map[string]any); ok {
 			if n, ok := numberOf(u["output_tokens"]); ok {
 				s.usage.out = n
 			}
@@ -298,18 +457,17 @@ func (s *anthropicToOpenAIStream) Feed(line []byte) [][]byte {
 				s.usage.in = n
 			}
 		}
-		stop, _ := delta["stop_reason"].(string)
-		finish := stopToFinish[stop]
+		finish := stopToFinish[ev.Delta.StopReason]
 		if finish == "" {
 			finish = "stop"
 		}
 		s.finished = true
-		return s.chunk(map[string]any{}, finish)
+		return s.chunk(&struct{}{}, finish)
 	case "message_stop":
 		return s.Finish()
 	case "error":
 		s.done = true
-		return append(sseData(map[string]any{"error": ev["error"]}), []byte("data: [DONE]"), []byte{})
+		return append(s.lines.data(nil, &openAIErrorChunk{Error: ev.Error}), []byte("data: [DONE]"), []byte{})
 	}
 	return nil
 }
@@ -321,13 +479,10 @@ func (s *anthropicToOpenAIStream) Finish() [][]byte {
 	s.done = true
 	var out [][]byte
 	if !s.finished {
-		out = append(out, s.chunk(map[string]any{}, "stop")...)
+		out = s.chunk(&struct{}{}, "stop")
 	}
-	out = append(out, sseData(map[string]any{
-		"id": s.id, "object": "chat.completion.chunk", keyCreated: s.created, "model": s.model,
-		keyChoices: []any{},
-		keyUsage: map[string]any{"prompt_tokens": s.usage.in, "completion_tokens": s.usage.out,
-			"total_tokens": s.usage.in + s.usage.out},
-	})...)
+	u := openAIUsageChunk{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model}
+	u.Usage.PromptTokens, u.Usage.CompletionTokens, u.Usage.TotalTokens = s.usage.in, s.usage.out, s.usage.in+s.usage.out
+	out = s.lines.data(out, &u)
 	return append(out, []byte("data: [DONE]"), []byte{})
 }

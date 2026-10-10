@@ -17,6 +17,10 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
+	"maps"
+	"reflect"
 	"testing"
 )
 
@@ -32,39 +36,42 @@ func TestAdapterFormatNames(t *testing.T) {
 	}
 }
 
-func TestAnthropicFixupIsNoOp(t *testing.T) {
-	body := map[string]any{"stream": true}
-	anthropicAdapter{}.fixupRequestBody(body)
-	if _, ok := body["stream_options"]; ok {
-		t.Error("anthropic must not inject stream_options")
+// prepareBody runs a request body through the proxy's preparation for a,
+// keeping its model.
+func prepareBody(t *testing.T, a providerAdapter, body string) string {
+	t.Helper()
+	f, err := scanRequestFields([]byte(body))
+	if err != nil {
+		t.Fatalf("%s: %v", body, err)
 	}
-	// Vertex fixup is also a no-op.
-	vBody := map[string]any{"stream": true}
-	vertexAdapter{}.fixupRequestBody(vBody)
-	if len(vBody) != 1 {
-		t.Error("vertex fixup must not mutate the body")
+	return string(rewriteRequestBody([]byte(body), f, f.model([]byte(body)), needsStreamOptions(a, f)))
+}
+
+func TestAnthropicAddsNoStreamOptions(t *testing.T) {
+	body := `{"model":"m","stream":true}`
+	if got := prepareBody(t, anthropicAdapter{}, body); got != body {
+		t.Errorf("anthropic must not add stream_options: %s", got)
+	}
+	// Vertex adds nothing either.
+	if got := prepareBody(t, vertexAdapter{}, body); got != body {
+		t.Errorf("vertex must not change the body: %s", got)
 	}
 }
 
-func TestOpenAIFixup(t *testing.T) {
-	// Non-streaming: untouched.
-	nonStream := map[string]any{"stream": false}
-	openaiAdapter{}.fixupRequestBody(nonStream)
-	if _, ok := nonStream["stream_options"]; ok {
-		t.Error("non-streaming request must not get stream_options")
-	}
-	// Streaming without stream_options: injected.
-	stream := map[string]any{"stream": true}
-	openaiAdapter{}.fixupRequestBody(stream)
-	opts, ok := stream["stream_options"].(map[string]any)
-	if !ok || opts["include_usage"] != true {
-		t.Errorf("stream_options.include_usage not injected: %v", stream["stream_options"])
-	}
-	// Streaming with an existing stream_options: preserved.
-	pre := map[string]any{"stream": true, "stream_options": map[string]any{"foo": "bar"}}
-	openaiAdapter{}.fixupRequestBody(pre)
-	if got := pre["stream_options"].(map[string]any); got["foo"] != "bar" {
-		t.Error("existing stream_options must be preserved")
+func TestOpenAIStreamOptions(t *testing.T) {
+	for _, c := range []struct{ name, body, want string }{
+		{"non-streaming", `{"model":"m","stream":false}`, `{"model":"m","stream":false}`},
+		{"streaming without stream_options", `{"model":"m","stream":true}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"existing stream_options", `{"model":"m","stream":true,"stream_options":{"foo":"bar"}}`,
+			`{"model":"m","stream":true,"stream_options":{"foo":"bar"}}`},
+		{"null stream_options", `{"model":"m","stream":true,"stream_options":null}`,
+			`{"model":"m","stream":true,"stream_options":null}`},
+		{"stream as a string", `{"model":"m","stream":"true"}`, `{"model":"m","stream":"true"}`},
+	} {
+		if got := prepareBody(t, openaiAdapter{}, c.body); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
 	}
 }
 
@@ -184,4 +191,99 @@ func TestAccumulateStreamUsage_Malformed(t *testing.T) {
 	if u.InputTokens != 0 {
 		t.Error("message_stop must not change usage")
 	}
+}
+
+// referenceOpenAIStreamUsage is openaiAdapter.accumulateStreamUsage without
+// its prefilter: every payload decoded.
+func referenceOpenAIStreamUsage(data []byte, u *Usage) {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
+		return
+	}
+	var chunk struct {
+		Usage *struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &chunk); err != nil || chunk.Usage == nil {
+		return
+	}
+	u.InputTokens = chunk.Usage.PromptTokens
+	u.OutputTokens = chunk.Usage.CompletionTokens
+}
+
+// referenceAnthropicStreamUsage is anthropicAdapter.accumulateStreamUsage
+// without its prefilter.
+func referenceAnthropicStreamUsage(data []byte, u *Usage) {
+	var evt struct {
+		Type    string `json:"type"`
+		Message struct {
+			Usage struct {
+				InputTokens int64 `json:"input_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+		Usage struct {
+			OutputTokens  int64           `json:"output_tokens"`
+			ServerToolUse json.RawMessage `json:"server_tool_use"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &evt); err != nil {
+		return
+	}
+	switch evt.Type {
+	case "message_start":
+		u.InputTokens = evt.Message.Usage.InputTokens
+	case "message_delta":
+		if evt.Usage.OutputTokens > 0 {
+			u.OutputTokens = evt.Usage.OutputTokens
+		}
+		if tools := serverToolCounts(evt.Usage.ServerToolUse); tools != nil {
+			u.ServerTools = tools
+		}
+	}
+}
+
+// streamUsageSeeds are payloads around the prefilters' edges.
+var streamUsageSeeds = []string{
+	`{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}`,
+	`{"choices":[{"delta":{"content":"usage"}}]}`,
+	`{"choices":[{"delta":{"content":"hi"}}]}`,
+	`{"USAGE":{"prompt_tokens":1,"completion_tokens":2}}`,
+	"{\"u\xc5\xbfage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}",
+	`{"usage":{"prompt_tokens":1,"completion_tokens":2}}`,
+	`{"usage":null}`,
+	`[DONE]`,
+	`{"type":"message_start","message":{"usage":{"input_tokens":7}}}`,
+	`{"type":"message_delta","usage":{"output_tokens":9,"server_tool_use":{"web_search_requests":2}}}`,
+	`{"type":"ping"}`,
+	`{"type":"content_block_delta","delta":{"type":"text_delta","text":"message_start"}}`,
+	`{"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+	`{"TYPE":"message_delta","USAGE":{"OUTPUT_TOKENS":4}}`,
+}
+
+func fuzzStreamUsage(f *testing.F, got, want func([]byte, *Usage)) {
+	for _, s := range streamUsageSeeds {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, prior := range []Usage{{}, {InputTokens: 3, OutputTokens: 4, ServerTools: map[string]int64{"x": 1}}} {
+			g := prior
+			w := prior
+			g.ServerTools, w.ServerTools = maps.Clone(prior.ServerTools), maps.Clone(prior.ServerTools)
+			got(data, &g)
+			want(data, &w)
+			if !reflect.DeepEqual(g, w) {
+				t.Fatalf("payload %q from %+v: got %+v, want %+v", data, prior, g, w)
+			}
+		}
+	})
+}
+
+// The prefilter never skips a payload whose usage the full decode reads.
+func FuzzOpenAIStreamUsageMatchesFullDecode(f *testing.F) {
+	fuzzStreamUsage(f, openaiAdapter{}.accumulateStreamUsage, referenceOpenAIStreamUsage)
+}
+
+func FuzzAnthropicStreamUsageMatchesFullDecode(f *testing.F) {
+	fuzzStreamUsage(f, anthropicAdapter{}.accumulateStreamUsage, referenceAnthropicStreamUsage)
 }

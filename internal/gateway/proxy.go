@@ -122,12 +122,21 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 
 	bodyLog("llm request", body)
 
-	var parsed map[string]any
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if !json.Valid(body) {
 		badRequest(w, "request body is not valid JSON")
 		return
 	}
-	qualified, _ := parsed["model"].(string)
+	fields, err := scanRequestFields(body)
+	if err != nil {
+		var dup *duplicateFieldError
+		if errors.As(err, &dup) {
+			badRequest(w, dup.Error())
+			return
+		}
+		badRequest(w, "request body is not valid JSON")
+		return
+	}
+	qualified := fields.model(body)
 	providerName, modelID, ok := splitQualifiedModel(qualified)
 	if !ok {
 		badRequest(w, `model must be a qualified "{providerRef}/{modelId}" name`)
@@ -194,14 +203,9 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Strip the provider prefix so the upstream sees the raw model ID, and
-	// apply adapter fixups (e.g. stream_options injection).
-	parsed["model"] = modelID
-	adapter.fixupRequestBody(parsed)
-	outBody, err := json.Marshal(parsed)
-	if err != nil {
-		badRequest(w, "re-encoding request body: "+err.Error())
-		return
-	}
+	// add stream_options where the format needs it for stream usage. Every
+	// other byte goes out as the agent sent it.
+	outBody := rewriteRequestBody(body, fields, modelID, needsStreamOptions(adapter, fields))
 
 	// Gateway traffic counts as activity for Agent callers (task Pods do not
 	// hibernate, so their traffic is not tracked).
@@ -236,7 +240,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		primary: provider, namespace: c.Namespace, workload: workload, modelID: modelID,
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
 		observed: map[failClass]bool{}, primarySettle: primarySettle,
-		parsed: parsed, inboundFormat: inboundFormat, modelFor: map[string]string{provider.Name: modelID},
+		body: outBody, inboundFormat: inboundFormat, modelFor: map[string]string{provider.Name: modelID},
 	}
 	res, ok := s.tryWithFallbacks(ctx, provider, st, func(ctx context.Context, cand *kaalmv1beta1.ModelProvider) forwardResult {
 		fctx, endForward := s.Tracing.Start(ctx, "llm.forward", trace.SpanKindClient,
@@ -363,11 +367,12 @@ func (s *Server) writeWalkResult(
 	_, _ = w.Write(respBody)
 }
 
-// candidateRequest builds what one candidate is forwarded: the caller's
-// bytes for a same-format candidate with the same model; a re-encoded body
-// when only the model differs (a same-type edge with a modelMap); and, for a
-// crossing, the body the eligibility check translated, with the candidate's
-// adapter fixups, on the candidate format's canonical path.
+// candidateRequest builds what one candidate is forwarded: the prepared
+// body for a same-format candidate with the same model; the same bytes with
+// only the model value replaced when the model differs (a same-type edge
+// with a modelMap); and, for a crossing, the body the eligibility check
+// translated, encoded, with stream_options added where the candidate's
+// format needs it, on the candidate format's canonical path.
 func (s *Server) candidateRequest(
 	st *walkState, cand *kaalmv1beta1.ModelProvider, outBody []byte, inboundPath string,
 	adapter, typeAdapter providerAdapter,
@@ -379,24 +384,17 @@ func (s *Server) candidateRequest(
 	}
 	if st.crosses(cand) {
 		if translated, ok := st.translated[cand.Name]; ok {
-			clone := make(map[string]any, len(translated))
-			for k, v := range translated {
-				clone[k] = v
-			}
-			candAdapter.fixupRequestBody(clone)
-			if encoded, err := json.Marshal(clone); err == nil {
-				return encoded, canonicalPath(formatForType(cand.Spec.Type)), candAdapter, candAdapter, model
+			if encoded, err := json.Marshal(translated); err == nil {
+				if f, err := scanRequestFields(encoded); err == nil {
+					body = rewriteRequestBody(encoded, f, model, needsStreamOptions(candAdapter, f))
+					return body, canonicalPath(formatForType(cand.Spec.Type)), candAdapter, candAdapter, model
+				}
 			}
 		}
 	}
-	if model != st.modelID && st.parsed != nil {
-		clone := make(map[string]any, len(st.parsed))
-		for k, v := range st.parsed {
-			clone[k] = v
-		}
-		clone["model"] = model
-		if encoded, err := json.Marshal(clone); err == nil {
-			return encoded, inboundPath, adapter, candAdapter, model
+	if model != st.modelID && len(st.body) > 0 {
+		if f, err := scanRequestFields(st.body); err == nil {
+			return rewriteRequestBody(st.body, f, model, false), inboundPath, adapter, candAdapter, model
 		}
 	}
 	return outBody, inboundPath, adapter, candAdapter, model
@@ -583,7 +581,8 @@ func isSSE(resp *http.Response) bool {
 	return strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 }
 
-// relayStream forwards SSE chunks as they arrive with no buffering, folding
+// relayStream forwards SSE events to the caller as each one completes, and
+// events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
 // tokens debited from the token rate limit, after the stream ends. A stream
 // that ends without usage settles at zero spend and is reported by
@@ -621,8 +620,11 @@ func (s *Server) relayStream(
 		}
 	}()
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	ef := &eventFlusher{r: resp.Body, f: flusher}
+	scanner := bufio.NewScanner(ef)
+	buf := getScanBuf()
+	defer putScanBuf(buf)
+	scanner.Buffer((*buf)[:0], 1024*1024)
 	callerLeft := func() string {
 		spanError(ctx, outcomeClientClosed)
 		return outcomeClientClosed
@@ -631,9 +633,7 @@ func (s *Server) relayStream(
 		if _, err := w.Write(append(line, '\n')); err != nil {
 			return false
 		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		ef.wrote(line)
 		return true
 	}
 	for scanner.Scan() {
@@ -675,6 +675,7 @@ func (s *Server) relayStream(
 				break
 			}
 		}
+		ef.end()
 		return outcomeError
 	}
 	if translator != nil {
@@ -684,6 +685,7 @@ func (s *Server) relayStream(
 			}
 		}
 	}
+	ef.end()
 	return outcomeOK
 }
 
@@ -730,9 +732,12 @@ func streamErrorType(cause error) string {
 
 // usageMissing reports a 2xx response that settles at zero spend because it
 // carried no usage. Under hard enforcement such a response is invisible to
-// the budget, so it is logged and counted.
+// the budget, so it is counted, and logged at most once a minute per
+// provider: the line names the first response of each window.
 func (s *Server) usageMissing(namespace, provider, modelID string) {
-	slog.Warn("LLM response carried no usage; settled at zero spend",
-		"namespace", namespace, "provider", provider, "model", modelID)
+	if s.usageMissingLog.allow(provider, usageMissingLogInterval) {
+		slog.Warn("LLM response carried no usage; settled at zero spend",
+			"namespace", namespace, "provider", provider, "model", modelID)
+	}
 	s.Metrics.UsageMissing(provider, modelID)
 }

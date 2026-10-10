@@ -21,6 +21,8 @@ import (
 	"crypto/x509"
 	"net"
 	"net/http"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // caller is the authenticated identity attached to a request after the
@@ -136,11 +138,15 @@ func (a *Authenticator) DualModePaths(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Pod-ownership precheck, uncached and BEFORE any token validation:
-		// Kaalm-managed Pods must use mTLS and cannot fall back to their
-		// ServiceAccount token as a second credential.
+		// Pod-ownership precheck, BEFORE any token validation: Kaalm-managed
+		// Pods must use mTLS and cannot fall back to their ServiceAccount
+		// token as a second credential. The Pod found here also serves the
+		// namespace cross-check below.
+		var pod *corev1.Pod
+		found := false
 		if !a.DisableSourceIPCheck {
-			if pod, found := a.Store.PodByIP(r.Context(), sourceIP(r)); found && isKaalmManagedPod(pod) {
+			pod, found = a.Store.PodByIP(r.Context(), sourceIP(r))
+			if found && isKaalmManagedPod(pod) {
 				unauthorized(w, "Kaalm-managed Pods must authenticate with mTLS")
 				return
 			}
@@ -156,9 +162,16 @@ func (a *Authenticator) DualModePaths(next http.HandlerFunc) http.HandlerFunc {
 			unauthorized(w, "token rejected")
 			return
 		}
-		if !a.crossCheck(r, ns) {
-			unauthorized(w, "source IP does not match the authenticated namespace")
-			return
+		if !a.DisableSourceIPCheck {
+			// A Pod the informer did not have at the precheck is looked up
+			// again: it may have appeared during the TokenReview.
+			if !found {
+				pod, found = a.Store.PodByIP(r.Context(), sourceIP(r))
+			}
+			if !found || pod.Namespace != ns {
+				unauthorized(w, "source IP does not match the authenticated namespace")
+				return
+			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, &caller{Namespace: ns})))
 	}

@@ -30,6 +30,10 @@ import (
 // implementation wraps a controller-runtime informer cache; tests use a
 // map-backed fake.
 type Store interface {
+	// AgentByName, TaskByName, ClassByName, ProviderByName, and
+	// ToolProviderByName return read-only objects: an implementation may
+	// hand back an object whose maps and slices are shared with its cache.
+	// A caller that needs to change one deep copies it first.
 	AgentByName(ctx context.Context, namespace, name string) (*kaalmv1beta1.Agent, bool)
 	TaskByName(ctx context.Context, namespace, name string) (*kaalmv1beta1.AgentTask, bool)
 	ClassByName(ctx context.Context, name string) (*kaalmv1beta1.AgentClass, bool)
@@ -38,7 +42,8 @@ type Store interface {
 	// refuses a Secret without the rule 49 label, or whose rule 50
 	// annotation does not list the host of the provider's spec.endpoint.
 	Credential(ctx context.Context, provider *kaalmv1beta1.ModelProvider) (string, error)
-	// ToolProviderByName looks up a ToolProvider for the MCP broker.
+	// ToolProviderByName looks up a ToolProvider for the MCP broker. The
+	// object is read-only, as above.
 	ToolProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ToolProvider, bool)
 	// ToolCredential resolves the tool provider's credential Secret key
 	// value, with the same rule 49 and 50 refusals as Credential. A nil

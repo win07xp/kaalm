@@ -634,7 +634,7 @@ func (s *Server) relayFilteredToolsList(
 	maxBytes := s.mcpMaxBodyBytes()
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
 	rr := &readErrRecorder{r: lr}
-	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), rr, msg.ID, int(maxBytes)+1)
+	parsed, raw, err := mcp.ParseResponseRaw(resp.Header.Get("Content-Type"), rr, msg.ID, int(maxBytes)+1)
 	if err != nil && lr.N <= 0 {
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
@@ -669,42 +669,84 @@ func (s *Server) relayFilteredToolsList(
 			Message: msg, Provider: providerName}, 0)
 		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
-	if parsed.Error == nil && parsed.Result != nil {
-		var result map[string]json.RawMessage
-		if err := json.Unmarshal(parsed.Result, &result); err == nil {
-			var tools []json.RawMessage
-			_ = json.Unmarshal(result["tools"], &tools)
-			kept := make([]json.RawMessage, 0, len(tools))
-			for _, raw := range tools {
-				var t struct {
-					Name string `json:"name"`
-				}
-				if json.Unmarshal(raw, &t) == nil && filter.permits(t.Name) {
-					kept = append(kept, raw)
-				}
+	// A caller allowed every tool gets the upstream answer as it came, unless
+	// its result may carry a cacheScope to rewrite. Any other result is
+	// filtered, even one that arrives beside an error member: the error is
+	// relayed too, and the tools must not leak through it.
+	encoded := raw
+	if filter.allow != nil || mayCarryCacheScope(parsed.Result) {
+		if parsed.Result != nil {
+			// A result that is not an object (null included) holds no
+			// tools, so it is relayed unfiltered.
+			if narrowed, ok := narrowToolsResult(parsed.Result, filter); ok {
+				parsed.Result = narrowed
 			}
-			keptRaw, _ := json.Marshal(kept)
-			result["tools"] = keptRaw
-			if _, ok := result["cacheScope"]; ok {
-				// The filter narrowed the catalog per caller: a shared
-				// cache must never serve this answer as the server's list.
-				result["cacheScope"] = json.RawMessage(`"private"`)
-			}
-			newResult, _ := json.Marshal(result)
-			parsed.Result = newResult
 		}
-	}
-	encoded, err := json.Marshal(parsed)
-	if err != nil {
-		msg := "re-encoding tools/list response"
-		writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
-			Message: msg, Provider: providerName, Retryable: true}, 0)
-		return 0, http.StatusInternalServerError, errInternalUnavailable, msg + ": " + err.Error()
+		encoded, err = json.Marshal(parsed)
+		if err != nil {
+			msg := "re-encoding tools/list response"
+			writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
+				Message: msg, Provider: providerName, Retryable: true}, 0)
+			return 0, http.StatusInternalServerError, errInternalUnavailable, msg + ": " + err.Error()
+		}
 	}
 	bodyLog("mcp response", encoded)
 	w.Header().Set("Content-Type", "application/json")
 	n, _ := w.Write(encoded)
 	return int64(n), http.StatusOK, "", ""
+}
+
+// mayCarryCacheScope reports whether a tools/list result can hold a
+// cacheScope member: the name as written, or a \u escape that could spell
+// it. A result without one needs no rewrite for a caller allowed every tool.
+func mayCarryCacheScope(result json.RawMessage) bool {
+	return bytes.Contains(result, []byte("cacheScope")) || bytes.Contains(result, []byte(`\u`))
+}
+
+// narrowToolsResult keeps the tools in a tools/list result that filter
+// permits, and marks a cacheScope private: the answer is per caller, so a
+// shared cache must never serve it as the server's list. It
+// returns false for a result that is not an object. Kept entries are
+// joined from the upstream bytes; the result is re-encoded, which compacts
+// it as encoding/json does.
+func narrowToolsResult(result json.RawMessage, filter *toolFilter) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil || m == nil {
+		return nil, false
+	}
+	tools := m["tools"]
+	kept := make([]byte, 0, len(tools))
+	kept = append(kept, '[')
+	dec := json.NewDecoder(bytes.NewReader(tools))
+	if tok, err := dec.Token(); err == nil && tok == json.Delim('[') {
+		for dec.More() {
+			start := dec.InputOffset()
+			var t struct {
+				Name string `json:"name"`
+			}
+			err := dec.Decode(&t)
+			var typeErr *json.UnmarshalTypeError
+			if err != nil && !errors.As(err, &typeErr) {
+				break // the result already parsed, so this cannot happen
+			}
+			if err != nil || !filter.permits(t.Name) {
+				continue
+			}
+			if len(kept) > 1 {
+				kept = append(kept, ',')
+			}
+			kept = append(kept, bytes.TrimLeft(tools[start:dec.InputOffset()], " \t\r\n,")...)
+		}
+	}
+	m["tools"] = append(kept, ']')
+	if _, ok := m["cacheScope"]; ok {
+		m["cacheScope"] = json.RawMessage(`"private"`)
+	}
+	narrowed, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return narrowed, true
 }
 
 // readErrRecorder passes reads through and keeps the first error other than
@@ -779,15 +821,16 @@ func relayMCPBuffered(
 	return int64(n), resp.StatusCode, "", ""
 }
 
-// relayMCPStream forwards SSE events as they arrive, flushing per line,
-// bounded by the response cap and the caller's disconnect. The status line
-// is already sent, so no error response is possible once the stream runs:
-// it ends with one JSON-RPC error event for the request id when it passes
-// the cap (response_too_large), when the upstream deadline passes
-// (tool_timeout), or when the upstream read fails for any other reason
-// (tool_unavailable). On those failures the line the failure cut off is not
-// forwarded, so the event parses as its own message. A caller that left
-// gets no event, and the call's error type is client_closed. It returns the upstream bytes relayed
+// relayMCPStream forwards SSE events as each one completes (events that
+// arrive together leave in one write, see eventFlusher), bounded by the
+// response cap and the caller's disconnect. The status line is already sent,
+// so no error response is possible once the stream runs: it ends with one
+// JSON-RPC error event for the request id when it passes the cap
+// (response_too_large), when the upstream deadline passes (tool_timeout), or
+// when the upstream read fails for any other reason (tool_unavailable). On
+// those failures the line the failure cut off is not forwarded, so the event
+// parses as its own message. A caller that left gets no event, and the call's
+// error type is client_closed. It returns the upstream bytes relayed
 // downstream, the error type, and the audit detail; only the detail carries
 // the transport error, because it can name the tool server's address.
 func relayMCPStream(
@@ -821,8 +864,11 @@ func relayMCPStream(
 	// Reading one byte past the cap tells a stream that passes it apart
 	// from one that ends exactly at it; the split counts raw bytes,
 	// line terminators included.
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxBytes+1))
-	scanner.Buffer(make([]byte, 0, 64*1024), int(maxBytes)+1)
+	ef := &eventFlusher{r: io.LimitReader(resp.Body, maxBytes+1), f: flusher}
+	scanner := bufio.NewScanner(ef)
+	buf := getScanBuf()
+	defer putScanBuf(buf)
+	scanner.Buffer((*buf)[:0], int(maxBytes)+1)
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 		advance, token, err := bufio.ScanLines(data, atEOF)
 		consumed += int64(advance)
@@ -853,7 +899,7 @@ func relayMCPStream(
 		if err != nil {
 			return written, outcomeClientClosed, ""
 		}
-		flush()
+		ef.wrote(line)
 	}
 	err := scanner.Err()
 	switch {
@@ -878,8 +924,9 @@ func relayMCPStream(
 			bodyLog("mcp stream", tail)
 			n, _ := w.Write(append(tail, '\n'))
 			written += int64(n)
-			flush()
+			ef.wrote(tail)
 		}
+		ef.end()
 		return written, "", ""
 	default:
 		msg := fmt.Sprintf("reading the stream from tool provider %q failed; the stream is truncated", providerName)
