@@ -341,6 +341,9 @@ func (h *harness) printTable() {
 				l.Client.LatencyMs.P95, l.GatewaySideMs.P95, l.Client.LatencyMs.P99, l.GatewaySideMs.P99)
 			fmt.Printf("  statuses %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
 				l.Client.Statuses, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+			if l.GatewayPodsChanged {
+				fmt.Println(podsChangedNote)
+			}
 		}
 	}
 	printRamp("ramp", s.Ramp)
@@ -401,6 +404,9 @@ func (h *harness) printTable() {
 			fmt.Printf("  statuses %v  broker %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
 				l.Client.Statuses, l.CallsByStatus, l.GatewayCPUPerRequestMs,
 				l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+			if l.GatewayPodsChanged {
+				fmt.Println(podsChangedNote)
+			}
 		}
 	}
 	if st := s.Stream; st != nil {
@@ -414,6 +420,9 @@ func (h *harness) printTable() {
 				l.Name, l.Client.RPS, ttfb.P50, l.Client.LatencyMs.P50, ttfb.P99, l.Client.LatencyMs.P99)
 			fmt.Printf("  statuses %v  spend %.3f USD  usage missing %.0f  gw %.3f ms CPU/req, peak %.0f MiB\n",
 				l.Client.Statuses, l.SpendUSD, l.UsageMissing, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.MemMiB)
+			if l.GatewayPodsChanged {
+				fmt.Println(podsChangedNote)
+			}
 		}
 	}
 	if p := s.Providers; p != nil {
@@ -433,6 +442,9 @@ func (h *harness) printTable() {
 			fmt.Printf("  %-36s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f  statuses %v  gw %.3f ms CPU/req\n",
 				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
 				l.Client.LatencyMs.P99, l.GatewaySideMs.P99, l.Client.Statuses, l.GatewayCPUPerRequestMs)
+			if l.GatewayPodsChanged {
+				fmt.Println(podsChangedNote)
+			}
 		}
 	}
 	for _, n := range s.Notes {

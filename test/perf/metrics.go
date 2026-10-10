@@ -24,6 +24,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +61,10 @@ type bucket struct {
 type snapshot struct {
 	at      time.Time
 	metrics map[string][]sample // metric name -> samples (one per label set)
+	// pods names the Pods the snapshot summed, sorted. Deltas between two
+	// snapshots hold only when both summed the same Pods: a Pod that left
+	// or joined takes its counters with it.
+	pods []string
 }
 
 // scrapeComponent snapshots one chart component's /metrics across all its
@@ -90,23 +95,43 @@ func (k *cluster) scrapeComponentOnce(ctx context.Context, namespace, component,
 	}); err != nil {
 		return nil, err
 	}
-	snap := &snapshot{at: time.Now(), metrics: map[string][]sample{}}
-	scraped := 0
-	for _, pod := range pods.Items {
-		if pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		families, err := k.scrapePod(namespace, pod.Name, port)
-		if err != nil {
-			return nil, fmt.Errorf("scrape %s: %w", pod.Name, err)
-		}
-		snap.merge(families)
-		scraped++
-	}
-	if scraped == 0 {
+	snap := &snapshot{at: time.Now(), metrics: map[string][]sample{}, pods: scrapeTargets(pods.Items)}
+	if len(snap.pods) == 0 {
 		return nil, fmt.Errorf("no running %s pods to scrape", component)
 	}
+	for _, name := range snap.pods {
+		families, err := k.scrapePod(namespace, name, port)
+		if err != nil {
+			return nil, fmt.Errorf("scrape %s: %w", name, err)
+		}
+		snap.merge(families)
+	}
 	return snap, nil
+}
+
+// scrapeTargets returns the sorted names of the Running Pods that are not
+// terminating. A gateway or controller replica that is shutting down stays
+// Running while it drains; summing it into one snapshot but not the next
+// would make that replica's counters look like negative traffic.
+func scrapeTargets(pods []corev1.Pod) []string {
+	var names []string
+	for i := range pods {
+		if pods[i].Status.Phase != corev1.PodRunning || pods[i].DeletionTimestamp != nil {
+			continue
+		}
+		names = append(names, pods[i].Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// podsChanged reports whether two snapshots summed different Pods, so
+// their deltas do not hold. A missing before snapshot changes nothing.
+func podsChanged(before, after *snapshot) bool {
+	if before == nil || after == nil {
+		return false
+	}
+	return !slices.Equal(before.pods, after.pods)
 }
 
 func (k *cluster) scrapePod(namespace, pod, port string) (map[string]*dto.MetricFamily, error) {
