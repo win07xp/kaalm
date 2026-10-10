@@ -20,12 +20,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/win07xp/kaalm/internal/tlsutil"
@@ -57,6 +60,11 @@ type GatewayChatClient struct {
 	// own syncDeliveryDeadline settles first in production; this is the
 	// client-side backstop.
 	Timeout time.Duration
+
+	// clientOnce builds the one pooled client on first use, after the
+	// caller has set the fields above.
+	clientOnce sync.Once
+	client     *http.Client
 }
 
 // NewGatewayChatClient builds the production client from the console's TLS
@@ -88,32 +96,83 @@ func (c *GatewayChatClient) WorkloadSpend(ctx context.Context, namespace string)
 	return c.do(ctx, http.MethodGet, "/v1/spend?namespace="+url.QueryEscape(namespace), nil)
 }
 
+// httpClient returns the one pooled client every call shares, so calls
+// reuse a connection instead of each paying a TLS handshake and leaving an
+// idle connection behind. The TLS config reads the console identity and the
+// CA bundle from the loader on each handshake, so a rotated certificate or
+// bundle applies to the next connection with no new client.
+func (c *GatewayChatClient) httpClient() *http.Client {
+	c.clientOnce.Do(func() {
+		timeout := c.Timeout
+		if timeout == 0 {
+			timeout = 2 * time.Minute
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		// The gateway is dialed directly over HTTP/1.1, as before the client
+		// was pooled.
+		transport.Proxy = nil
+		transport.ForceAttemptHTTP2 = false
+		transport.TLSClientConfig = c.tlsConfig()
+		c.client = &http.Client{Timeout: timeout, Transport: transport}
+	})
+	return c.client
+}
+
+// tlsConfig builds the gateway TLS config. With a loader, the client
+// certificate comes from GetClientCertificate and the gateway chain is
+// verified in VerifyConnection against the current CA pool; the standard
+// verification is skipped only because VerifyConnection replaces it.
+func (c *GatewayChatClient) tlsConfig() *tls.Config {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.ServerName}
+	if c.Insecure {
+		cfg.InsecureSkipVerify = true // dev/test only
+	}
+	loader := c.Loader
+	if loader == nil {
+		return cfg
+	}
+	cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		return loader.Certificate()
+	}
+	if c.Insecure {
+		return cfg
+	}
+	cfg.InsecureSkipVerify = true // replaced by VerifyConnection below
+	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return errors.New("gateway presented no certificate")
+		}
+		pool, err := loader.CAPool()
+		if err != nil {
+			return err
+		}
+		opts := x509.VerifyOptions{
+			Roots:         pool,
+			DNSName:       cs.ServerName,
+			Intermediates: x509.NewCertPool(),
+		}
+		for _, cert := range cs.PeerCertificates[1:] {
+			opts.Intermediates.AddCert(cert)
+		}
+		_, err = cs.PeerCertificates[0].Verify(opts)
+		return err
+	}
+	return cfg
+}
+
 // do runs one mTLS request against the gateway and relays status and body.
 func (c *GatewayChatClient) do(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.ServerName}
-	if c.Insecure {
-		tlsCfg.InsecureSkipVerify = true // dev/test only
-	}
 	if c.Loader != nil {
-		cert, err := c.Loader.Certificate()
-		if err != nil {
+		// A missing identity fails here, before any connection, as a plain
+		// file error rather than a handshake failure.
+		if _, err := c.Loader.Certificate(); err != nil {
 			return 0, nil, err
 		}
-		pool, err := c.Loader.CAPool()
-		if err != nil {
+		if _, err := c.Loader.CAPool(); err != nil {
 			return 0, nil, err
 		}
-		tlsCfg.Certificates = []tls.Certificate{*cert}
-		tlsCfg.RootCAs = pool
 	}
-	timeout := c.Timeout
-	if timeout == 0 {
-		timeout = 2 * time.Minute
-	}
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
+	client := c.httpClient()
 	target := strings.TrimSuffix(c.BaseURL, "/") + path
 	var body io.Reader
 	if payload != nil {
