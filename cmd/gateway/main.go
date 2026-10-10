@@ -316,6 +316,10 @@ func main() {
 		stop()
 	}()
 	store.Secrets = secretwatch.New(runCtx, clientset)
+	// A Secret the gateway may not read yet answers its last refusal for a
+	// second instead of costing a GET per request, and a grant that lands is
+	// used within that second.
+	store.Secrets.ErrorTTL = time.Second
 
 	go func() {
 		if err := cl.Start(runCtx); err != nil {

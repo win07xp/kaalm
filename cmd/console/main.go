@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -50,6 +51,8 @@ func main() {
 		gatewayURL          string
 		insecureSkipGateway bool
 		logLevel            slog.Level
+		clientQPS           float64
+		clientBurst         int
 		maxMessageBodyBytes int64
 		drainDelay          time.Duration
 		shutdownTimeout     time.Duration
@@ -65,6 +68,8 @@ func main() {
 	flag.Int64Var(&maxMessageBodyBytes, "max-message-body-bytes", 1<<20,
 		"test-chat request body cap in bytes; larger bodies get 413 (the chart passes gateway.maxMessageBodyBytes)")
 	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
+	flag.Float64Var(&clientQPS, "client-qps", 100, "Kubernetes API client sustained requests per second")
+	flag.IntVar(&clientBurst, "client-burst", 200, "Kubernetes API client burst above --client-qps")
 	flag.DurationVar(&drainDelay, "drain-delay", 5*time.Second,
 		"after SIGTERM, how long to keep serving while Services and ingress controllers "+
 			"stop routing new connections to this Pod; 0 skips the wait")
@@ -92,12 +97,20 @@ func main() {
 	utilruntime.Must(kaalmv1beta1.AddToScheme(scheme))
 
 	restCfg := ctrl.GetConfigOrDie()
+	// Both clients below take this limit, each in a token bucket of its own.
+	// It is sized for the request path: every bearer TokenReview and every
+	// per-namespace SubjectAccessReview goes through the clientset.
+	restCfg.QPS = float32(clientQPS)
+	restCfg.Burst = clientBurst
 	// The cached client starts informers lazily per type. The console's RBAC
 	// covers exactly the four kaalm.io kinds the data layer reads (Agent,
 	// AgentTask, AgentChannel, ModelProvider) and namespaces, and the data
 	// layer reads nothing else, so no other informer ever starts.
 	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
 		o.Scheme = scheme
+		// Nothing in the console reads managedFields; dropping them at the
+		// informer shrinks every cached object and every list copy.
+		o.Cache.DefaultTransform = cache.TransformStripManagedFields()
 	})
 	if err != nil {
 		logger.Error("building cluster cache", "error", err)

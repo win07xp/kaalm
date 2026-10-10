@@ -114,6 +114,8 @@ spec:
             - --tls-key=/var/run/kaalm/tls.key
             - --tls-ca=/var/run/kaalm/ca.crt
             - --log-level={{ .Values.console.logLevel }}
+            - --client-qps={{ .Values.console.client.qps }}
+            - --client-burst={{ .Values.console.client.burst }}
             - --max-message-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxMessageBodyBytes }}
             - --drain-delay={{ .Values.console.shutdown.drainDelay }}
             - --shutdown-timeout={{ .Values.console.shutdown.timeout }}

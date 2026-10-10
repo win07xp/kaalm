@@ -279,6 +279,13 @@ console:
   healthPort: 8081
   # Log level for the JSON logs: debug, info, warn, or error.
   logLevel: info
+  # Kubernetes API client rate limit: sustained requests per second and the
+  # burst above it. Sized for request-path reviews: bearer TokenReviews, and
+  # one SubjectAccessReview per namespace for a caller without the
+  # cluster-wide grant.
+  client:
+    qps: 100
+    burst: 200
   # How a terminating console Pod shuts down, with the same keys and rules as
   # gateway.shutdown. timeout waits for in-flight requests only.
   shutdown:

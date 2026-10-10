@@ -130,9 +130,11 @@ func TestDeployments_LoggingAndClientFlags(t *testing.T) {
 	})
 	t.Run("console", func(t *testing.T) {
 		wantArgs(t, renderContainer(t, "console.yaml", "--set", "console.enabled=true"),
-			"--log-level=info")
+			"--log-level=info", "--client-qps=100", "--client-burst=200")
 		wantArgs(t, renderContainer(t, "console.yaml",
-			"--set", "console.enabled=true", "--set", "console.logLevel=debug"),
-			"--log-level=debug")
+			"--set", "console.enabled=true", "--set", "console.logLevel=debug",
+			"--set", "console.client.qps=300",
+			"--set", "console.client.burst=600"),
+			"--log-level=debug", "--client-qps=300", "--client-burst=600")
 	})
 }

@@ -32,7 +32,7 @@ var errListUnsupported = errors.New("secretwatch: List is not supported")
 // controller-runtime reader can take it. Get serves *corev1.Secret only and
 // passes the watcher's errors through unchanged: an absent Secret is an
 // apierrors NotFound (from the synced cache or the live fallback) and a
-// forbidden read is the live read's apierrors Forbidden.
+// forbidden read is the informer GET's apierrors Forbidden.
 type Reader struct {
 	Watcher *Watcher
 }

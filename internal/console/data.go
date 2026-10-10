@@ -31,6 +31,10 @@ import (
 // Data is the console's single data layer: every read the JSON API serves
 // and every object the page templates render comes through here, from the
 // Kubernetes API and nowhere else. The console holds no state of its own.
+//
+// List reads skip the cache's deep copy, so their results are the cache's
+// own objects: every row builder only reads them, and nothing here may
+// modify a listed object.
 type Data struct {
 	Reader client.Reader
 }
@@ -39,7 +43,7 @@ type Data struct {
 // the caller's job (the AccessChecker); this is the candidate list.
 func (d *Data) Namespaces(ctx context.Context) ([]string, error) {
 	var list corev1.NamespaceList
-	if err := d.Reader.List(ctx, &list); err != nil {
+	if err := d.Reader.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(list.Items))
@@ -54,7 +58,7 @@ func (d *Data) Namespaces(ctx context.Context) ([]string, error) {
 // sorted by name, and the namespace's total agent count.
 func (d *Data) Fleet(ctx context.Context, namespace string, limit int) ([]FleetRow, int, error) {
 	var list kaalmv1beta1.AgentList
-	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace), client.UnsafeDisableDeepCopy); err != nil {
 		return nil, 0, err
 	}
 	keep := newest(len(list.Items), limit, func(i int) *metav1.ObjectMeta { return &list.Items[i].ObjectMeta })
@@ -83,7 +87,7 @@ func (d *Data) Agent(ctx context.Context, namespace, name string) (AgentDetail, 
 // namespace's total task count.
 func (d *Data) Tasks(ctx context.Context, namespace string, limit int) ([]TaskRow, int, error) {
 	var list kaalmv1beta1.AgentTaskList
-	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace), client.UnsafeDisableDeepCopy); err != nil {
 		return nil, 0, err
 	}
 	keep := newest(len(list.Items), limit, func(i int) *metav1.ObjectMeta { return &list.Items[i].ObjectMeta })
@@ -109,7 +113,7 @@ func (d *Data) Tasks(ctx context.Context, namespace string, limit int) ([]TaskRo
 // rows, sorted by name, and the namespace's total channel count.
 func (d *Data) Channels(ctx context.Context, namespace string, limit int) ([]ChannelRow, int, error) {
 	var list kaalmv1beta1.AgentChannelList
-	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace), client.UnsafeDisableDeepCopy); err != nil {
 		return nil, 0, err
 	}
 	keep := newest(len(list.Items), limit, func(i int) *metav1.ObjectMeta { return &list.Items[i].ObjectMeta })
@@ -148,7 +152,7 @@ func newest(n, limit int, meta func(i int) *metav1.ObjectMeta) []int {
 // the namespace being viewed are extracted.
 func (d *Data) Spend(ctx context.Context, namespace string) ([]SpendRow, error) {
 	var list kaalmv1beta1.ModelProviderList
-	if err := d.Reader.List(ctx, &list); err != nil {
+	if err := d.Reader.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, err
 	}
 	rows := make([]SpendRow, 0)

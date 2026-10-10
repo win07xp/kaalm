@@ -1,7 +1,7 @@
-# Tuning the controller and gateway
+# Tuning the controller, gateway, and console
 
 The chart's defaults suit most clusters. The values on this page change how
-the two components behave under load, during debugging, when they issue
+the components behave under load, during debugging, when they issue
 workload certificates, or on a cluster whose DNS is not where the default
 expects; everything else is covered on the page that needs it. Set them on
 `helm install` or `helm upgrade`, and pass the same values on every upgrade, because
@@ -25,16 +25,21 @@ the panel); set it to `1` to serialize everything while chasing a bug.
 
 Each replica talks to the Kubernetes API through a client with a rate limit:
 a sustained rate in requests per second and a burst above it. The controller
-defaults to `20` and `30`; the gateway defaults to `100` and `200`, because
-it reads from the API on the request path. Raise the controller's limit
-together with `controller.maxConcurrentReconciles`, since more workers make
-more requests; the extra workers only queue behind the limiter otherwise.
+defaults to `20` and `30`; the gateway and the console default to `100` and
+`200`, because they read from the API on the request path. Raise the
+controller's limit together with `controller.maxConcurrentReconciles`, since
+more workers make more requests; the extra workers only queue behind the
+limiter otherwise. Raise the console's limit when people whose access is
+granted per namespace wait on its namespace list on a cluster with hundreds of
+namespaces, because each namespace costs one access review the first time.
 
 ```bash
 --set controller.client.qps=50
 --set controller.client.burst=100
 --set gateway.client.qps=200
 --set gateway.client.burst=400
+--set console.client.qps=200
+--set console.client.burst=400
 ```
 
 ## Container resources

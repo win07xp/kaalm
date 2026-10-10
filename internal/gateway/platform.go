@@ -250,23 +250,47 @@ func classifyReplyStatus(status int) replyBucket {
 	return bucketRetried
 }
 
-// platformClient is the HTTP client platform replies use: the callback trust
-// pool (system roots plus whatever the operator added) and the callback
-// per-attempt read timeout (gateway.callbackReadTimeout), since replies run
-// on the callback schedule. The base URL is operator-set, so no deny-range
-// check applies.
+// platformMaxIdleConnsPerHost keeps a burst of replies' connections open:
+// replies go to one or two platform hosts, and the transport default of 2
+// would close most of them after each burst.
+const platformMaxIdleConnsPerHost = 32
+
+// platformClient returns the one pooled HTTP client platform replies use:
+// the callback trust pool (system roots plus whatever the operator added)
+// and the callback per-attempt read timeout (gateway.callbackReadTimeout),
+// since replies run on the callback schedule. The base URL is operator-set,
+// so no deny-range check applies. The client is rebuilt when the callback
+// trust pool changes, so a rotated bundle applies to the next reply; the
+// old client's idle connections are closed then.
 func (s *Server) platformClient() (*http.Client, error) {
 	pool, err := s.callbackCAPool()
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}},
+	s.platformMu.Lock()
+	defer s.platformMu.Unlock()
+	if s.platformHTTP != nil && pool == s.platformPool {
+		return s.platformHTTP, nil
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Replies go straight to the operator-set platform URL, as before the
+	// client was pooled.
+	transport.Proxy = nil
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	transport.MaxIdleConnsPerHost = platformMaxIdleConnsPerHost
+	client := &http.Client{
+		Transport: transport,
 		Timeout:   s.callbackReadTimeout(),
 		// Refused like every outbound leg; the reply schedule treats
 		// it as a transport failure and retries, then reports exhaustion.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
-	}, nil
+	}
+	if s.platformHTTP != nil {
+		s.platformHTTP.CloseIdleConnections()
+	}
+	s.platformHTTP, s.platformPool = client, pool
+	return client, nil
 }
 
 // replyResult is the last answer of one reply request's schedule.

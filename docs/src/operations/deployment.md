@@ -136,6 +136,7 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `console.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-console`, appVersion, `IfNotPresent` | The console image. |
 | `console.healthPort` | `8081` | Port for the console's kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). |
 | `console.logLevel` | `info` | Console log level: `debug`, `info`, `warn`, or `error`. |
+| `console.client.qps` / `.burst` | `100`, `200` | The console's Kubernetes API client rate limit per Pod: sustained requests per second and the burst above it. Sized for the request path: every bearer `TokenReview` and every `SubjectAccessReview` goes through it, including one per namespace when a caller without the cluster-wide grant lists namespaces. |
 | `console.shutdown.drainDelay` | `5s` | The same as `gateway.shutdown.drainDelay`, for the console Pod. `0s` skips the wait. See [Shutdown and rolling restarts](#shutdown-and-rolling-restarts). |
 | `console.shutdown.timeout` | `30s` | How long the console Pod waits for in-flight requests before it exits. `0s` waits for none. Also sets its termination grace period. |
 | `console.resources` | `{}` | Resource requests and limits for the console container, passed verbatim. |

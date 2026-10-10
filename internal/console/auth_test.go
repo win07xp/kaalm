@@ -18,38 +18,91 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
 
-// fakeReviewer authenticates any token in its map.
+// fakeReviewer authenticates any token in its map and answers any other
+// token as not authenticated, or with an API error when apiErr is set. It is
+// safe for concurrent use; hook, when set, runs inside every review before
+// it answers.
 type fakeReviewer struct {
 	tokens map[string]Identity
-	calls  int
+	apiErr bool
+	hook   func()
+
+	mu sync.Mutex
+	n  int
 }
 
 func (f *fakeReviewer) Review(_ context.Context, token string) (Identity, error) {
-	f.calls++
-	if id, ok := f.tokens[token]; ok {
+	f.mu.Lock()
+	f.n++
+	id, ok := f.tokens[token]
+	f.mu.Unlock()
+	if f.hook != nil {
+		f.hook()
+	}
+	if ok {
 		return id, nil
 	}
-	return Identity{}, fmt.Errorf("token not authenticated")
+	if f.apiErr {
+		return Identity{}, errors.New("token review: apiserver down")
+	}
+	return Identity{}, fmt.Errorf("%w: invalid", errNotAuthenticated)
+}
+
+// count is the number of reviews run so far.
+func (f *fakeReviewer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.n
 }
 
 // fakeAuthorizer answers from a map keyed user/verb/resource/namespace and
-// counts calls.
+// counts calls. It is safe for concurrent use; hook, when set, runs inside
+// every call before it answers, and a key in fail answers an error.
 type fakeAuthorizer struct {
 	allowed map[string]bool
-	calls   int
-	last    string
+	fail    map[string]bool
+	hook    func(key string)
+
+	mu   sync.Mutex
+	n    int
+	last string
 }
 
 func (f *fakeAuthorizer) Allowed(_ context.Context, id Identity, verb, group, resource, namespace string) (bool, error) {
-	f.calls++
 	key := fmt.Sprintf("%s/%s/%s.%s/%s", id.Username, verb, resource, group, namespace)
+	f.mu.Lock()
+	f.n++
 	f.last = key
-	return f.allowed[key], nil
+	allowed, fail := f.allowed[key], f.fail[key]
+	f.mu.Unlock()
+	if f.hook != nil {
+		f.hook(key)
+	}
+	if fail {
+		return false, errors.New("authorizer unavailable")
+	}
+	return allowed, nil
+}
+
+// count is the number of reviews run so far.
+func (f *fakeAuthorizer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.n
+}
+
+// lastKey is the last question asked.
+func (f *fakeAuthorizer) lastKey() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.last
 }
 
 func TestAccessChecker_VerbsAndCaching(t *testing.T) {
@@ -65,28 +118,28 @@ func TestAccessChecker_VerbsAndCaching(t *testing.T) {
 	if ok, err := g.CanView(context.Background(), priya, "team-a"); err != nil || !ok {
 		t.Fatalf("CanView = %v, %v", ok, err)
 	}
-	if az.last != "priya/list/agents.kaalm.io/team-a" {
-		t.Errorf("view check asked %q", az.last)
+	if az.lastKey() != "priya/list/agents.kaalm.io/team-a" {
+		t.Errorf("view check asked %q", az.lastKey())
 	}
 	if ok, _ := g.CanChat(context.Background(), priya, "team-a"); ok {
 		t.Error("CanChat must be denied")
 	}
-	if az.last != "priya/create/agentchannels.kaalm.io/team-a" {
-		t.Errorf("chat check asked %q", az.last)
+	if az.lastKey() != "priya/create/agentchannels.kaalm.io/team-a" {
+		t.Errorf("chat check asked %q", az.lastKey())
 	}
 
 	// Within the TTL the cached answers are served: no new authorizer calls.
-	before := az.calls
+	before := az.count()
 	_, _ = g.CanView(context.Background(), priya, "team-a")
 	_, _ = g.CanChat(context.Background(), priya, "team-a")
-	if az.calls != before {
-		t.Errorf("cached checks must not hit the authorizer (calls %d -> %d)", before, az.calls)
+	if az.count() != before {
+		t.Errorf("cached checks must not hit the authorizer (calls %d -> %d)", before, az.count())
 	}
 
 	// Past the TTL the cache expires.
 	now = now.Add(sarCacheTTL + time.Second)
 	_, _ = g.CanView(context.Background(), priya, "team-a")
-	if az.calls != before+1 {
+	if az.count() != before+1 {
 		t.Error("an expired entry must re-ask the authorizer")
 	}
 }
@@ -102,25 +155,77 @@ func TestCachingReviewer(t *testing.T) {
 		t.Fatalf("review = %+v, %v", id, err)
 	}
 	_, _ = cr.Review(context.Background(), "tok")
-	if fr.calls != 1 {
-		t.Errorf("cached review must not hit the reviewer (calls %d)", fr.calls)
-	}
-
-	// Failures are never cached.
-	if _, err := cr.Review(context.Background(), "bad"); err == nil {
-		t.Fatal("bad token must fail")
-	}
-	if _, err := cr.Review(context.Background(), "bad"); err == nil {
-		t.Fatal("bad token must fail again")
-	}
-	if fr.calls != 3 {
-		t.Errorf("failed reviews must pass through every time (calls %d)", fr.calls)
+	if fr.count() != 1 {
+		t.Errorf("cached review must not hit the reviewer (calls %d)", fr.count())
 	}
 
 	now = now.Add(reviewCacheTTL + time.Second)
 	_, _ = cr.Review(context.Background(), "tok")
-	if fr.calls != 4 {
+	if fr.count() != 2 {
 		t.Error("an expired review entry must re-review")
+	}
+
+	// A token that fails review is refused from memory for
+	// failedReviewCacheTTL, then reviewed again.
+	before := fr.count()
+	for range 2 {
+		if _, err := cr.Review(context.Background(), "bad"); !errors.Is(err, errNotAuthenticated) {
+			t.Fatalf("bad token: err = %v, want errNotAuthenticated", err)
+		}
+	}
+	if got := fr.count() - before; got != 1 {
+		t.Errorf("two reviews of a bad token ran %d TokenReviews, want 1", got)
+	}
+	now = now.Add(failedReviewCacheTTL + time.Second)
+	if _, err := cr.Review(context.Background(), "bad"); err == nil {
+		t.Fatal("bad token must still fail")
+	}
+	if got := fr.count() - before; got != 2 {
+		t.Errorf("an expired failed review must re-review (TokenReviews %d, want 2)", got)
+	}
+}
+
+// A review that fails for any reason but the token itself is never cached.
+func TestCachingReviewer_NeverCachesAPIErrors(t *testing.T) {
+	fr := &fakeReviewer{apiErr: true}
+	cr := NewCachingReviewer(fr)
+	for range 2 {
+		if _, err := cr.Review(context.Background(), "tok"); err == nil || errors.Is(err, errNotAuthenticated) {
+			t.Fatalf("err = %v, want the API error", err)
+		}
+	}
+	if got := fr.count(); got != 2 {
+		t.Errorf("API errors ran %d TokenReviews for 2 reviews, want 2", got)
+	}
+}
+
+// Concurrent misses for one token share one TokenReview.
+func TestCachingReviewer_CollapsesConcurrentMisses(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	fr := &fakeReviewer{tokens: map[string]Identity{"tok": {Username: "priya"}}, hook: func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}}
+	cr := NewCachingReviewer(fr)
+
+	results := make(chan bool, 10)
+	for range 10 {
+		go func() {
+			id, err := cr.Review(context.Background(), "tok")
+			results <- err == nil && id.Username == "priya"
+		}()
+	}
+	<-entered
+	time.Sleep(100 * time.Millisecond) // let the other callers arrive
+	close(release)
+	for range 10 {
+		if !<-results {
+			t.Error("a waiter did not get the shared identity")
+		}
+	}
+	if got := fr.count(); got != 1 {
+		t.Errorf("10 concurrent misses ran %d TokenReviews, want 1", got)
 	}
 }
 
@@ -146,9 +251,9 @@ func TestSessionStore_Lifecycle(t *testing.T) {
 	}
 
 	// Within the review interval no re-review happens.
-	before := fr.calls
+	before := fr.count()
 	_, _ = st.Resolve(context.Background(), value)
-	if fr.calls != before {
+	if fr.count() != before {
 		t.Error("a fresh session must not re-review the token")
 	}
 
@@ -202,15 +307,15 @@ func TestAccessChecker_CanViewAllAsksClusterWideAndCaches(t *testing.T) {
 	if ok, err := g.CanViewAll(context.Background(), Identity{Username: "priya"}); err != nil || !ok {
 		t.Fatalf("CanViewAll = %v, %v", ok, err)
 	}
-	if az.last != "priya/list/agents.kaalm.io/" {
-		t.Errorf("cluster-wide check asked %q, want an empty-namespace review", az.last)
+	if az.lastKey() != "priya/list/agents.kaalm.io/" {
+		t.Errorf("cluster-wide check asked %q, want an empty-namespace review", az.lastKey())
 	}
 	if ok, _ := g.CanViewAll(context.Background(), Identity{Username: "dev"}); ok {
 		t.Error("dev holds no cluster-wide grant")
 	}
-	before := az.calls
+	before := az.count()
 	_, _ = g.CanViewAll(context.Background(), Identity{Username: "priya"})
-	if az.calls != before {
+	if az.count() != before {
 		t.Error("a cached cluster-wide answer must not hit the authorizer")
 	}
 }
@@ -270,5 +375,109 @@ func TestSessionStore_SweepDropsSessionsPastMaxAge(t *testing.T) {
 	}
 	if _, ok := st.m[fresh]; !ok {
 		t.Error("a live session must survive the sweep")
+	}
+}
+
+// blockingAuthorizer is a fakeAuthorizer whose calls wait on release and
+// that closes entered on its first call.
+func blockingAuthorizer(allowed map[string]bool) (az *fakeAuthorizer, entered, release chan struct{}) {
+	entered, release = make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	az = &fakeAuthorizer{allowed: allowed, hook: func(string) {
+		once.Do(func() { close(entered) })
+		<-release
+	}}
+	return az, entered, release
+}
+
+// Concurrent misses for one answer share one SubjectAccessReview.
+func TestAccessChecker_CollapsesConcurrentMisses(t *testing.T) {
+	az, entered, release := blockingAuthorizer(map[string]bool{"priya/list/agents.kaalm.io/team-a": true})
+	g := NewAccessChecker(az)
+	priya := Identity{Username: "priya"}
+
+	results := make(chan bool, 10)
+	for range 10 {
+		go func() {
+			ok, err := g.CanView(context.Background(), priya, "team-a")
+			results <- ok && err == nil
+		}()
+	}
+	<-entered
+	time.Sleep(100 * time.Millisecond) // let the other callers arrive
+	close(release)
+	for range 10 {
+		if !<-results {
+			t.Error("a waiter did not get the shared answer")
+		}
+	}
+	if got := az.count(); got != 1 {
+		t.Errorf("10 concurrent misses ran %d reviews, want 1", got)
+	}
+}
+
+// A waiter whose request ends returns at once; the others still get the
+// shared answer.
+func TestAccessChecker_CallerCancelDoesNotFailOthers(t *testing.T) {
+	az, entered, release := blockingAuthorizer(map[string]bool{"priya/list/agents.kaalm.io/team-a": true})
+	g := NewAccessChecker(az)
+	priya := Identity{Username: "priya"}
+
+	type result struct {
+		ok  bool
+		err error
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	first, second := make(chan result, 1), make(chan result, 1)
+	go func() {
+		ok, err := g.CanView(ctx, priya, "team-a")
+		first <- result{ok, err}
+	}()
+	<-entered
+	go func() {
+		ok, err := g.CanView(context.Background(), priya, "team-a")
+		second <- result{ok, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case r := <-first:
+		if !errors.Is(r.err, context.Canceled) {
+			t.Errorf("cancelled waiter = %v, %v; want context.Canceled", r.ok, r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the cancelled waiter did not return while the review ran")
+	}
+	close(release)
+	if r := <-second; !r.ok || r.err != nil {
+		t.Errorf("other waiter = %v, %v; want the shared answer true", r.ok, r.err)
+	}
+}
+
+func TestCachingReviewer_CancelledCallerStartsNoReview(t *testing.T) {
+	inner := &fakeReviewer{}
+	c := NewCachingReviewer(inner)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Review(ctx, "tok"); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := inner.count(); n != 0 {
+		t.Errorf("reviews run = %d, want 0 for a cancelled caller", n)
+	}
+}
+
+func TestAccessChecker_CancelledCallerStartsNoReview(t *testing.T) {
+	az := &fakeAuthorizer{}
+	g := NewAccessChecker(az)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := g.CanView(ctx, Identity{Username: "dev"}, "team-a"); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := az.count(); n != 0 {
+		t.Errorf("reviews run = %d, want 0 for a cancelled caller", n)
 	}
 }

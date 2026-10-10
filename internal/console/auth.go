@@ -21,10 +21,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	authnv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +42,22 @@ const (
 	sessionCookie   = "kaalm_console_session"
 	sessionIDLength = 32
 )
+
+// accessReviewTimeout bounds one shared SubjectAccessReview or TokenReview.
+// The review runs detached from the request that started it, so a waiter
+// that gives up does not fail the others; this keeps a hung review from
+// running forever.
+const accessReviewTimeout = 10 * time.Second
+
+// errNotAuthenticated marks a TokenReview that answered the token is not
+// valid, as opposed to a review that could not be run.
+var errNotAuthenticated = errors.New("token not authenticated")
+
+// failedReviewCacheTTL is how long CachingReviewer refuses a token that
+// failed review without reviewing it again: short, so a token that becomes
+// valid is accepted soon, and long enough that a client retrying a bad token
+// does not cost a TokenReview per request.
+const failedReviewCacheTTL = 10 * time.Second
 
 // Identity is the TokenReview-authenticated caller.
 type Identity struct {
@@ -67,7 +85,7 @@ func (r *KubeTokenReviewer) Review(ctx context.Context, token string) (Identity,
 		return Identity{}, fmt.Errorf("token review: %w", err)
 	}
 	if !review.Status.Authenticated {
-		return Identity{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
+		return Identity{}, fmt.Errorf("%w: %s", errNotAuthenticated, review.Status.Error)
 	}
 	return Identity{Username: review.Status.User.Username, Groups: review.Status.User.Groups}, nil
 }
@@ -111,13 +129,15 @@ type accessEntry struct {
 // SubjectAccessReviews: viewing a namespace requires list on agents.kaalm.io
 // in it; test-chat requires create on agentchannels.kaalm.io (a channel is
 // the standing form of what test-chat does once). Results are cached per
-// (identity, namespace, verb) for sarCacheTTL.
+// (identity, namespace, verb) for sarCacheTTL, and concurrent misses for one
+// answer share one review.
 type AccessChecker struct {
 	Authz Authorizer
 
-	now   func() time.Time
-	mu    sync.Mutex
-	cache map[accessKey]accessEntry
+	now     func() time.Time
+	mu      sync.Mutex
+	cache   map[accessKey]accessEntry
+	flights singleflight.Group
 }
 
 // NewAccessChecker builds an AccessChecker over an Authorizer.
@@ -146,21 +166,50 @@ func (g *AccessChecker) CanChat(ctx context.Context, id Identity, namespace stri
 
 func (g *AccessChecker) allowed(ctx context.Context, id Identity, namespace, verb, resource string) (bool, error) {
 	key := accessKey{user: id.Username, namespace: namespace, verb: verb + ":" + resource}
-	g.mu.Lock()
-	if e, ok := g.cache[key]; ok && g.now().Before(e.expires) {
-		g.mu.Unlock()
-		return e.allowed, nil
+	if allowed, ok := g.cached(key); ok {
+		return allowed, nil
 	}
-	g.mu.Unlock()
-
-	allowed, err := g.Authz.Allowed(ctx, id, verb, "kaalm.io", resource, namespace)
-	if err != nil {
+	// A caller already gone starts no review: the review would run detached
+	// and cost a SubjectAccessReview nobody waits for.
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	// NUL cannot appear in a username, a namespace, or a verb.
+	flight := g.flights.DoChan(key.user+"\x00"+key.namespace+"\x00"+key.verb, func() (any, error) {
+		if allowed, ok := g.cached(key); ok {
+			return allowed, nil
+		}
+		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
+		defer cancel()
+		allowed, err := g.Authz.Allowed(reviewCtx, id, verb, "kaalm.io", resource, namespace)
+		if err != nil {
+			return false, err
+		}
+		g.mu.Lock()
+		g.cache[key] = accessEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
+		g.mu.Unlock()
+		return allowed, nil
+	})
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case res := <-flight:
+		if res.Err != nil {
+			return false, res.Err
+		}
+		return res.Val.(bool), nil
+	}
+}
+
+// cached returns the unexpired cached answer for key, if any.
+func (g *AccessChecker) cached(key accessKey) (allowed, ok bool) {
 	g.mu.Lock()
-	g.cache[key] = accessEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
-	g.mu.Unlock()
-	return allowed, nil
+	defer g.mu.Unlock()
+	e, found := g.cache[key]
+	if !found || !g.now().Before(e.expires) {
+		return false, false
+	}
+	return e.allowed, true
 }
 
 // Sweep drops every expired answer. Lookups already ignore expired entries;
@@ -178,17 +227,22 @@ func (g *AccessChecker) Sweep() {
 
 // CachingReviewer wraps a TokenReviewer with a hash-keyed result cache so
 // per-request Authorization: Bearer callers do not cost one TokenReview per
-// request. Only the SHA-256 of the token is kept.
+// request. Only the SHA-256 of the token is kept. Concurrent misses for one
+// token share one review.
 type CachingReviewer struct {
 	Reviewer TokenReviewer
 
-	now   func() time.Time
-	mu    sync.Mutex
-	cache map[[sha256.Size]byte]reviewEntry
+	now     func() time.Time
+	mu      sync.Mutex
+	cache   map[[sha256.Size]byte]reviewEntry
+	flights singleflight.Group
 }
 
+// reviewEntry is a cached review: the identity, or err for a token the
+// review refused.
 type reviewEntry struct {
 	id      Identity
+	err     error
 	expires time.Time
 }
 
@@ -198,24 +252,59 @@ func NewCachingReviewer(r TokenReviewer) *CachingReviewer {
 }
 
 // Review validates via the cache, falling through to the wrapped reviewer.
-// Failures are not cached: a token that fails review is retried next time.
+// A valid token is cached for reviewCacheTTL. A token that fails review is
+// refused from memory for failedReviewCacheTTL; a review that could not be
+// run (an API or transport error) is never cached.
 func (c *CachingReviewer) Review(ctx context.Context, token string) (Identity, error) {
 	key := sha256.Sum256([]byte(token))
-	c.mu.Lock()
-	if e, ok := c.cache[key]; ok && c.now().Before(e.expires) {
-		c.mu.Unlock()
-		return e.id, nil
+	if e, ok := c.cached(key); ok {
+		return e.id, e.err
 	}
-	c.mu.Unlock()
-
-	id, err := c.Reviewer.Review(ctx, token)
-	if err != nil {
+	// A caller already gone starts no review, as in AccessChecker.allowed.
+	if err := ctx.Err(); err != nil {
 		return Identity{}, err
 	}
+	flight := c.flights.DoChan(string(key[:]), func() (any, error) {
+		if e, ok := c.cached(key); ok {
+			return e.id, e.err
+		}
+		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
+		defer cancel()
+		id, err := c.Reviewer.Review(reviewCtx, token)
+		switch {
+		case err == nil:
+			c.store(key, reviewEntry{id: id, expires: c.now().Add(reviewCacheTTL)})
+		case errors.Is(err, errNotAuthenticated):
+			c.store(key, reviewEntry{err: err, expires: c.now().Add(failedReviewCacheTTL)})
+		}
+		return id, err
+	})
+	select {
+	case <-ctx.Done():
+		return Identity{}, ctx.Err()
+	case res := <-flight:
+		if res.Err != nil {
+			return Identity{}, res.Err
+		}
+		return res.Val.(Identity), nil
+	}
+}
+
+// cached returns the unexpired cached review for key, if any.
+func (c *CachingReviewer) cached(key [sha256.Size]byte) (reviewEntry, bool) {
 	c.mu.Lock()
-	c.cache[key] = reviewEntry{id: id, expires: c.now().Add(reviewCacheTTL)}
+	defer c.mu.Unlock()
+	e, ok := c.cache[key]
+	if !ok || !c.now().Before(e.expires) {
+		return reviewEntry{}, false
+	}
+	return e, true
+}
+
+func (c *CachingReviewer) store(key [sha256.Size]byte, e reviewEntry) {
+	c.mu.Lock()
+	c.cache[key] = e
 	c.mu.Unlock()
-	return id, nil
 }
 
 // Sweep drops every expired review.
