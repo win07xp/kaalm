@@ -778,8 +778,9 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // fallback tree is validated transitively, so a provider created or fixed
 // after its parent must wake the whole chain.
 func (r *ModelProviderReconciler) providersWithFallback(ctx context.Context, obj client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var list kaalmv1beta1.ModelProviderList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	var reqs []reconcile.Request
@@ -800,8 +801,9 @@ func (r *ModelProviderReconciler) providersForSecret(ctx context.Context, obj cl
 	if obj.GetNamespace() != r.OperatorNamespace {
 		return nil
 	}
+	// The items are the cache's own objects, only read here.
 	var list kaalmv1beta1.ModelProviderList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	var reqs []reconcile.Request

@@ -82,8 +82,9 @@ func gatewayReadinessChanged(operatorNamespace string) predicate.Predicate {
 // cluster-wide signal mirrored onto each one, so a gateway readiness change
 // re-evaluates all of them.
 func (r *ModelProviderReconciler) allModelProviders(ctx context.Context, _ client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var list kaalmv1beta1.ModelProviderList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(list.Items))

@@ -425,13 +425,14 @@ func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // allClasses re-enqueues every AgentClass, for a cluster-wide input such as
 // the certificate cleanup check.
 func (r *AgentClassReconciler) allClasses(ctx context.Context, _ client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes); err != nil {
+	if err := r.List(ctx, &classes, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(classes.Items))
-	for _, c := range classes.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	for i := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: classes.Items[i].Name}})
 	}
 	return reqs
 }
@@ -439,13 +440,15 @@ func (r *AgentClassReconciler) allClasses(ctx context.Context, _ client.Object) 
 // classesForToolProvider re-enqueues every AgentClass whose
 // allowedToolProviders lists a ToolProvider that was created or deleted.
 func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()}); err != nil {
+	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()},
+		client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(classes.Items))
-	for _, c := range classes.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	for i := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: classes.Items[i].Name}})
 	}
 	return reqs
 }
@@ -453,13 +456,15 @@ func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj c
 // classesForProvider re-enqueues every AgentClass whose allowedProviders lists
 // a ModelProvider that was created or deleted.
 func (r *AgentClassReconciler) classesForProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: obj.GetName()}); err != nil {
+	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: obj.GetName()},
+		client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(classes.Items))
-	for _, c := range classes.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	for i := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: classes.Items[i].Name}})
 	}
 	return reqs
 }

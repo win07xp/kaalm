@@ -354,12 +354,14 @@ func (r *ToolProviderReconciler) toolProvidersForSecret(ctx context.Context, obj
 	if obj.GetNamespace() != r.OperatorNamespace {
 		return nil
 	}
+	// The items are the cache's own objects, only read here.
 	var tps kaalmv1beta1.ToolProviderList
-	if err := r.List(ctx, &tps); err != nil {
+	if err := r.List(ctx, &tps, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	var reqs []reconcile.Request
-	for _, tp := range tps.Items {
+	for i := range tps.Items {
+		tp := &tps.Items[i]
 		if tp.Spec.CredentialsRef != nil && tp.Spec.CredentialsRef.Name == obj.GetName() {
 			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: tp.Name}})
 		}
