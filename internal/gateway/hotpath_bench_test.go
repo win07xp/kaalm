@@ -315,6 +315,47 @@ func anthropicStreamEvents(n int) [][]byte {
 	return events
 }
 
+// openAIToolStreamEvents is an OpenAI chat stream that opens one tool call
+// and streams its arguments in n chunks, then the finish chunk, the usage
+// chunk, and [DONE], one event per element.
+func openAIToolStreamEvents(n int) [][]byte {
+	events := make([][]byte, 0, n+4)
+	events = append(events, []byte(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1757600000,`+
+		`"model":"m1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",`+
+		`"function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`+"\n\n"))
+	for i := 0; i < n; i++ {
+		events = append(events, []byte(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1757600000,`+
+			`"model":"m1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"k\":1}"}}]},`+
+			`"finish_reason":null}]}`+"\n\n"))
+	}
+	return append(events,
+		[]byte(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1757600000,"model":"m1",`+
+			`"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"),
+		[]byte(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1757600000,"model":"m1",`+
+			`"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":200,"total_tokens":212}}`+"\n\n"),
+		[]byte("data: [DONE]\n\n"))
+}
+
+// anthropicToolStreamEvents is an Anthropic messages stream that opens one
+// tool_use block and streams its input in n deltas, one event per element.
+func anthropicToolStreamEvents(n int) [][]byte {
+	events := make([][]byte, 0, n+5)
+	events = append(events,
+		[]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\","+
+			"\"role\":\"assistant\",\"model\":\"m1\",\"content\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":1}}}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,"+
+			"\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"lookup\",\"input\":{}}}\n\n"))
+	for i := 0; i < n; i++ {
+		events = append(events, []byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,"+
+			"\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"k\\\":1}\"}}\n\n"))
+	}
+	return append(events,
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+		[]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},"+
+			"\"usage\":{\"output_tokens\":200}}\n\n"),
+		[]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+}
+
 // cloneChunks copies the chunk slices, which chunkReader consumes.
 func cloneChunks(chunks [][]byte) [][]byte {
 	out := make([][]byte, len(chunks))
@@ -324,8 +365,9 @@ func cloneChunks(chunks [][]byte) [][]byte {
 	return out
 }
 
-// BenchmarkRelayStream relays a 200-event stream delivered one event per
-// read, in each upstream format, copied or translated to the other format.
+// BenchmarkRelayStream relays a 200-event stream of text or tool-call
+// arguments delivered one event per read, in each upstream format, copied or
+// translated to the other format.
 // writes/op and flushes/op count the writer calls one stream costs.
 func BenchmarkRelayStream(b *testing.B) {
 	h := newHarness(b, func(http.ResponseWriter, *http.Request) {})
@@ -341,6 +383,10 @@ func BenchmarkRelayStream(b *testing.B) {
 		{"openai/translated", llmtranslate.FormatOpenAI, openAIStreamEvents(200), true},
 		{"anthropic/passthrough", llmtranslate.FormatAnthropic, anthropicStreamEvents(200), false},
 		{"anthropic/translated", llmtranslate.FormatAnthropic, anthropicStreamEvents(200), true},
+		{"openai-tools/passthrough", llmtranslate.FormatOpenAI, openAIToolStreamEvents(200), false},
+		{"openai-tools/translated", llmtranslate.FormatOpenAI, openAIToolStreamEvents(200), true},
+		{"anthropic-tools/passthrough", llmtranslate.FormatAnthropic, anthropicToolStreamEvents(200), false},
+		{"anthropic-tools/translated", llmtranslate.FormatAnthropic, anthropicToolStreamEvents(200), true},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			adapter, _ := adapterForProviderType(string(c.upstream))
