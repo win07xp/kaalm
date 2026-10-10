@@ -507,6 +507,14 @@ func (s *Server) forwardOnce(
 	// holds no connection and no timer.
 	body, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	if err != nil && ctx.Err() != nil {
+		// The caller left mid-read. The answer goes to the handler as read
+		// so far, the same as when the cancel ends the read cleanly, so a
+		// cut-off answer settles alike however the read ended.
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		fr.body = body
+		return fr
+	}
 	if err != nil {
 		class := classConnect
 		if errors.Is(err, errUpstreamIdle) {

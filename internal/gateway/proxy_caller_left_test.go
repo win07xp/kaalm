@@ -18,10 +18,13 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -76,5 +79,62 @@ func TestSettleCallerLeft(t *testing.T) {
 				t.Errorf("settle = %v, want 0", settled)
 			}
 		})
+	}
+}
+
+// cancelingBody returns data on the first read, then cancels the caller and
+// fails the next read, as a transport does when the caller leaves mid-read.
+type cancelingBody struct {
+	data   string
+	read   bool
+	cancel context.CancelFunc
+}
+
+func (b *cancelingBody) Read(p []byte) (int, error) {
+	if !b.read {
+		b.read = true
+		return copy(p, b.data), nil
+	}
+	b.cancel()
+	return 0, context.Canceled
+}
+
+func (*cancelingBody) Close() error { return nil }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A caller that leaves while a 2xx answer is read hands the answer read so
+// far to the handler, so a cut-off answer settles the same whether the read
+// failed or ended cleanly.
+func TestForwardOnce_CallerLeftMidReadKeepsTheAnswer(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+	h.seedRoute()
+	provider := h.store.providers["prov"]
+	adapter, _ := adapterForPath("/v1/chat/completions")
+	typeAdapter, _ := adapterForProviderType(provider.Spec.Type)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const partial = `{"id":"x","choices":[`
+	h.server.upstream().Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: &cancelingBody{data: partial, cancel: cancel}, Request: r}, nil
+	})
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	res := h.server.forwardOnce(ctx, r, provider, []byte(`{"model":"m1"}`), "/v1/chat/completions", adapter, typeAdapter, "m1")
+	if res.resp == nil || res.resp.StatusCode != http.StatusOK || res.err != nil || string(res.body) != partial {
+		t.Fatalf("forwardOnce = %+v, want the 200 with the partial body and no error", res)
+	}
+
+	// Without the caller leaving, a failed read is still a connect-class
+	// failure the walk falls back from.
+	h.server.upstream().Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(iotest.ErrReader(errors.New("connection reset"))), Request: r}, nil
+	})
+	res = h.server.forwardOnce(context.Background(), r, provider, []byte(`{"model":"m1"}`), "/v1/chat/completions", adapter, typeAdapter, "m1")
+	if !res.fallilable || res.class != classConnect || res.err == nil {
+		t.Errorf("read failure = %+v, want a fallilable connect-class error", res)
 	}
 }
