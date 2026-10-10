@@ -18,10 +18,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -76,6 +79,76 @@ func TestDriveProvisioning_WaitingRecheckSkipsUnchangedStatus(t *testing.T) {
 				t.Errorf("two re-checks made %d status writes, want 1", n)
 			}
 			expectStoredReady(t, storedTask(t, c, task), metav1.ConditionFalse, tc.ready)
+		})
+	}
+}
+
+// A task held at Ready=False re-checks every notReadyRecheck until its cause
+// clears. A re-check that finds the same cause writes no status and emits
+// no second event.
+func TestAgentTask_HeldRecheckSkipsUnchangedStatus(t *testing.T) {
+	rejected := &ChildWriteRejectedError{
+		Op: "creating", Kind: "NetworkPolicy", Name: "held-write",
+		Err: apierrors.NewForbidden(schema.GroupResource{Resource: "networkpolicies"}, "held-write",
+			errors.New("denied by policy webhook")),
+	}
+	cases := []struct {
+		name   string
+		reason string
+		step   func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error
+	}{{
+		name: "ImagePullSecretMissing", reason: kaalmv1beta1.ReasonImagePullSecretMissing,
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			return r.markTaskNotReady(context.Background(), task, kaalmv1beta1.ReasonImagePullSecretMissing,
+				`imagePullSecret "pull" missing in namespace "default"`)
+		},
+	}, {
+		name: "SecretNotOptedIn", reason: kaalmv1beta1.ReasonSecretNotOptedIn,
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			return r.markTaskNotReady(context.Background(), task, kaalmv1beta1.ReasonSecretNotOptedIn,
+				`Secret "creds" is not opted in`)
+		},
+	}, {
+		name: "ChildWriteRejected", reason: kaalmv1beta1.ReasonChildWriteRejected,
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			_, err := r.childBlocked(context.Background(), task, nil, false, rejected)
+			return err
+		},
+	}, {
+		name: "ChildConflict", reason: kaalmv1beta1.ReasonChildConflict,
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			_, err := r.childBlocked(context.Background(), task, nil, false,
+				&ChildConflictError{Kind: "Service", Name: task.Name, OwnerKind: "AgentTask"})
+			return err
+		},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := restoreTask("held-write", kaalmv1beta1.TaskRunning, true, "PodReady")
+			writes := &statusWrites{}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
+				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+				WithInterceptorFuncs(writes.funcs()).Build()
+			rec := record.NewFakeRecorder(16)
+			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
+
+			for range 3 {
+				if err := tc.step(r, storedTask(t, c, task)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := writes.count(); n != 1 {
+				t.Errorf("three passes made %d status writes, want 1", n)
+			}
+			close(rec.Events)
+			var events []string
+			for e := range rec.Events {
+				events = append(events, e)
+			}
+			if got := withPrefix(events, "Warning "+tc.reason); len(got) != 1 {
+				t.Errorf("events = %q, want one %s warning", events, tc.reason)
+			}
+			expectStoredReady(t, storedTask(t, c, task), metav1.ConditionFalse, tc.reason)
 		})
 	}
 }

@@ -1194,16 +1194,18 @@ func (r *AgentTaskReconciler) setTaskReady(task *kaalmv1beta1.AgentTask, ok bool
 }
 
 // markTaskNotReady sets Ready=False for a reconcile-time validation failure,
-// writes the status, and emits a Warning event with the same reason when the
-// reason first appears, not on each pass that finds the problem again. The
-// event follows a successful write, so a pass that lost its write to a
-// conflict does not report the reason twice.
+// writes the status when it changed, and emits a Warning event with the same
+// reason when the reason first appears, not on each pass that finds the
+// problem again. A held task re-checks every notReadyRecheck, and a pass
+// that finds the same cause has nothing to write. The event follows a
+// successful write, so a pass that lost its write to a conflict does not
+// report the reason twice.
 func (r *AgentTaskReconciler) markTaskNotReady(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string,
 ) error {
 	first := readyFalseIsNew(task.Status.Conditions, reason)
 	r.setTaskReady(task, false, reason, msg)
-	if err := r.Status().Update(ctx, task); err != nil {
+	if err := r.updateStatusIfChanged(ctx, task); err != nil {
 		return err
 	}
 	if first && r.Recorder != nil {
