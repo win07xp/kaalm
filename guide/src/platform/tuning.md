@@ -134,6 +134,49 @@ Otherwise the controller exits at startup with an error naming the value. The
 new lifetime applies to certificates created after the change; an existing workload keeps its certificate's lifetime until
 the workload is re-created.
 
+## cert-manager's API client limit
+
+Kaalm creates one cert-manager Certificate for each AgentTask and each Agent,
+and a task cannot start until its Certificate is Ready. cert-manager's own
+API client is rate limited by `--kube-api-qps` (default `20`) and
+`--kube-api-burst` (default `50`). When you submit many tasks at once,
+cert-manager's requests queue behind that limit: status updates on
+Certificates and CertificateRequests, Secret writes, and events. Its
+controllers also retry when their writes conflict, which spends more of the
+same budget. Task start time is then set by cert-manager, not by Kaalm.
+
+On the perf harness's 16-CPU k3d machine, 200 AgentTasks submitted at once
+took 164 to 201 seconds until the last one started at the defaults, and a
+Certificate's time to Ready was 135 to 174 seconds at p95. With
+`--kube-api-qps=100` and `--kube-api-burst=200`, the same burst took 59 to 64
+seconds and the p95 time to Ready was 20 to 21 seconds.
+
+Two signs point to this limit:
+
+- cert-manager's logs contain "Waited for ... due to client-side
+  throttling":
+
+  ```bash
+  kubectl -n cert-manager logs deploy/cert-manager | grep 'client-side throttling'
+  ```
+
+- Certificates for new tasks stay not Ready for a long time while the API
+  server is not busy.
+
+To raise the limit, set it on the cert-manager release, not on Kaalm's.
+`extraArgs` is a list, and a `--set` replaces the whole list, so keep
+`--enable-certificate-owner-ref=true`, which Kaalm requires ([In-cluster
+TLS](https://github.com/win07xp/kaalm/blob/main/docs/src/security/tls.md#in-cluster-tls)
+says why):
+
+```bash
+--set 'extraArgs={--enable-certificate-owner-ref=true,--kube-api-qps=100,--kube-api-burst=200}'
+```
+
+A higher limit lets cert-manager send more requests to the API server, so
+size it to what your API server can take. The values here are the ones the
+perf harness uses, an example and not a recommendation for every cluster.
+
 ## Replicas and rollouts
 
 `controller.replicas` and `gateway.replicas` default to `2`, and the chart
