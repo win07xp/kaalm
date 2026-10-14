@@ -395,6 +395,11 @@ PERF_PPROF_PORT ?= 6060
 BENCH_COUNT ?= 6
 PERF_AGENT_NODES ?= 2
 PERF_MAX_PODS ?= 250
+# cert-manager's API client rate limit on the perf cluster. At cert-manager's
+# defaults (20 QPS, burst 50) its own queue sets how fast the tasks phase's
+# 200 Certificates issue, so the phase would measure cert-manager, not Kaalm.
+PERF_CERT_MANAGER_QPS ?= 100
+PERF_CERT_MANAGER_BURST ?= 200
 PERF_LOADGEN_IMG ?= registry.test/perf/loadgen:perf
 # Extra flags for `perf run` (see test/perf/config.go), for example
 # PERF_FLAGS='-ramp-target 300 -phases gateway,ramp'.
@@ -402,7 +407,9 @@ PERF_FLAGS ?=
 
 .PHONY: perf-up
 perf-up: ## Create the perf cluster: 1 server + $(PERF_AGENT_NODES) agents, max-pods $(PERF_MAX_PODS), cert-manager, trust-manager.
-	CLUSTER=$(PERF_CLUSTER) K3D_AGENTS=$(PERF_AGENT_NODES) K3D_MAX_PODS=$(PERF_MAX_PODS) hack/k3d-up.sh
+	CLUSTER=$(PERF_CLUSTER) K3D_AGENTS=$(PERF_AGENT_NODES) K3D_MAX_PODS=$(PERF_MAX_PODS) \
+		CERT_MANAGER_KUBE_API_QPS=$(PERF_CERT_MANAGER_QPS) CERT_MANAGER_KUBE_API_BURST=$(PERF_CERT_MANAGER_BURST) \
+		hack/k3d-up.sh
 
 .PHONY: perf-down
 perf-down: ## Delete the perf cluster.

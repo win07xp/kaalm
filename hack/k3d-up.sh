@@ -29,6 +29,12 @@ K3D_MAX_PODS="${K3D_MAX_PODS:-}"
 # and the FQDN proof needs only Cilium's policy engine and DNS proxy.
 CNI="${CNI:-flannel}"
 CILIUM_VERSION="${CILIUM_VERSION:-1.20.2}"
+# cert-manager's API client rate limit. Empty keeps cert-manager's defaults
+# (20 QPS, burst 50). Each AgentTask gets its own Certificate, and at the
+# default limit cert-manager's queue, not Kaalm, sets how fast a burst of tasks
+# starts; the perf harness raises it so its tasks phase measures Kaalm.
+CERT_MANAGER_KUBE_API_QPS="${CERT_MANAGER_KUBE_API_QPS:-}"
+CERT_MANAGER_KUBE_API_BURST="${CERT_MANAGER_KUBE_API_BURST:-}"
 
 echo ">> ensuring k3d cluster '${CLUSTER}'"
 if k3d cluster list "${CLUSTER}" >/dev/null 2>&1; then
@@ -78,11 +84,18 @@ helm repo update jetstack >/dev/null
 # per-workload cert Secrets: cascade GC removes the Certificate on Agent or
 # AgentTask deletion, and this flag is what removes the Secret one hop later.
 # Without it, deleted workloads orphan their TLS Secrets.
+cm_args="--enable-certificate-owner-ref=true"
+if [ -n "${CERT_MANAGER_KUBE_API_QPS}" ]; then
+  cm_args+=",--kube-api-qps=${CERT_MANAGER_KUBE_API_QPS}"
+fi
+if [ -n "${CERT_MANAGER_KUBE_API_BURST}" ]; then
+  cm_args+=",--kube-api-burst=${CERT_MANAGER_KUBE_API_BURST}"
+fi
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace "${TRUST_NAMESPACE}" --create-namespace \
   --version "${CERT_MANAGER_VERSION}" \
   --set crds.enabled=true \
-  --set 'extraArgs={--enable-certificate-owner-ref=true}' \
+  --set "extraArgs={${cm_args}}" \
   --wait
 
 echo ">> installing trust-manager ${TRUST_MANAGER_VERSION} (trust namespace: ${TRUST_NAMESPACE})"
