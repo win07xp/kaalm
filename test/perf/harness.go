@@ -359,9 +359,9 @@ func (h *harness) printTable() {
 	}
 	if c := s.Churn; c != nil && c.Idle != nil {
 		a := c.Idle
-		fmt.Printf("\nidle audit (%.0fs, %d hibernated agents): controller %.1f req/s, %.2f writes/agent/min; "+
-			"gateway %.1f req/s; apiserver %v\n",
-			a.Seconds, a.Agents, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
+		fmt.Printf("\nidle audit (%.0fs, %d hibernated agents, after %.0fs for channels to settle): "+
+			"controller %.1f req/s, %.2f writes/agent/min; gateway %.1f req/s; apiserver %v\n",
+			a.Seconds, a.Agents, c.IdleSettleSec, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
 			a.GatewayRequestsPerSec, topEntries(a.APIServer, 6))
 	}
 	if c := s.Churn; c != nil {

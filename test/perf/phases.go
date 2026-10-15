@@ -143,7 +143,11 @@ type churnResult struct {
 	HibernationsTotal   float64            `json:"hibernationsTotal"`
 	Callbacks           float64            `json:"callbacks"`
 	TeardownSec         float64            `json:"teardownSec"`
-	Idle                *apiAudit          `json:"idle,omitempty"`
+	// IdleSettleSec is how long the idle audit waited, after every agent
+	// hibernated, for every channel's PlatformConnected to read
+	// NoRecentTraffic.
+	IdleSettleSec float64   `json:"idleSettleSec,omitempty"`
+	Idle          *apiAudit `json:"idle,omitempty"`
 	// Active is the control-plane traffic from the first churn message to
 	// the end of the settle after the last one.
 	Active *apiAudit `json:"active,omitempty"`
@@ -1576,6 +1580,11 @@ func (h *harness) deleteProvidersObjects(ctx context.Context, timeout time.Durat
 
 // ---- churn ----
 
+// idleSettleTimeout bounds the wait for every churn channel to read
+// NoRecentTraffic: the gateway's default 5-minute health window, the
+// controller's 1-minute channel re-check, and a minute of margin.
+const idleSettleTimeout = 7 * time.Minute
+
 func (h *harness) runChurn(ctx context.Context) error {
 	cfg := h.cfg
 	if err := h.k.ensureClass(ctx, churnClass(10*time.Second, 5*time.Second)); err != nil {
@@ -1657,6 +1666,23 @@ func (h *harness) runChurn(ctx context.Context) error {
 		res.AllHibernatedSec, res.FirstHibernationSec.P50, res.FirstHibernationSec.P95)
 
 	if cfg.IdleDuration > 0 {
+		// A channel that has had no webhook flips PlatformConnected to
+		// NoRecentTraffic once a gateway replica has been up for its health
+		// window: one status write per channel, whose timing depends only on
+		// the gateway's uptime. Waiting for every flip keeps them out of the
+		// idle figure, which then holds steady-state writes only.
+		h.logf("idle: waiting for every channel's PlatformConnected to read NoRecentTraffic")
+		settleStart := time.Now()
+		settled := 0
+		if err := pollUntil(ctx, idleSettleTimeout, 5*time.Second, func() (bool, error) {
+			n, total, err := h.k.channelsSettled(ctx, cfg.Namespace, phaseChurn)
+			settled = n
+			return err == nil && n == total, err
+		}); err != nil {
+			return fmt.Errorf("churn channels never read NoRecentTraffic: %w (%d of %d)", err, settled, cfg.ChurnAgents)
+		}
+		res.IdleSettleSec = round3(time.Since(settleStart).Seconds())
+		h.logf("  all settled after %.0fs", res.IdleSettleSec)
 		h.logf("idle: %d hibernated agents, counting control-plane traffic for %s", cfg.ChurnAgents, cfg.IdleDuration)
 		idleBefore, err := h.auditSnapshot(ctx)
 		if err != nil {

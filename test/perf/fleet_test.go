@@ -23,6 +23,11 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestFleetNamesAndPlacement(t *testing.T) {
@@ -69,5 +74,33 @@ func TestSleepCtx(t *testing.T) {
 	}
 	if took := time.Since(start); took < 10*time.Millisecond {
 		t.Errorf("background context: returned after %s, want the full 10ms", took)
+	}
+}
+
+func TestTrafficSettled(t *testing.T) {
+	channel := func(reason string) kaalmv1beta1.AgentChannel {
+		var ch kaalmv1beta1.AgentChannel
+		if reason != "" {
+			meta.SetStatusCondition(&ch.Status.Conditions, metav1.Condition{
+				Type:   kaalmv1beta1.ConditionPlatformConnected,
+				Status: metav1.ConditionUnknown,
+				Reason: reason,
+			})
+		}
+		return ch
+	}
+	cases := []struct {
+		name string
+		ch   kaalmv1beta1.AgentChannel
+		want bool
+	}{
+		{"no condition yet", channel(""), false},
+		{"no recent traffic", channel(kaalmv1beta1.ReasonNoRecentTraffic), true},
+		{"webhook ready", channel(kaalmv1beta1.ReasonWebhookReady), false},
+	}
+	for _, c := range cases {
+		if got := trafficSettled(&c.ch); got != c.want {
+			t.Errorf("%s: trafficSettled = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
