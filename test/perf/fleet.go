@@ -406,6 +406,30 @@ func (k *cluster) channelsActive(ctx context.Context, ns, phase string) (int, in
 	return active, len(list.Items), nil
 }
 
+// trafficSettled reports whether a channel's PlatformConnected condition
+// reads NoRecentTraffic: a gateway replica has been up for its whole health
+// window without a webhook for the channel, and the controller has made the
+// one status write that flip costs.
+func trafficSettled(ch *kaalmv1beta1.AgentChannel) bool {
+	c := meta.FindStatusCondition(ch.Status.Conditions, kaalmv1beta1.ConditionPlatformConnected)
+	return c != nil && c.Reason == kaalmv1beta1.ReasonNoRecentTraffic
+}
+
+// channelsSettled counts a phase's channels in ns that trafficSettled.
+func (k *cluster) channelsSettled(ctx context.Context, ns, phase string) (int, int, error) {
+	var list kaalmv1beta1.AgentChannelList
+	if err := k.c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{phaseLabel: phase}); err != nil {
+		return 0, 0, err
+	}
+	settled := 0
+	for i := range list.Items {
+		if trafficSettled(&list.Items[i]) {
+			settled++
+		}
+	}
+	return settled, len(list.Items), nil
+}
+
 // deleteAgents removes the named agents (name to namespace) and their
 // channels and waits until their pods are gone. The ramp uses it to trim a
 // wave that hit the environment's ceiling, so the fleet that stays is the
