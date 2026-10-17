@@ -11,6 +11,7 @@
 # For platform teams
 
 - [Offering agent classes](platform/agent-classes.md)
+- [Running agents in microVMs](platform/microvms.md)
 - [Providing LLM access](platform/llm-access.md)
 - [Budgets, limits, and fallback](platform/budgets-limits-fallback.md)
 - [Providing tool access](platform/tool-access.md)

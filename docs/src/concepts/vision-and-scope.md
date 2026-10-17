@@ -81,7 +81,7 @@ Kaalm's differentiator is the combination none of its neighbors has: dollar-deno
 - Multi-cluster federation
 - Advanced scheduling (GPU awareness, priority classes, preemption policies specific to agents)
 - Serving the `google-vertex` provider type (the enum is reserved, no inbound path is routed) and any cross-format fallback involving it
-- Agent Sandbox integration (an `agentSandbox` runtime backend) and a verified microVM isolation path; v1 covers gVisor and Kata through RuntimeClass
+- Agent Sandbox integration (an `agentSandbox` runtime backend); v1 covers gVisor and Kata through RuntimeClass
 - The Discord Gateway WebSocket adapter for free-text message bots (a persistent connection per bot); the Discord adapter covers slash commands over HTTP
 
 The v1 scope is narrow on purpose: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.

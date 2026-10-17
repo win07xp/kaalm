@@ -140,7 +140,8 @@ commands) need a separate class with stricter settings: a
 `runtime.runtimeClassName` naming a gVisor or Kata `RuntimeClass` the cluster
 has installed, a tighter image allowlist, and lower storage ceilings. Offer it
 as a second class, for example `sandboxed`, rather than loosening `standard`;
-a class is one object and teams pick by name. Pin a `RuntimeClass` only where
+a class is one object and teams pick by name. For a Kata microVM class, see
+[Running agents in microVMs](microvms.md). Pin a `RuntimeClass` only where
 it exists: a class that names one the cluster lacks makes the apiserver reject
 every Pod create of the class, so its Agents wait with `Ready=False` and
 reason `PodCreateRejected`, and its AgentTasks fail after the provisioning

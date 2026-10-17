@@ -25,8 +25,12 @@ An AgentClass may set `spec.runtime.runtimeClassName`, naming a Kubernetes `Runt
 |---|---|---|
 | unset (default) | The cluster's default container runtime, runc in practice | The agent only calls APIs and runs no generated code |
 | `gvisor` or `runsc` | Userspace kernel with syscall filtering | The agent executes untrusted code |
-| `kata` | A lightweight VM per Pod | Strong multi-tenancy is required |
-| `firecracker` (through Kata or Agent Sandbox) | microVM isolation | The strongest available boundary is required |
+| `kata-qemu-runtime-rs` (or another Kata class) | A lightweight VM per Pod, with its own guest kernel | Strong multi-tenancy is required |
+| `kata-fc` | A Firecracker microVM under Kata | A Firecracker microVM is required |
+
+The cluster defines the class names, not Kaalm. The kata-deploy chart installs `kata-qemu-runtime-rs`, `kata-clh-runtime-rs`, `kata-dragonball`, and the Go-runtime classes `kata-qemu`, `kata-clh`, and `kata-fc`; a plain `kata` class exists only when the chart is set to create it. Firecracker runs only on Kata's deprecated Go runtime, only on amd64, and needs a devmapper snapshotter that the cluster operator configures. Kaalm adds no Firecracker support of its own.
+
+A Kata Pod's VM is sized from the container's resource limits, while the scheduler and `ResourceQuota` count the container requests plus the RuntimeClass overhead. A class under a VM RuntimeClass therefore sets memory limits in `resources.defaults` and a cap in `resources.maxLimits` ([Running agents in microVMs](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/microvms.md#size-the-vm)).
 
 A class that names a missing `RuntimeClass` has these effects:
 
