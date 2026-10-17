@@ -10,6 +10,12 @@
 # Trusting that exit code leaves the node without the images, and the run only
 # breaks minutes later when pods cannot pull them. So: import, verify each tag is
 # present in the node's containerd, and retry the whole import if any is missing.
+#
+# The images are saved for the Docker host's own platform first, then imported
+# from that tarball. With Docker's containerd image store, a pulled multi-arch
+# image keeps its full index but only this platform's content, and `k3d image
+# import <image>` saves the whole index, so the node's import fails with
+# "ctr: content digest ... not found".
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-kaalm-dev}"
@@ -23,7 +29,7 @@ fi
 
 # missing prints the subset of the requested images that containerd does not
 # have. Matching is a substring test because ctr normalizes unqualified names
-# (curlimages/curl:8.10.1 is listed as docker.io/curlimages/curl:8.10.1).
+# (curlimages/curl:8.23.0 is listed as docker.io/curlimages/curl:8.23.0).
 missing() {
   local present
   present="$(docker exec "${NODE}" ctr -n k8s.io images ls -q 2>/dev/null || true)"
@@ -35,11 +41,16 @@ missing() {
   done
 }
 
+PLATFORM="$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')"
+TARBALL="$(mktemp -t k3d-import-XXXXXX.tar)"
+trap 'rm -f "${TARBALL}"' EXIT
+docker save --platform "${PLATFORM}" -o "${TARBALL}" "$@"
+
 for attempt in $(seq 1 "${ATTEMPTS}"); do
   echo ">> importing $# image(s) into '${CLUSTER}' (attempt ${attempt}/${ATTEMPTS})"
   # k3d's exit code is not trustworthy here, so the verification below is what
   # decides success.
-  k3d image import "$@" -c "${CLUSTER}" || true
+  k3d image import "${TARBALL}" -c "${CLUSTER}" || true
 
   absent="$(missing "$@")"
   if [ -z "${absent}" ]; then
