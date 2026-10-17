@@ -14,7 +14,7 @@
 # the shared root Dockerfile consumes it, this one does not.
 ARG BINARY=unused
 
-FROM --platform=$BUILDPLATFORM docker.io/golang:1.24 AS base
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27.2 AS base
 WORKDIR /src
 COPY agentruntime/go.mod agentruntime/go.sum ./
 RUN go mod download
@@ -29,6 +29,6 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o /out/kaalm-agent ./cmd/kaalm-agent
 
-FROM gcr.io/distroless/static:nonroot AS final
+FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS final
 COPY --from=build /out/kaalm-agent /kaalm-agent
 ENTRYPOINT ["/kaalm-agent"]

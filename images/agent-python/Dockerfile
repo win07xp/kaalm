@@ -9,7 +9,7 @@
 # Go images consume it, this one does not.
 ARG BINARY=unused
 
-FROM python:3.13-slim AS base
+FROM python:3.14.8-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 WORKDIR /app

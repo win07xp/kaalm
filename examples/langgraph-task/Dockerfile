@@ -4,7 +4,7 @@
 # is no base image and no handler mount
 # (docs/src/runtime/base-images.md#task-mode). The program owns the slice of
 # the contract a task needs: mTLS to the gateway and the completion report.
-FROM python:3.13-slim
+FROM python:3.14.8-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 WORKDIR /app
