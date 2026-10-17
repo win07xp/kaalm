@@ -205,7 +205,7 @@ func TestAgent_StateEventsFollowTheStatusWrite(t *testing.T) {
 		name: "Hibernated", phase: kaalmv1beta1.AgentHibernating,
 		prefix: "Normal " + kaalmv1beta1.ReasonHibernated,
 		step: func(r *AgentReconciler, ag *kaalmv1beta1.Agent) error {
-			_, err := r.driveHibernating(ctxT(), ag)
+			err := r.driveHibernating(ctxT(), ag)
 			return err
 		},
 	}}

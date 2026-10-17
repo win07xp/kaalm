@@ -148,7 +148,9 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.Update(ctx, &channel); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The finalizer Update raises a watch event for this AgentChannel, which
+		// runs the next pass on the updated object.
+		return ctrl.Result{}, nil
 	}
 
 	statusBefore := channel.Status.DeepCopy()

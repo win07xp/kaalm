@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -792,27 +793,27 @@ func TestAgentClass_InvalidHostIsNotReady(t *testing.T) {
 
 func TestReconcileDelete_NoFinalizerIsNoop(t *testing.T) {
 	ctx := context.Background()
-	clean := func(name string, requeue bool, after time.Duration, err error) {
-		if err != nil || requeue || after != 0 {
-			t.Errorf("%s no-finalizer delete not a clean no-op: requeue=%v after=%v err=%v", name, requeue, after, err)
+	clean := func(name string, res ctrl.Result, err error) {
+		if err != nil || !res.IsZero() {
+			t.Errorf("%s no-finalizer delete not a clean no-op: res=%+v err=%v", name, res, err)
 		}
 	}
 
 	mpRes, err := (&ModelProviderReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
-	clean("ModelProvider", mpRes.Requeue, mpRes.RequeueAfter, err)
+	clean("ModelProvider", mpRes, err)
 
 	acRes, err := (&AgentClassReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
-	clean("AgentClass", acRes.Requeue, acRes.RequeueAfter, err)
+	clean("AgentClass", acRes, err)
 
 	taskRes, err := (&AgentTaskReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
-	clean("AgentTask", taskRes.Requeue, taskRes.RequeueAfter, err)
+	clean("AgentTask", taskRes, err)
 
 	err = (&AgentReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
-	clean("Agent", false, 0, err)
+	clean("Agent", ctrl.Result{}, err)
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {

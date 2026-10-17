@@ -117,7 +117,9 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Update(ctx, &mp); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The finalizer Update raises a watch event for this ModelProvider, which
+		// runs the next pass on the updated object.
+		return ctrl.Result{}, nil
 	}
 
 	mp.Status.ObservedGeneration = mp.Generation

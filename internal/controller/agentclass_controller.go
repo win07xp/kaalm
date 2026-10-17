@@ -86,7 +86,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.Update(ctx, &ac); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The finalizer Update raises a watch event for this AgentClass, which
+		// runs the next pass on the updated object.
+		return ctrl.Result{}, nil
 	}
 	// before is the stored status, so a pass that changes nothing writes
 	// nothing: a write is an update event for every watcher of the class.
