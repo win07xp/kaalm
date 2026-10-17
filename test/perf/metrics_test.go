@@ -25,6 +25,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// The parser reads both the controller-runtime and the gateway exposition,
+// HELP and TYPE lines included.
+func TestParseMetrics(t *testing.T) {
+	body := []byte("# HELP kaalm_gateway_requests_total Requests.\n" +
+		"# TYPE kaalm_gateway_requests_total counter\n" +
+		"kaalm_gateway_requests_total{status=\"ok\"} 42\n")
+	fams, err := parseMetrics(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mf := fams["kaalm_gateway_requests_total"]
+	if mf == nil || len(mf.Metric) != 1 || mf.Metric[0].GetCounter().GetValue() != 42 {
+		t.Fatalf("parsed %v, want one counter at 42", fams)
+	}
+}
+
 func TestCPUPerRequestMs(t *testing.T) {
 	cases := []struct {
 		cpu, requests, want float64
