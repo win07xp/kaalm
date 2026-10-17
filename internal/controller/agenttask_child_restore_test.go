@@ -1016,42 +1016,6 @@ func TestDriveRunning_RevertsDriftedChildrenOnly(t *testing.T) {
 	}
 }
 
-// A task whose Pod predates status.classEgress keeps edits to its
-// NetworkPolicy; its Role is still reverted.
-func TestDriveRunning_LegacyTaskKeepsPolicyEdits(t *testing.T) {
-	task, pod, cert := runningAgentReportedTask(t, "run-legacy")
-	task.Status.ClassEgress = nil
-	objs := []client.Object{task, pod, cert}
-	for _, obj := range agentReportedChildren(t, task) {
-		switch o := obj.(type) {
-		case *networkingv1.NetworkPolicy:
-			o.Spec.Egress = o.Spec.Egress[:1]
-		case *rbacv1.Role:
-			o.Rules[0].Verbs = append(o.Rules[0].Verbs, "get")
-		}
-		objs = append(objs, obj)
-	}
-	var writes, ugets int
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
-		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
-		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
-	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8)}
-	if _, err := r.driveRunning(context.Background(), storedTask(t, c, task),
-		&kaalmv1beta1.AgentClass{}, effectiveTaskSpec{}, pod); err != nil {
-		t.Fatal(err)
-	}
-	if writes != 1 {
-		t.Errorf("writes = %d, want 1 (the Role)", writes)
-	}
-	var np networkingv1.NetworkPolicy
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: task.Name}, &np); err != nil {
-		t.Fatal(err)
-	}
-	if len(np.Spec.Egress) != 1 {
-		t.Errorf("legacy NetworkPolicy egress = %+v, want the edit kept", np.Spec.Egress)
-	}
-}
-
 // Before a Pod exists, the NetworkPolicy is brought to the class as it now
 // stands, so the new Pod's record matches the policy it runs under.
 func TestEnsureTaskChildren_ConvergesToCurrentClass(t *testing.T) {

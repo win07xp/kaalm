@@ -87,9 +87,10 @@ func (s *store) load() {
 	if loaded.Dedup != nil {
 		s.state.Dedup = loaded.Dedup
 	}
-	// A state file from the v0.2.0 starter carries the dedup map without the
-	// order list; synthesize one so eviction still works. Entries in the
-	// order list without a dedup entry (or vice versa) are reconciled.
+	// A state file whose order list is missing or out of step with the dedup
+	// map (hand-edited, or written by an older runtime) gets one synthesized
+	// so eviction still works. Entries in the order list without a dedup
+	// entry (or vice versa) are reconciled.
 	s.state.DedupOrder = nil
 	for _, id := range loaded.DedupOrder {
 		if _, ok := s.state.Dedup[id]; ok {

@@ -78,8 +78,8 @@ type Store interface {
 // isKaalmManagedPod reports whether the Pod belongs to an Agent or AgentTask
 // (ownerRef to either kind, or the Kaalm-managed label set). Such Pods must
 // use mTLS; the Mode 2 precheck rejects their bearer tokens. The ownerRef is
-// matched by API group, not group and version: a Pod created before the
-// v0.6.0 graduation names kaalm.io/v1alpha1 and is just as managed.
+// matched by API group, not group and version, so a Pod owned through any
+// version of the kaalm.io API counts.
 func isKaalmManagedPod(pod *corev1.Pod) bool {
 	for _, ref := range pod.OwnerReferences {
 		gv, err := schema.ParseGroupVersion(ref.APIVersion)

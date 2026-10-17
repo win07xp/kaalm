@@ -106,7 +106,7 @@ def test_removed_two_arg_form_gets_migration_hint(handler_dir, monkeypatch):
         "KAALM_HANDLER_PATH",
         str(handler_dir("async def handle_message(agent, envelope):\n    return {}\n")),
     )
-    with pytest.raises(loader.HandlerLoadError, match="removed in v0.3.0"):
+    with pytest.raises(loader.HandlerLoadError, match="form is not supported"):
         loader.resolve()
 
 

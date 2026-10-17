@@ -79,7 +79,7 @@ Only this probe mints Vertex tokens; the gateway does not serve the type ([The g
 
 ### Probe TLS trust
 
-Probes trust the system roots plus the gateway's upstream trust (`gateway.trustClusterCAForUpstream` and `gateway.upstreamCA`), so they trust what forwarding trusts, plus anything the deprecated `controller.trustClusterCAForProbes` and `controller.probeCA` values add. [Deployment](../../operations/deployment.md#configuration-reference) lists the values.
+Probes trust the system roots plus the gateway's upstream trust (`gateway.trustClusterCAForUpstream` and `gateway.upstreamCA`), so they trust what forwarding trusts. [Deployment](../../operations/deployment.md#configuration-reference) lists the values.
 
 The pool is additive and follows rotation without a restart. It serves the ModelProvider and ToolProvider probes, including the Vertex token request. Probes honor `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` from the controller's environment.
 

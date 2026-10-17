@@ -65,9 +65,6 @@ func TestAgentClassSample_Sandboxed(t *testing.T) {
 	if d := securityBaselineDeviations(spec.Security); len(d) > 0 {
 		t.Errorf("sample is below the restricted baseline: %v", d)
 	}
-	if d := deprecatedFields(spec); len(d) > 0 {
-		t.Errorf("sample sets deprecated fields: %v", d)
-	}
 	if bad := append(invalidCIDRs(&ac), invalidHosts(&ac)...); len(bad) > 0 {
 		t.Errorf("sample egress is invalid: %v", bad)
 	}

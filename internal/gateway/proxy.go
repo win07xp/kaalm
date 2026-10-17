@@ -229,7 +229,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// Walk the fallback tree. Each attempt forwards to one candidate with its
 	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
 	// wins. observed collects the failure classes for the exhaustion mapping.
-	// A candidate that crosses formats (since v0.7.0) gets the body
+	// A candidate that crosses formats gets the body
 	// translated by the eligibility check, its own adapter, and its format's
 	// canonical path; the response is translated back below.
 	inboundFormat := formatForType(adapter.formatName())

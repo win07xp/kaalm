@@ -131,8 +131,8 @@ def _check_signature(fn: Callable[..., Any], file: Path) -> None:
         return
     if len(required) == 2:
         raise HandlerLoadError(
-            f"{file}: handle_message takes two required arguments; the old "
-            "handle_message(agent, envelope) form was removed in v0.3.0. "
+            f"{file}: handle_message takes two required arguments; the "
+            "handle_message(agent, envelope) form is not supported. "
             "Define handle_message(envelope) and reach the runtime via 'import kaalm'."
         )
     raise HandlerLoadError(

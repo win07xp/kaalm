@@ -8,21 +8,6 @@ controller:
     repository: ghcr.io/win07xp/kaalm-controller
     tag: ""            # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
-  # Deprecated: set gateway.trustClusterCAForUpstream instead, which also
-  # governs the controller's provider health probe trust. Still honored: when
-  # true, the cluster CA (kaalm-ca-system, already mounted at
-  # /var/run/kaalm/ca.crt) is added to the probe trust pool, once even when
-  # both values are set. NOTES.txt prints a warning while it is set.
-  trustClusterCAForProbes: false
-  # Deprecated: set gateway.upstreamCA instead, which the chart also
-  # projects into the controller. Still honored: configMap names an
-  # operator-supplied ConfigMap of CA certificates that the chart projects into
-  # the controller as probe-ca.crt and adds to the probe trust pool, unless it
-  # names the same ConfigMap and key as gateway.upstreamCA, in which case it is
-  # projected once. NOTES.txt prints a warning while configMap is set.
-  probeCA:
-    configMap: ""
-    key: ca.crt
   # Reconciles the Agent, AgentChannel, and AgentTask controllers may each
   # run at once. controller-runtime still serializes per object, so this only
   # lets different objects reconcile in parallel; 1 is the strictly serial

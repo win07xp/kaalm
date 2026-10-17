@@ -125,7 +125,7 @@ status:
 | `artifactValues` | The values the container reported, keyed by declared name. |
 | `agentReportedStatus`, `agentReportedMessage` | The `status` (`success` or `failure`) and `message` from the completion report. The message is stored cut to 4,096 bytes, here and in the `Completed` and `Ready` condition messages, and ends in `... (truncated)` when cut. The full message stays in the `{taskName}-completion` ConfigMap ([The completion mailbox](../runtime/child-resources.md#the-completion-mailbox)). |
 | `classBounds` | A copy of the class's `defaultTaskTimeout`, `maxTaskTimeout`, `defaultTTLSecondsAfterFinished`, and `maxTTLSecondsAfterFinished`, recorded when the current Pod was created, or when the task settled before any Pod existed. The effective timeout and TTL are derived within these bounds ([The class bounds timeout and retention](#the-class-bounds-timeout-and-retention)). |
-| `classEgress` | A copy of the class's `network.egress.allowedCIDRs` and `allowedHosts`, recorded when the current Pod was created, including a retry's Pod. While the Pod runs, the task's NetworkPolicy and CiliumNetworkPolicy are built from it, so a later class edit does not change the task's egress. Absent on a task whose Pod was created before the field existed ([Task child-resource convergence](../controller/reconcilers/agenttask.md#task-child-resource-convergence) says what that means for edits). |
+| `classEgress` | A copy of the class's `network.egress.allowedCIDRs` and `allowedHosts`, recorded when the current Pod was created, including a retry's Pod. While the Pod runs, the task's NetworkPolicy and CiliumNetworkPolicy are built from it, so a later class edit does not change the task's egress. Absent until the reconciler records it ([Task child-resource convergence](../controller/reconcilers/agenttask.md#task-child-resource-convergence) says what that means for edits). |
 
 ## Design notes
 
@@ -163,7 +163,6 @@ The reconciler reads the class bounds from `status.classBounds`, not from the li
 
 - A later class edit doesn't reach the task. [AgentTask handling](../controller/change-propagation.md#agenttask-handling-no-degraded-phase) lists what a class edit does to a task in each state.
 - An edit to the task's own `completion.timeout` or `ttlSecondsAfterFinished` applies on the next pass, within the recorded bounds. For example, to keep a settled task long enough to snapshot its PVC ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)), raise its `ttlSecondsAfterFinished`, up to the recorded `maxTTLSecondsAfterFinished`.
-- A task whose Pod was created by a controller that does not record `classBounds` has none; it uses its own values with no bounds, so an upgrade changes no running or finished task.
 
 ### Artifact collection
 

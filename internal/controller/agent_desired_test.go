@@ -145,35 +145,6 @@ func TestPodSpecHash_ClassPodInputsOrderAndOwnKeys(t *testing.T) {
 	}
 }
 
-func TestPodSpecHashV1_MatchesV100Hash(t *testing.T) {
-	// The expected value is what v1.0.0's podSpecHash returned for this spec.
-	// podSpecHashV1 must keep reproducing it, or every Pod created before the
-	// formula changed would look drifted and be replaced on upgrade.
-	rc := "gvisor"
-	grace := int64(30)
-	eff := effectiveAgentSpec{
-		Image:   "registry.test/agents/demo:v1",
-		Command: []string{"/agent"},
-		Args:    []string{"--serve"},
-		Env:     []corev1.EnvVar{{Name: "X", Value: "1"}},
-		Resources: corev1.ResourceRequirements{
-			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-		},
-		Providers:        []string{"b", "a"},
-		HandlerConfigMap: "greeter-v1",
-		RuntimeClassName: &rc,
-		PullPolicy:       corev1.PullAlways,
-		TerminationGrace: &grace,
-		PodLabels:        map[string]string{"team": "search"},
-	}
-	if got, want := podSpecHashV1(eff), "4c14a4e2cc05fb0d"; got != want {
-		t.Errorf("podSpecHashV1 = %s, want the v1.0.0 hash %s", got, want)
-	}
-	if podSpecHash(eff) == podSpecHashV1(eff) {
-		t.Error("current formula must differ from v1 for a spec with class Pod inputs")
-	}
-}
-
 func TestDesiredPod_SetsHashVersion(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
 	eff := classDerivedBase()
@@ -440,24 +411,20 @@ func TestDesiredPods_NoServiceAccountToken(t *testing.T) {
 	}
 }
 
-// The class field allowHostNetwork is deprecated and has no effect: no Agent
-// or AgentTask Pod uses host networking, whatever the class says.
-func TestDesiredPods_ClassAllowHostNetworkHasNoEffect(t *testing.T) {
+// No Agent or AgentTask Pod uses host networking.
+func TestDesiredPods_NoHostNetwork(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
 		Spec: kaalmv1beta1.AgentSpec{Image: "img:v1"}}
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"},
 		Spec: kaalmv1beta1.AgentTaskSpec{Image: "img:v1"}}
-	for _, allow := range []bool{false, true} {
-		class := &kaalmv1beta1.AgentClass{}
-		class.Spec.Network.AllowHostNetwork = allow
-		pods := map[string]*corev1.Pod{
-			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops", "x-tls"),
-			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops", "x-tls"),
-		}
-		for kind, pod := range pods {
-			if pod.Spec.HostNetwork {
-				t.Errorf("class allowHostNetwork %v: %s pod uses host networking", allow, kind)
-			}
+	class := &kaalmv1beta1.AgentClass{}
+	pods := map[string]*corev1.Pod{
+		"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops", "x-tls"),
+		"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops", "x-tls"),
+	}
+	for kind, pod := range pods {
+		if pod.Spec.HostNetwork {
+			t.Errorf("%s pod uses host networking", kind)
 		}
 	}
 }
@@ -859,18 +826,16 @@ func claimsTestClass(defaults corev1.ResourceRequirements, maxLimits corev1.Reso
 
 func TestDeriveEffectiveSpec_DropsClaims(t *testing.T) {
 	cases := []struct {
-		name       string
-		own        corev1.ResourceRequirements
-		defaults   corev1.ResourceRequirements
-		maxLimits  corev1.ResourceList
-		wantCPU    bool
-		wantLegacy []corev1.ResourceClaim
+		name      string
+		own       corev1.ResourceRequirements
+		defaults  corev1.ResourceRequirements
+		maxLimits corev1.ResourceList
+		wantCPU   bool
 	}{
 		{
-			name:       "own claims, no maxLimits",
-			own:        corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
-			wantCPU:    true,
-			wantLegacy: claimsTestGPU,
+			name:    "own claims, no maxLimits",
+			own:     corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			wantCPU: true,
 		},
 		{
 			name:      "own claims, maxLimits",
@@ -879,15 +844,13 @@ func TestDeriveEffectiveSpec_DropsClaims(t *testing.T) {
 			wantCPU:   true,
 		},
 		{
-			name:       "default claims, no maxLimits",
-			defaults:   corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
-			wantCPU:    true,
-			wantLegacy: claimsTestGPU,
+			name:     "default claims, no maxLimits",
+			defaults: corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			wantCPU:  true,
 		},
 		{
-			name:       "claims-only defaults",
-			defaults:   corev1.ResourceRequirements{Claims: claimsTestGPU},
-			wantLegacy: claimsTestGPU,
+			name:     "claims-only defaults",
+			defaults: corev1.ResourceRequirements{Claims: claimsTestGPU},
 		},
 		{
 			name:     "claims-only own counts as unset",
@@ -910,10 +873,6 @@ func TestDeriveEffectiveSpec_DropsClaims(t *testing.T) {
 			if cpu, ok := eff.Resources.Requests[corev1.ResourceCPU]; ok != tc.wantCPU ||
 				ok && cpu.Cmp(claimsTestCPU[corev1.ResourceCPU]) != 0 {
 				t.Errorf("cpu request = %v (set %v), want set %v", cpu, ok, tc.wantCPU)
-			}
-			if len(tc.wantLegacy) == 0 && len(eff.LegacyClaims) != 0 ||
-				len(tc.wantLegacy) > 0 && (len(eff.LegacyClaims) != 1 || eff.LegacyClaims[0] != tc.wantLegacy[0]) {
-				t.Errorf("LegacyClaims = %v, want %v", eff.LegacyClaims, tc.wantLegacy)
 			}
 			pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
 			for _, c := range pod.Spec.Containers {
@@ -941,27 +900,5 @@ func TestPodSpecHash_IgnoresClaims(t *testing.T) {
 	withClaims.Spec.Resources.Claims = claimsTestGPU
 	if a, b := podSpecHash(deriveEffectiveSpec(plain, class)), podSpecHash(deriveEffectiveSpec(withClaims, class)); a != b {
 		t.Errorf("claims changed the hash: %s vs %s", a, b)
-	}
-}
-
-func TestPodSpecHashV1_RestoresLegacyClaims(t *testing.T) {
-	// A release that kept claims hashed them when the class set no
-	// maxLimits. podSpecHashV1 must reproduce that hash from the new
-	// derivation, or those Pods would look drifted and be replaced.
-	class := claimsTestClass(corev1.ResourceRequirements{}, nil)
-	agent := &kaalmv1beta1.Agent{Spec: kaalmv1beta1.AgentSpec{
-		Resources: corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
-	}}
-	derived := deriveEffectiveSpec(agent, class)
-	handBuilt := derived
-	handBuilt.Resources.Claims = claimsTestGPU
-	handBuilt.LegacyClaims = nil
-	if a, b := podSpecHashV1(derived), podSpecHashV1(handBuilt); a != b {
-		t.Errorf("podSpecHashV1 = %s, want the v1.0.0-style hash %s", a, b)
-	}
-	cleared := derived
-	cleared.LegacyClaims = nil
-	if podSpecHashV1(cleared) == podSpecHashV1(derived) {
-		t.Error("LegacyClaims had no effect on the v1 hash")
 	}
 }
