@@ -20,7 +20,7 @@ import (
 	"os"
 	"testing"
 
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/yaml"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -59,7 +59,7 @@ func TestModelProviderSample_DegradeIsEffective(t *testing.T) {
 	if degrades == 0 {
 		t.Fatal("the sample has no degrade policy")
 	}
-	rec := record.NewFakeRecorder(4)
+	rec := events.NewFakeRecorder(4)
 	r := &ModelProviderReconciler{Recorder: rec}
 	r.costSanity(&mp)
 	r.events.flush(rec, &mp, true)

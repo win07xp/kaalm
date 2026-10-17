@@ -23,12 +23,15 @@ import (
 	"sync"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -110,7 +113,7 @@ func withPrefix(events []string, prefix string) []string {
 // retry must emit it once, and a third pass over the stored state must not
 // emit it again. It returns the one event.
 func expectEventOnceAcrossConflict(
-	t *testing.T, r reconcile.Reconciler, rec *record.FakeRecorder, conflicts *statusConflicts,
+	t *testing.T, r reconcile.Reconciler, rec *events.FakeRecorder, conflicts *statusConflicts,
 	req ctrl.Request, prefix string,
 ) string {
 	t.Helper()
@@ -142,9 +145,9 @@ func expectEventOnceAcrossConflict(
 func TestHeldEvents_Flush(t *testing.T) {
 	obj := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "mp"}}
 	var h heldEvents
-	rec := record.NewFakeRecorder(4)
+	rec := events.NewFakeRecorder(4)
 
-	h.add(obj, "Warning", "A", "first")
+	h.add(obj, "Warning", "A", "Validate", nil, "first")
 	h.flush(rec, obj, false)
 	if n := len(rec.Events); n != 0 {
 		t.Fatalf("a failed write sent %d events", n)
@@ -153,16 +156,77 @@ func TestHeldEvents_Flush(t *testing.T) {
 		t.Fatalf("a failed write left %d events held", len(left))
 	}
 
-	h.add(obj, "Warning", "A", "first")
-	h.add(obj, "Normal", "B", "second")
+	h.add(obj, "Warning", "A", "Validate", nil, "first")
+	h.add(obj, "Normal", "B", "Validate", nil, "second")
 	h.flush(rec, obj, true)
 	if got := drainEvents(rec); len(got) != 2 || got[0] != "Warning A first" || got[1] != "Normal B second" {
 		t.Fatalf("events after a successful write = %q", got)
 	}
 
-	h.add(obj, "Warning", "A", "first")
+	h.add(obj, "Warning", "A", "Validate", nil, "first")
 	h.flush(nil, obj, true)
 	if left := h.take(obj); len(left) != 0 {
 		t.Fatalf("a nil recorder left %d events held", len(left))
+	}
+}
+
+// actionRecorder keeps each Event's reason, action, and related object.
+type actionRecorder struct {
+	mu      sync.Mutex
+	reasons []string
+	actions []string
+	related []runtime.Object
+}
+
+func (a *actionRecorder) Eventf(_, related runtime.Object, _, reason, action, _ string, _ ...any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reasons = append(a.reasons, reason)
+	a.actions = append(a.actions, action)
+	a.related = append(a.related, related)
+}
+
+// PhaseChanged's action is the new phase, so the API server keeps different
+// transitions as separate Events instead of counting them as repeats.
+func TestSetPhase_ActionIsTheNewPhase(t *testing.T) {
+	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "act", Namespace: "default"},
+		Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentRunning}}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).WithStatusSubresource(ag).Build()
+	rec := &actionRecorder{}
+	r := &AgentReconciler{Client: c, Recorder: rec}
+	for _, phase := range []kaalmv1beta1.AgentPhase{kaalmv1beta1.AgentIdle, kaalmv1beta1.AgentHibernating} {
+		r.setPhase(ag, phase, "")
+		if err := r.writeStatus(ctxT(), ag); err != nil {
+			t.Fatalf("writeStatus: %v", err)
+		}
+	}
+	want := []string{string(kaalmv1beta1.AgentIdle), string(kaalmv1beta1.AgentHibernating)}
+	if len(rec.actions) != 2 || rec.actions[0] != want[0] || rec.actions[1] != want[1] {
+		t.Fatalf("actions = %v, want %v", rec.actions, want)
+	}
+}
+
+func TestNotReadyAction(t *testing.T) {
+	cases := map[string]string{
+		kaalmv1beta1.ReasonPodCreateRejected:  kaalmv1beta1.ActionCreatePod,
+		kaalmv1beta1.ReasonChildWriteRejected: kaalmv1beta1.ActionWriteChild,
+		kaalmv1beta1.ReasonChildConflict:      kaalmv1beta1.ActionClaimChild,
+		kaalmv1beta1.ReasonCredentialsInvalid: kaalmv1beta1.ActionProbe,
+		kaalmv1beta1.ReasonInvalidReference:   kaalmv1beta1.ActionValidate,
+	}
+	for reason, want := range cases {
+		if got := notReadyAction(reason); got != want {
+			t.Errorf("notReadyAction(%s) = %s, want %s", reason, got, want)
+		}
+	}
+}
+
+// A ChildConflict Event names the existing child as its related object.
+func TestRequireControlled_ConflictCarriesTheChild(t *testing.T) {
+	owner := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "default", UID: "u1"}}
+	child := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "default"}}
+	cc, ok := asChildConflict(requireControlled(testScheme(t), owner, child))
+	if !ok || cc.Object != child {
+		t.Fatalf("conflict = %+v, want one carrying the child", cc)
 	}
 }

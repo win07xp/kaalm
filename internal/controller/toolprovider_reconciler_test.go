@@ -26,7 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -377,7 +377,7 @@ func TestToolProvider_UnchangedPassSkipsStatusWrite(t *testing.T) {
 			},
 		}).Build()
 	r := &ToolProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(10),
+		Client: c, Recorder: events.NewFakeRecorder(10),
 		OperatorNamespace: testOperatorNamespace, Health: newFakeToolHealth(),
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "tp-quiet"}}
@@ -406,7 +406,7 @@ func TestToolProvider_UnchangedPassSkipsStatusWrite(t *testing.T) {
 }
 
 // drainEvents returns every event the fake recorder has buffered.
-func drainEvents(rec *record.FakeRecorder) []string {
+func drainEvents(rec *events.FakeRecorder) []string {
 	var out []string
 	for {
 		select {
@@ -433,7 +433,7 @@ func TestToolProvider_AuthFailedEmitsCredentialsInvalidOnEntry(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(tp).WithStatusSubresource(tp).Build()
 	health := newFakeToolHealth()
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	clock := newTestClock()
 	r := &ToolProviderReconciler{
 		Client: c, Recorder: rec,
@@ -531,7 +531,7 @@ func TestToolProvider_ReadyFalseWarningsFollowTheStatusWrite(t *testing.T) {
 				WithInterceptorFuncs(conflicts.funcs()).Build()
 			health := newFakeToolHealth()
 			health.set(name, tc.probe)
-			rec := record.NewFakeRecorder(16)
+			rec := events.NewFakeRecorder(16)
 			r := &ToolProviderReconciler{
 				Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health,
 			}
@@ -549,7 +549,7 @@ func TestToolProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 		WithObjects(tp, providerKey("ev-tp-down")).WithStatusSubresource(tp).Build()
 	health := newFakeToolHealth()
 	health.set("ev-tp-down", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: errString("connection refused")}})
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	clock := newTestClock()
 	r := &ToolProviderReconciler{
 		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
@@ -713,7 +713,7 @@ func TestToolProvider_HealthyNotProbedWhenPassEndsEarly(t *testing.T) {
 				WithObjects(objs...).WithStatusSubresource(tp).Build()
 			health := newFakeToolHealth()
 			r := &ToolProviderReconciler{
-				Client: c, Recorder: record.NewFakeRecorder(10),
+				Client: c, Recorder: events.NewFakeRecorder(10),
 				OperatorNamespace: testOperatorNamespace, Health: health,
 			}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
@@ -750,7 +750,7 @@ func TestToolProvider_CredentialFailureWinsOverNamespacePattern(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(tp).WithStatusSubresource(tp).Build()
 	health := newFakeToolHealth()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	r := &ToolProviderReconciler{Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
 	ready := func() *metav1.Condition {

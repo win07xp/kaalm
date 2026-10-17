@@ -31,7 +31,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1324,7 +1324,7 @@ func TestValidateCallbackURL_ReportsUnresolvedHost(t *testing.T) {
 // first fails to resolve, not on every one-minute pass. It fires again after
 // the host resolves and fails again, or when callbackUrl names a new host.
 func TestChannel_CallbackHostUnresolvedWarnsOnChange(t *testing.T) {
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	r := &AgentChannelReconciler{Recorder: rec}
 	ch := &kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default", UID: "uid-1"}}
 

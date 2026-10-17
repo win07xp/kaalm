@@ -40,6 +40,9 @@ type ChildConflictError struct {
 	Kind, Name string
 	// OwnerKind is the workload kind, Agent or AgentTask.
 	OwnerKind string
+	// Object is the existing child, named as the related object of the
+	// ChildConflict Event.
+	Object client.Object
 }
 
 func (e *ChildConflictError) Error() string {
@@ -62,7 +65,7 @@ func requireControlled(scheme *runtime.Scheme, owner, obj client.Object) error {
 	if metav1.IsControlledBy(obj, owner) {
 		return nil
 	}
-	return &ChildConflictError{Kind: kindOf(scheme, obj), Name: obj.GetName(), OwnerKind: kindOf(scheme, owner)}
+	return &ChildConflictError{Kind: kindOf(scheme, obj), Name: obj.GetName(), OwnerKind: kindOf(scheme, owner), Object: obj}
 }
 
 // createControlled creates obj, which already carries the owner's controller

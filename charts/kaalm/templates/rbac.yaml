@@ -80,8 +80,10 @@ subjects:
     name: kaalm-controller
     namespace: {{ .Release.Namespace }}
 ---
-# Leader-election and event RBAC for the manager, scoped to the release
-# namespace.
+# Leader-election RBAC for the manager, scoped to the release namespace.
+# controller-runtime's leader election announces a new leader with a core
+# Event on the Lease, so this Role keeps core events; the reconcilers' own
+# Events use events.k8s.io, granted in the ClusterRole.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -153,7 +155,7 @@ rules:
   # CredentialsInvalid on ToolProviders (both cluster-scoped, so their events
   # land in the default namespace), and CallbackRejected on AgentChannels in
   # user namespaces. Cluster-wide by necessity, as the controller's is.
-  - apiGroups: [""]
+  - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch"]
 ---

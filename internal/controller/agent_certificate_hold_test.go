@@ -30,7 +30,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -406,7 +406,7 @@ func TestConvergePod_CertHeldKeepsDriftedPodWithoutSlot(t *testing.T) {
 	agent := tlsDriftAgent()
 	c := slotClient(t, agent)
 	mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls", nil)
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	r := &AgentReconciler{Client: c, Recorder: rec, OperatorNamespace: "kaalm-system"}
 
 	waiting, rejected, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
@@ -445,7 +445,7 @@ func TestConvergePod_CertHeldKeepsDriftedPodWithoutSlot(t *testing.T) {
 // Certificate is held.
 func TestConvergePod_CertHeldReleasesSlotOfServingPod(t *testing.T) {
 	agent := tlsDriftAgent()
-	r := &AgentReconciler{OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(10)}
+	r := &AgentReconciler{OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(10)}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
 		Type: kaalmv1beta1.ConditionPodUpToDate, Status: metav1.ConditionFalse, Reason: kaalmv1beta1.ReasonReplacing,
 	})
@@ -468,7 +468,7 @@ func TestConvergePod_CertHeldReleasesSlotOfServingPod(t *testing.T) {
 // Certificate is held, because the slot counts that unavailability.
 func TestConvergePod_CertHeldKeepsSlotOfUnreadyPod(t *testing.T) {
 	agent := tlsDriftAgent()
-	r := &AgentReconciler{OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(10)}
+	r := &AgentReconciler{OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(10)}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
 		Type: kaalmv1beta1.ConditionPodUpToDate, Status: metav1.ConditionFalse, Reason: kaalmv1beta1.ReasonReplacing,
 	})
@@ -493,7 +493,7 @@ func TestConvergePod_CertHeldNoPod(t *testing.T) {
 	agent := tlsDriftAgent()
 	agent.Status.PodName = "legacy"
 	c := slotClient(t, agent)
-	r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
 	if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
 		"legacy-tls-0f1e2d3c", true); err != nil {
@@ -539,7 +539,7 @@ func TestConvergePod_CertHeldPhaseFromPod(t *testing.T) {
 			agent.Status.Phase = tc.phase
 			c := slotClient(t, agent)
 			mkHeldPod(t, c, agent, "legacy-tls-0f1e2d3c", tc.status)
-			r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+			r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
 			if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
 				"legacy-tls-0f1e2d3c", true); err != nil {
@@ -562,7 +562,7 @@ func TestConvergePod_CertHeldReadyIsStable(t *testing.T) {
 	agent := tlsDriftAgent()
 	c := slotClient(t, agent)
 	mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls-0f1e2d3c", nil)
-	r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
 	if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
 		"legacy-tls-0f1e2d3c", true); err != nil {

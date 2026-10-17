@@ -28,7 +28,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,7 +48,7 @@ import (
 // docs/src/controller/reconcilers/toolprovider.md.
 type ToolProviderReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	// OperatorNamespace is where credential Secrets live (kaalm-system).
 	OperatorNamespace string
 	// Health probes tool server liveness. Injected so tests need no real server.
@@ -73,7 +73,7 @@ type ToolProviderReconciler struct {
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/finalizers,verbs=update
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents;agenttasks;agentclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",namespace=kaalm-system,resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *ToolProviderReconciler) now() time.Time {
 	if r.Clock != nil {
@@ -171,7 +171,7 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			if !cached {
-				r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+				r.Recorder.Eventf(&tp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", res.Err.Error())
 			}
 			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&tp))}
 		default: // Healthy
@@ -297,7 +297,7 @@ func (r *ToolProviderReconciler) finish(
 // first appears.
 func (r *ToolProviderReconciler) setReadyFalse(tp *kaalmv1beta1.ToolProvider, reason, msg, eventMsg string) {
 	if readyFalseIsNew(tp.Status.Conditions, reason) {
-		r.events.add(tp, corev1.EventTypeWarning, reason, eventMsg)
+		r.events.add(tp, corev1.EventTypeWarning, reason, notReadyAction(reason), nil, eventMsg)
 	}
 	r.setCondition(tp, kaalmv1beta1.ConditionReady, false, reason, msg)
 }

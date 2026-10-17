@@ -25,7 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -60,7 +60,7 @@ func eventsProvider(name string, mutate func(*kaalmv1beta1.ModelProvider)) *kaal
 // client holding objs, whose status writes fail while conflicts is armed.
 func eventsProviderReconciler(
 	t *testing.T, conflicts *statusConflicts, health ProviderHealthChecker, objs ...client.Object,
-) (*ModelProviderReconciler, *record.FakeRecorder) {
+) (*ModelProviderReconciler, *events.FakeRecorder) {
 	t.Helper()
 	byProviderRef := func(o client.Object) []string {
 		switch w := o.(type) {
@@ -78,7 +78,7 @@ func eventsProviderReconciler(
 		WithIndex(&kaalmv1beta1.AgentTask{}, IndexProviderRef, byProviderRef).
 		WithInterceptorFuncs(conflicts.funcs()).
 		Build()
-	rec := record.NewFakeRecorder(32)
+	rec := events.NewFakeRecorder(32)
 	if health == nil {
 		health = newFakeHealth()
 	}

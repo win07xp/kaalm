@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -39,7 +39,7 @@ import (
 func TestSetPhase_EmitsPhaseChangedOnTransitionOnly(t *testing.T) {
 	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sp", Namespace: "default"}}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).WithStatusSubresource(ag).Build()
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &AgentReconciler{Client: c, Recorder: rec}
 	write := func() {
 		t.Helper()
@@ -91,7 +91,7 @@ func TestWriteStatus_FailedWriteDropsHeldEvents(t *testing.T) {
 	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sp-conflict", Namespace: "default"},
 		Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentRunning}}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).WithStatusSubresource(ag).Build()
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &AgentReconciler{Client: c, Recorder: rec}
 
 	stale := ag.DeepCopy()
@@ -216,7 +216,7 @@ func TestAgent_StateEventsFollowTheStatusWrite(t *testing.T) {
 			conflicts := &statusConflicts{}
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).
 				WithStatusSubresource(ag).WithInterceptorFuncs(conflicts.funcs()).Build()
-			rec := record.NewFakeRecorder(16)
+			rec := events.NewFakeRecorder(16)
 			r := &AgentReconciler{Client: c, Recorder: rec}
 			step := func(a *kaalmv1beta1.Agent) error { return tc.step(r, a) }
 

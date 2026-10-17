@@ -32,7 +32,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -55,7 +55,7 @@ const defaultHealthInterval = 60 * time.Second
 // docs/src/controller/reconcilers/modelprovider.md.
 type ModelProviderReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	// OperatorNamespace is where credential Secrets live (kaalm-system).
 	OperatorNamespace string
 	// Health probes provider liveness. Injected so tests need no real provider.
@@ -80,7 +80,7 @@ type ModelProviderReconciler struct {
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders/finalizers,verbs=update
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents;agenttasks;agentclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",namespace=kaalm-system,resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *ModelProviderReconciler) now() time.Time {
 	if r.Clock != nil {
@@ -202,7 +202,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			// new to report.
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			if !cached {
-				r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+				r.Recorder.Eventf(&mp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", res.Err.Error())
 			}
 			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&mp))}
 		default: // Healthy
@@ -271,7 +271,7 @@ func (r *ModelProviderReconciler) holdDelete(
 	setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
 	r.probes.forget(mp.Name)
 	if msg, first := setDeletionBlocked(&mp.Status.Conditions, refs); first {
-		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, msg)
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, kaalmv1beta1.ActionDelete, nil, msg)
 	}
 	return r.finish(ctx, mp, budgetRequeue(mp, ctrl.Result{}))
 }
@@ -458,7 +458,7 @@ func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.Model
 		Message: msg,
 	})
 	if !was {
-		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonMaxOutputTokensUnset, msg)
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonMaxOutputTokensUnset, kaalmv1beta1.ActionValidate, nil, msg)
 	}
 }
 
@@ -545,7 +545,7 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 				"budget.hard.boundaryMarginPercent to uphold the hard-enforcement guarantee",
 		})
 		if !was {
-			r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonBoundaryMarginRaised,
+			r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonBoundaryMarginRaised, kaalmv1beta1.ActionCheckBudget, nil,
 				"observed traffic exceeded the configured boundary margin; size the knob from the overspend-bound formula")
 		}
 		return
@@ -594,7 +594,7 @@ func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 			Message: msg,
 		})
 		if !was {
-			r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, msg)
+			r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, kaalmv1beta1.ActionValidate, nil, msg)
 		}
 		return
 	}
@@ -713,7 +713,7 @@ func (r *ModelProviderReconciler) setReady(mp *kaalmv1beta1.ModelProvider, ok bo
 // reason first appears.
 func (r *ModelProviderReconciler) setReadyFalse(mp *kaalmv1beta1.ModelProvider, reason, msg string) {
 	if readyFalseIsNew(mp.Status.Conditions, reason) {
-		r.events.add(mp, corev1.EventTypeWarning, reason, msg)
+		r.events.add(mp, corev1.EventTypeWarning, reason, notReadyAction(reason), nil, msg)
 	}
 	r.setReady(mp, false, reason, msg)
 }

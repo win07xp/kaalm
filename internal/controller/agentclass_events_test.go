@@ -24,7 +24,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -50,7 +50,7 @@ func TestAgentClass_AdvisoryWarningsFollowTheStatusWrite(t *testing.T) {
 	ac.Spec.Network.AllowHostNetwork = true
 	conflicts := &statusConflicts{}
 	c := classClientBuilder(t, ac).WithInterceptorFuncs(conflicts.funcs()).Build()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	r := &AgentClassReconciler{Client: c, Recorder: rec, FQDNSupport: func() (bool, error) { return false, nil }}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-class"}}
 
@@ -110,7 +110,7 @@ func TestAgentClass_DeprecatedFieldsCondition(t *testing.T) {
 		ac.Spec.Network.AllowHostNetwork = hostNetwork
 		return ac
 	}
-	reconcile := func(t *testing.T, c client.Client, rec *record.FakeRecorder, name string) (*kaalmv1beta1.AgentClass, int) {
+	reconcile := func(t *testing.T, c client.Client, rec *events.FakeRecorder, name string) (*kaalmv1beta1.AgentClass, int) {
 		t.Helper()
 		r := &AgentClassReconciler{Client: c, Recorder: rec}
 		if _, err := r.Reconcile(ctxT(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
@@ -142,7 +142,7 @@ func TestAgentClass_DeprecatedFieldsCondition(t *testing.T) {
 	t.Run("clean class has no condition", func(t *testing.T) {
 		ac := newClass("clean", false)
 		c := classClientBuilder(t, ac).Build()
-		rec := record.NewFakeRecorder(16)
+		rec := events.NewFakeRecorder(16)
 		got, events := reconcile(t, c, rec, ac.Name)
 		if cond := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionDeprecatedFields); cond != nil {
 			t.Errorf("clean class has condition %+v", cond)
@@ -155,7 +155,7 @@ func TestAgentClass_DeprecatedFieldsCondition(t *testing.T) {
 	t.Run("set, steady, cleared, set again", func(t *testing.T) {
 		ac := newClass("legacy", true)
 		c := classClientBuilder(t, ac).Build()
-		rec := record.NewFakeRecorder(16)
+		rec := events.NewFakeRecorder(16)
 
 		got, events := reconcile(t, c, rec, ac.Name)
 		expect(t, got, metav1.ConditionTrue, kaalmv1beta1.ReasonDeprecatedFieldSet)

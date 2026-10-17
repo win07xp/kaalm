@@ -37,6 +37,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/drain"
+	"github.com/win07xp/kaalm/internal/eventrec"
 	"github.com/win07xp/kaalm/internal/gateway"
 	"github.com/win07xp/kaalm/internal/profiling"
 	"github.com/win07xp/kaalm/internal/secretwatch"
@@ -278,7 +279,7 @@ func main() {
 	server.Async = async
 	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
 	server.Metrics = gateway.NewMetrics(metrics.Registry)
-	server.Recorder = cl.GetEventRecorderFor("kaalm-gateway")
+	server.Recorder = eventrec.Bounded(cl.GetEventRecorder("kaalm-gateway"))
 	server.Informers = requestPathInformers(cl.GetCache(), logger)
 
 	// Prometheus metrics on a dedicated unauthenticated in-cluster port.

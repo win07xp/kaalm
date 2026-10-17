@@ -28,18 +28,28 @@ import (
 	"github.com/win07xp/kaalm/internal/llmtranslate"
 )
 
-// EventRecorder is the subset of record.EventRecorder the gateway uses for
-// runtime warnings. A nil *Server.Recorder is handled by recordEvent.
+// EventRecorder is the events.k8s.io recorder the gateway uses for runtime
+// warnings. A nil *Server.Recorder is handled by recordEvent.
 type EventRecorder interface {
-	Eventf(object runtime.Object, eventtype, reason, messageFmt string, args ...any)
+	Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...any)
 }
 
-// recordEvent emits a Warning Event when a recorder is configured.
-func (s *Server) recordEvent(object runtime.Object, reason, messageFmt string, args ...any) {
+// recordEvent emits a Warning Event when a recorder is configured. related
+// may be nil.
+func (s *Server) recordEvent(regarding, related runtime.Object, reason, action, noteFmt string, args ...any) {
 	if s.Recorder == nil {
 		return
 	}
-	s.Recorder.Eventf(object, "Warning", reason, messageFmt, args...)
+	s.Recorder.Eventf(regarding, related, "Warning", reason, action, noteFmt, args...)
+}
+
+// fallbackCandidate is the related object of a fallback-walk Event on the
+// primary: the candidate provider, unless the primary is the candidate.
+func fallbackCandidate(primary, candidate *kaalmv1beta1.ModelProvider) runtime.Object {
+	if candidate == nil || primary == nil || candidate.Name == primary.Name {
+		return nil
+	}
+	return candidate
 }
 
 // forwardResult is one upstream attempt's classified outcome. Exactly one of
@@ -224,8 +234,8 @@ func (s *Server) tryWithFallbacks(
 	if reason := s.staticallyIneligible(provider, st); reason != "" {
 		// Misconfiguration: skip WITHOUT consuming a slot, warn on the
 		// primary, and do not walk this provider's children.
-		s.recordEvent(st.primary, kaalmv1beta1.ReasonFallbackIneligible,
-			"fallback %q skipped: %s", provider.Name, reason)
+		s.recordEvent(st.primary, fallbackCandidate(st.primary, provider), kaalmv1beta1.ReasonFallbackIneligible,
+			kaalmv1beta1.ActionFallback, "fallback %q skipped: %s", provider.Name, reason)
 		return forwardResult{}, false
 	}
 
@@ -309,7 +319,7 @@ func (s *Server) tryWithFallbacks(
 	}
 	if res.class == classUpstream && res.resp != nil &&
 		(res.resp.StatusCode == 401 || res.resp.StatusCode == 403) {
-		s.recordEvent(provider, kaalmv1beta1.ReasonCredentialsInvalid,
+		s.recordEvent(provider, nil, kaalmv1beta1.ReasonCredentialsInvalid, kaalmv1beta1.ActionFallback,
 			"upstream returned %d; credential rotation may be needed", res.resp.StatusCode)
 	}
 	if child, ok := s.walkChildren(ctx, provider, st, attempt); ok {
@@ -326,7 +336,7 @@ func (s *Server) walkChildren(
 	for _, ref := range provider.Spec.Fallback {
 		next, ok := s.Store.ProviderByName(ctx, ref.Name)
 		if !ok {
-			s.recordEvent(st.primary, kaalmv1beta1.ReasonFallbackIneligible,
+			s.recordEvent(st.primary, nil, kaalmv1beta1.ReasonFallbackIneligible, kaalmv1beta1.ActionFallback,
 				"fallback %q skipped: provider does not exist", ref.Name)
 			continue
 		}

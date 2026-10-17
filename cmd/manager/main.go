@@ -56,6 +56,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
+	"github.com/win07xp/kaalm/internal/eventrec"
 	"github.com/win07xp/kaalm/internal/mcp"
 	"github.com/win07xp/kaalm/internal/profiling"
 	"github.com/win07xp/kaalm/internal/secretwatch"
@@ -351,7 +352,7 @@ func main() {
 
 	if err := (&controller.AgentClassReconciler{
 		Client:      mgr.GetClient(),
-		Recorder:    mgr.GetEventRecorderFor("agentclass-controller"),
+		Recorder:    eventrec.Bounded(mgr.GetEventRecorder("agentclass-controller")),
 		FQDNSupport: fqdnProbe.Supported,
 		// Reads the controller's own cert-manager-issued Secret from the
 		// operator-namespace Secret cache to tell whether cert-manager
@@ -372,7 +373,7 @@ func main() {
 	}
 	if err := (&controller.ModelProviderReconciler{
 		Client:            mgr.GetClient(),
-		Recorder:          mgr.GetEventRecorderFor("modelprovider-controller"),
+		Recorder:          eventrec.Bounded(mgr.GetEventRecorder("modelprovider-controller")),
 		OperatorNamespace: operatorNamespace,
 		Health:            &controller.HTTPProviderHealthChecker{Client: probeClient},
 	}).SetupWithManager(mgr); err != nil {
@@ -381,7 +382,7 @@ func main() {
 	}
 	if err := (&controller.ToolProviderReconciler{
 		Client:            mgr.GetClient(),
-		Recorder:          mgr.GetEventRecorderFor("toolprovider-controller"),
+		Recorder:          eventrec.Bounded(mgr.GetEventRecorder("toolprovider-controller")),
 		OperatorNamespace: operatorNamespace,
 		Health:            &controller.MCPToolHealthChecker{Client: probeClient, MaxResponseBytes: mcpMaxBodyBytes},
 	}).SetupWithManager(mgr); err != nil {
@@ -442,7 +443,7 @@ func main() {
 	if err := (&controller.AgentReconciler{
 		Client:                  mgr.GetClient(),
 		MaxConcurrentReconciles: maxConcurrentReconciles,
-		Recorder:                mgr.GetEventRecorderFor("agent-controller"),
+		Recorder:                eventrec.Bounded(mgr.GetEventRecorder("agent-controller")),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            secretSource,
 		Activity:                activityClient,
@@ -456,7 +457,7 @@ func main() {
 	if err := (&controller.AgentTaskReconciler{
 		Client:                  mgr.GetClient(),
 		MaxConcurrentReconciles: maxConcurrentReconciles,
-		Recorder:                mgr.GetEventRecorderFor("agenttask-controller"),
+		Recorder:                eventrec.Bounded(mgr.GetEventRecorder("agenttask-controller")),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            secretSource,
 		CertLifetime:            certLifetime,
@@ -476,7 +477,7 @@ func main() {
 	if err := (&controller.AgentChannelReconciler{
 		Client:                  mgr.GetClient(),
 		MaxConcurrentReconciles: maxConcurrentReconciles,
-		Recorder:                mgr.GetEventRecorderFor("agentchannel-controller"),
+		Recorder:                eventrec.Bounded(mgr.GetEventRecorder("agentchannel-controller")),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            secretSource,
 		SecretChanges:           secretWatcher,

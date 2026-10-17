@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -223,7 +223,7 @@ func TestTaskRetry_PodDeleteRejectedHoldsThenResumes(t *testing.T) {
 	pod := restorePod(t, task, corev1.PodFailed, false)
 	on := true
 	c := retryRejecter(t, &on, task, pod)
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)}
 
@@ -279,7 +279,7 @@ func TestTaskRetry_MailboxResetRejectedHoldsThenResumes(t *testing.T) {
 	}
 	on := true
 	c := retryRejecter(t, &on, task, cm)
-	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(16)}
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(16)}
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)}
 
 	err := r.retry(ctx, storedTask(t, c, task), "PodStartFailed", "pod failed")

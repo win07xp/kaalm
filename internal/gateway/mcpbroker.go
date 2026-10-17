@@ -568,13 +568,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 // noteToolCredentialRejected reports a tool server's 401 or 403 to the
 // operator: a warning line paced per ToolProvider, and a Warning
-// CredentialsInvalid event on every call, which the event recorder folds
-// into one event with a count.
+// CredentialsInvalid event on every call.
 func (s *Server) noteToolCredentialRejected(tp *kaalmv1beta1.ToolProvider, status int) {
 	if s.toolRejectedLog.allow(tp.Name, credentialLogInterval) {
 		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", status)
 	}
-	s.recordEvent(tp, kaalmv1beta1.ReasonCredentialsInvalid,
+	s.recordEvent(tp, nil, kaalmv1beta1.ReasonCredentialsInvalid, kaalmv1beta1.ActionCallTool,
 		"tool server returned %d; credential rotation may be needed", status)
 }
 

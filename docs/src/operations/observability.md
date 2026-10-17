@@ -107,7 +107,7 @@ A separate **debug build**, enabled by the Go build tag `kaalm_debug_logs` at co
 
 ## Kubernetes Events
 
-Events are the surface for status changes that platform teams discover with `kubectl describe`. [Event emission](../controller/operations.md#event-emission) is the full table of the controller's reasons, and the gateway's four runtime Warnings are stated under [Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions). The groups that matter for alerting:
+Events are the surface for status changes that platform teams discover with `kubectl describe`. [Event emission](../controller/operations.md#event-emission) is the full table of the controller's reasons, with each reason's Event action, and the gateway's four runtime Warnings are stated under [Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions). The groups that matter for alerting:
 
 - **Phase transitions** on Agent (`Normal`, `PhaseChanged`). AgentTask emits no phase Event; its settle and retry Events carry the outcome.
 - **Hibernation and wake** on Agent (`Normal`, `Hibernated` and `Woken`; `Warning`, `WakeIgnored`). See [Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics).

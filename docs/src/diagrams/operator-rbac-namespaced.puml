@@ -10,7 +10,7 @@ skinparam rectangle {
 rectangle "**Operator ServiceAccount** kaalm-system/kaalm-controller" as OPSA #back:87CEEB;line:0D47A1;line.bold;text:0a2540
 rectangle "**Role** kaalm-controller-leader-election in kaalm-system" as nssys #line:0D47A1;line.dashed;text:0a2540 {
   rectangle "Leases: all verbs" as leases #back:FFD580;line:7a3f00;line.bold;text:3a1f00
-  rectangle "Events: create, patch" as ev #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "Events (core API): create, patch" as ev #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
   rectangle "ConfigMaps: all verbs" as cm #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 }
 rectangle "**Role** kaalm-controller-credentials in kaalm-system" as nscred #line:0D47A1;line.dashed;text:0a2540 {

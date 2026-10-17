@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -114,7 +114,7 @@ func setDeletionBlocked(conds *[]metav1.Condition, refs []string) (msg string, f
 // stale (a Healthy set before the hold began) is written once. conds is
 // obj's status.conditions.
 func holdDeletion(
-	ctx context.Context, c client.Client, rec record.EventRecorder,
+	ctx context.Context, c client.Client, rec events.EventRecorder,
 	obj client.Object, conds *[]metav1.Condition, before []metav1.Condition, refs []string,
 ) error {
 	msg, first := setDeletionBlocked(conds, refs)
@@ -127,7 +127,7 @@ func holdDeletion(
 	// After the write, so a pass that read a stale cache and lost the write
 	// to a conflict does not report the hold a second time.
 	if first && rec != nil {
-		rec.Event(obj, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, msg)
+		rec.Eventf(obj, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, kaalmv1beta1.ActionDelete, "%s", msg)
 	}
 	return nil
 }

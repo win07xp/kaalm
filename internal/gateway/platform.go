@@ -378,7 +378,7 @@ func (s *Server) replyRefused(channel *kaalmv1beta1.AgentChannel, platform strin
 		}
 	}
 	s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackRejected, detail)
-	s.recordEvent(channel, "CallbackRejected", "%s", detail)
+	s.recordEvent(channel, nil, "CallbackRejected", kaalmv1beta1.ActionDeliverReply, "%s", detail)
 	return outcome
 }
 

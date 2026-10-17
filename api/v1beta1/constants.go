@@ -297,3 +297,26 @@ const (
 	AgentSANLabels = 5
 	TaskSANLabels  = 5
 )
+
+// Event actions. An events.k8s.io/v1 Event names the action it reports on
+// next to its reason. The API server treats two Events with the same type,
+// reason, action, and objects as repeats, so a reason whose cases must stay
+// apart takes an action that tells them apart: PhaseChanged's action is the
+// new phase. See docs/src/controller/operations.md#event-emission.
+const (
+	ActionValidate     = "Validate"
+	ActionHibernate    = "Hibernate"
+	ActionWake         = "Wake"
+	ActionReplacePod   = "ReplacePod"
+	ActionCheckBudget  = "CheckBudget"
+	ActionCreatePod    = "CreatePod"
+	ActionWriteChild   = "WriteChild"
+	ActionClaimChild   = "ClaimChild"
+	ActionSettle       = "Settle"
+	ActionRetry        = "Retry"
+	ActionProbe        = "Probe"
+	ActionDelete       = "Delete"
+	ActionFallback     = "Fallback"
+	ActionCallTool     = "CallTool"
+	ActionDeliverReply = "DeliverReply"
+)

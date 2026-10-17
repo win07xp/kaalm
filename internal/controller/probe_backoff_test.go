@@ -24,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -128,7 +128,7 @@ func TestModelProvider_FailedProbeBacksOff(t *testing.T) {
 		WithObjects(mp, providerKey("mp-backoff")).WithStatusSubresource(mp).Build()
 	health := newFakeHealth()
 	r := &ModelProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(10),
+		Client: c, Recorder: events.NewFakeRecorder(10),
 		OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mp-backoff"}}
@@ -187,7 +187,7 @@ func TestToolProvider_FailedProbeBacksOff(t *testing.T) {
 		WithObjects(tp).WithStatusSubresource(tp).Build()
 	health := newFakeToolHealth()
 	r := &ToolProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(10),
+		Client: c, Recorder: events.NewFakeRecorder(10),
 		OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "tp-backoff"}}
@@ -222,7 +222,7 @@ func TestModelProvider_ProbeAfterNotProbedStartsFreshBackoff(t *testing.T) {
 		WithObjects(mp).WithStatusSubresource(mp).Build()
 	health := newFakeHealth()
 	r := &ModelProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(10),
+		Client: c, Recorder: events.NewFakeRecorder(10),
 		OperatorNamespace: testOperatorNamespace, Health: health,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mp-fresh"}}

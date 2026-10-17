@@ -23,7 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -43,7 +43,7 @@ type claimsWarnings struct {
 // note emits the Warning on obj when claims is non-empty and differs from
 // what was last emitted for it, and forgets obj when claims is empty. field
 // names the resources block that holds the claims, such as "spec.resources".
-func (w *claimsWarnings) note(rec record.EventRecorder, obj client.Object, field string, claims []corev1.ResourceClaim) {
+func (w *claimsWarnings) note(rec events.EventRecorder, obj client.Object, field string, claims []corev1.ResourceClaim) {
 	if rec == nil {
 		return
 	}
@@ -72,7 +72,7 @@ func (w *claimsWarnings) note(rec record.EventRecorder, obj client.Object, field
 	}
 	w.sent[uid] = msg
 	w.mu.Unlock()
-	rec.Event(obj, corev1.EventTypeWarning, kaalmv1beta1.ReasonResourceClaimsIgnored, msg)
+	rec.Eventf(obj, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonResourceClaimsIgnored, kaalmv1beta1.ActionValidate, "%s", msg)
 }
 
 // forget drops what was emitted for uid, so the next note with claims emits.

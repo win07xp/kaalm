@@ -26,7 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -241,7 +241,7 @@ func staleHoldConds() []metav1.Condition {
 
 // expectHeldHealthy checks Healthy=Unknown NotProbed for a held delete and
 // that the pass sent no event: the hold itself is not new.
-func expectHeldHealthy(t *testing.T, conds []metav1.Condition, rec *record.FakeRecorder) {
+func expectHeldHealthy(t *testing.T, conds []metav1.Condition, rec *events.FakeRecorder) {
 	t.Helper()
 	c := condition(conds, kaalmv1beta1.ConditionHealthy)
 	if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != kaalmv1beta1.ReasonNotProbed ||
@@ -263,7 +263,7 @@ func TestToolProvider_HeldDeleteRefreshesStaleHealthy(t *testing.T) {
 	tp.DeletionTimestamp = &now
 	tp.Status.Conditions = staleHoldConds()
 	c := heldDeleteClient(t, tp.Name, tp)
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &ToolProviderReconciler{Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: tp.Name}}); err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestModelProvider_HeldDeleteRefreshesStaleHealthy(t *testing.T) {
 	mp.DeletionTimestamp = &now
 	mp.Status.Conditions = staleHoldConds()
 	c := heldDeleteClient(t, mp.Name, mp)
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &ModelProviderReconciler{
 		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
 	}

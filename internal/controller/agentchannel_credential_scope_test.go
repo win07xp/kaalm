@@ -28,7 +28,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -321,7 +321,7 @@ func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
 				WithObjects(append(objs, agent, ch)...).WithStatusSubresource(ch).
 				WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
 				WithInterceptorFuncs(roleWriteFailure(tc.verb, tc.object, forbidden)).Build()
-			rec := record.NewFakeRecorder(10)
+			rec := events.NewFakeRecorder(10)
 			r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace, Recorder: rec}
 			res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ch)})
 			if err != nil {

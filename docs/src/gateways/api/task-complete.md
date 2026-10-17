@@ -54,7 +54,7 @@ Check 7 is the Pod UID check: the calling Pod's UID must equal `status.currentPo
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `status` | string | yes | `"success"` or `"failure"` |
-| `message` | string | no | Human-readable completion message |
+| `message` | string | no | Human-readable completion message. The task's `status.agentReportedMessage` stores it cut to 4,096 bytes ([Status](../../resources/agenttask.md#status)) |
 | `artifacts` | map[string]string | no | Key-value pairs matching the names declared in `spec.artifacts`; validated per `status`, see below |
 
 ### Artifact name validation

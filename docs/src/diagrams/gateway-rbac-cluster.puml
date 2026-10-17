@@ -14,7 +14,7 @@ rectangle "**ClusterRole** kaalm-gateway: reach is every namespace" as band #lin
   rectangle "AgentChannel: get, list, watch, patch" as ch #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
   rectangle "Pods: get, list, watch" as pods #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
   rectangle "Services: get" as svc #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
-  rectangle "Events: create, patch" as ev #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "Events (events.k8s.io): create, patch" as ev #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 }
 GWSA -[#B71C1C,bold]-> tr : ClusterRoleBinding
 tr -[hidden]down- crds

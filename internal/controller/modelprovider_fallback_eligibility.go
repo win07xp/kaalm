@@ -183,7 +183,7 @@ func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelP
 		Message: strings.Join(findings, findingsSeparator),
 	})
 	if len(added) > 0 {
-		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonFallbackIneligible,
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonFallbackIneligible, kaalmv1beta1.ActionValidate, nil,
 			strings.Join(added, findingsSeparator))
 	}
 }

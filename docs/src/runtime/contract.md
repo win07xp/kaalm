@@ -101,7 +101,7 @@ Heartbeats are meaningful only for Agents: idle detection does not apply to one-
 
 ## 6. Completion signal (AgentTask only)
 
-This item is optional. An AgentTask in `completion.condition: agentReported` mode reports its result with `POST /v1/task/complete`, with a status and an optional set of artifacts ([Task completion](../gateways/api/task-complete.md)).
+This item is optional. An AgentTask in `completion.condition: agentReported` mode reports its result with `POST /v1/task/complete`, with a status and an optional set of artifacts ([Task completion](../gateways/api/task-complete.md)). The task's status stores the report's `message` cut to 4,096 bytes ([Status](../resources/agenttask.md#status)).
 
 The report can race the status update in which the reconciler writes the new Pod's UID to `AgentTask.status.currentPodUID`, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, and `retryable: true`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
 
