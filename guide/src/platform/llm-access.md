@@ -127,11 +127,9 @@ For the second row, create a ConfigMap named `CONFIGMAP_NAME` in
 bundle when it rotates, with no restart. The two rows compose: enabling both
 merges the cluster CA and your bundle into one trust pool.
 
-The older `controller.trustClusterCAForProbes` and `controller.probeCA` values
-are deprecated but still honored. They add CAs to the controller's probe pool
-only, so a CA set there makes a provider `Healthy` without making forwarding
-trust it. Move to the gateway values above; the chart's install notes warn
-while either is set.
+A values file that still sets `controller.trustClusterCAForProbes` or
+`controller.probeCA` fails the render, and the error names the gateway value
+to set instead.
 
 The same choice exists for async webhook callbacks to receivers under a
 private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.

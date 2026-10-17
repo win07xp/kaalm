@@ -2,7 +2,7 @@
 
 ## What it's for
 
-The AgentClassReconciler decides whether an [AgentClass](../../resources/agentclass.md) is valid, reports four advisory conditions (FQDN egress support, security baseline, deprecated fields, certificate cleanup), and counts the Agents and AgentTasks that use it. On delete it holds the class while any of them references it, then releases the finalizer ([Cluster-scoped resources](../finalizers.md#cluster-scoped-resources)).
+The AgentClassReconciler decides whether an [AgentClass](../../resources/agentclass.md) is valid, reports three advisory conditions (FQDN egress support, security baseline, certificate cleanup), and counts the Agents and AgentTasks that use it. On delete it holds the class while any of them references it, then releases the finalizer ([Cluster-scoped resources](../finalizers.md#cluster-scoped-resources)).
 
 ## What it owns and watches
 
@@ -34,8 +34,8 @@ A class has no phase. [AgentClass status](../../resources/agentclass.md#status) 
 
 - **`Ready`** is `True` with `AllReferencesResolved` when every check passes, otherwise `False` with the reason from [What it checks](#what-it-checks), or `DeletionBlocked` while a delete is held.
 - **`FQDNPolicySupported`** is `True, NoHostsRequested` when `allowedHosts` is empty. Otherwise it is the [CNI probe](#cni-fqdn-policy-probe) answer, `True` or `False, FQDNPolicyUnsupported`. The Agent and AgentTask reconcilers write the hosts into a CiliumNetworkPolicy only on `True` ([FQDN egress policy](../../runtime/child-resources.md#fqdn-egress-policy)).
-- **Advisory conditions and counts.** `SecurityBaseline` and `DeprecatedFields` report the class's own spec. `CertificateCleanup` reports, from the controller's `kaalm-controller-tls` Secret, whether cert-manager cleans up workload TLS Secrets. `agentsInUse`, `tasksInUse`, `agentsReplacing`, and `agentsPendingReplacement` count the Agents and AgentTasks that use the class. [AgentClass status](../../resources/agentclass.md#status) gives their values.
-- **Events.** Every `Ready=False` reason raises a Warning event with the same reason, once when it first appears. So do `FQDNPolicySupported` and `SecurityBaseline` when they first turn `False`, and `DeprecatedFields` when it first turns `True`. `CertificateCleanup` raises none. A class whose `resources.defaults` sets `claims` raises `ResourceClaimsIgnored`, which has no condition ([Event emission](../operations.md#event-emission)).
+- **Advisory conditions and counts.** `SecurityBaseline` reports the class's own spec. `CertificateCleanup` reports, from the controller's `kaalm-controller-tls` Secret, whether cert-manager cleans up workload TLS Secrets. `agentsInUse`, `tasksInUse`, `agentsReplacing`, and `agentsPendingReplacement` count the Agents and AgentTasks that use the class. [AgentClass status](../../resources/agentclass.md#status) gives their values.
+- **Events.** Every `Ready=False` reason raises a Warning event with the same reason, once when it first appears. So do `FQDNPolicySupported` and `SecurityBaseline` when they first turn `False`. `CertificateCleanup` raises none. A class whose `resources.defaults` sets `claims` raises `ResourceClaimsIgnored`, which has no condition ([Event emission](../operations.md#event-emission)).
 
 ## Timing
 

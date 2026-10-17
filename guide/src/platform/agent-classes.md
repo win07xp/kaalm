@@ -147,10 +147,6 @@ every Pod create of the class, so its Agents wait with `Ready=False` and
 reason `PodCreateRejected`, and its AgentTasks fail after the provisioning
 deadline. For how this shows up, see
 [Security model and isolation](https://github.com/win07xp/kaalm/blob/main/docs/src/security/model.md#runtimeclass).
-The class field `network.allowHostNetwork` is deprecated and has no effect:
-no Pod Kaalm creates uses host networking, whatever its value. A class that
-sets it to `true` reports the `DeprecatedFields` condition and a `Warning`
-event.
 
 The repository's `config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml` is
 a starting point. It names the class `sandboxed` and runs its Pods under the

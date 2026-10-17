@@ -57,7 +57,7 @@ Each probe is bounded as follows:
 - **`google-vertex`:** the probe makes two requests. It sends a JWT assertion, signed with the service-account key's private key, to the key's `token_uri`, and then sends the minted access token to `spec.endpoint`. The private key is never sent. The bound is `spec.endpoint` plus the key's `token_uri`, and the gateway sends this credential nowhere.
 - **Redirects:** a probe never follows one, and a redirect counts as a transient error. A redirecting endpoint cannot move the credential to another host.
 - **Time:** each probe, including the Vertex token request, is bounded by `healthCheck.timeoutSeconds` (default 10s).
-- **TLS trust:** the probes trust the system roots plus the gateway's upstream trust, plus anything the deprecated `controller.trustClusterCAForProbes` and `controller.probeCA` values add ([Probe TLS trust](../controller/reconcilers/modelprovider.md#probe-tls-trust)).
+- **TLS trust:** the probes trust the system roots plus the gateway's upstream trust ([Probe TLS trust](../controller/reconcilers/modelprovider.md#probe-tls-trust)).
 
 The request each probe sends, including the headers that carry the credential, is specified under [Liveness probe](../controller/reconcilers/modelprovider.md#liveness-probe) and [The google-vertex probe](../controller/reconcilers/modelprovider.md#the-google-vertex-probe) for ModelProviders, and under [ToolProviderReconciler](../controller/reconcilers/toolprovider.md) for ToolProviders.
 
