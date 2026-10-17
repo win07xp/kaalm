@@ -674,7 +674,7 @@ func TestHandleWake_CountsByTriggerAndClearsBoth(t *testing.T) {
 			WithObjects(ag).WithStatusSubresource(ag).Build()
 		r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(8)}
 		before := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.want))
-		if _, err := r.handleWake(ctxT(), ag); err != nil {
+		if err := r.handleWake(ctxT(), ag); err != nil {
 			t.Fatalf("%s: handleWake: %v", name, err)
 		}
 		rise := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.want)) - before

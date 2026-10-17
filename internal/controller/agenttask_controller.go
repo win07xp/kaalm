@@ -136,7 +136,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.Update(ctx, &task); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The finalizer Update raises a watch event for this AgentTask, which
+		// runs the next pass on the updated object.
+		return ctrl.Result{}, nil
 	}
 
 	task.Status.ObservedGeneration = task.Generation
@@ -153,7 +155,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.finishRetry(ctx, &task); err != nil {
 			return r.childBlocked(ctx, &task, nil, false, err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The Provisioning status write raises a watch event, and so does
+		// the old Pod's deletion; the pass they run recreates the Pod.
+		return ctrl.Result{}, nil
 	}
 
 	// Terminal phases only wait out their TTL.

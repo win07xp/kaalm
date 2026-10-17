@@ -1094,7 +1094,7 @@ func TestChannel_DeleteBeforeFinalizerIsNoop(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ephemeral", Namespace: "default", DeletionTimestamp: &now},
 	}
 	res, err := r.reconcileDelete(context.Background(), ch)
-	if err != nil || res.RequeueAfter != 0 || res.Requeue {
+	if err != nil || !res.IsZero() {
 		t.Errorf("no-finalizer delete should be a clean no-op: res=%+v err=%v", res, err)
 	}
 }

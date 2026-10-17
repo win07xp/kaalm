@@ -229,7 +229,7 @@ func TestDriveHibernating_ClearsDriftWait(t *testing.T) {
 	ag := slotAgent("sleeper", kaalmv1beta1.AgentHibernating, kaalmv1beta1.ReasonReplacementPending)
 	c := slotClient(t, ag)
 	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
-	if _, err := r.driveHibernating(context.Background(), ag); err != nil {
+	if err := r.driveHibernating(context.Background(), ag); err != nil {
 		t.Fatal(err)
 	}
 	if ag.Status.Phase != kaalmv1beta1.AgentHibernated {

@@ -155,7 +155,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if err := r.Update(ctx, &agent); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The finalizer Update raises a watch event for this Agent, which
+		// runs the next pass on the updated object.
+		return ctrl.Result{}, nil
 	}
 
 	agent.Status.ObservedGeneration = agent.Generation
@@ -169,10 +171,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Step 1: wake-annotation handling, with phase-dependent removal so a
 	// failed reconcile cannot silently drop the wake. A wake that lands while
 	// Hibernating stays on the Agent: driveHibernating finishes the Pod
-	// deletion, settles Hibernated, and requeues so this step then commits
-	// Resuming.
-	if handled, res, err := r.reconcileWakeAnnotations(ctx, &agent); handled {
-		return res, err
+	// deletion and settles Hibernated, and the pass that status write runs
+	// commits Resuming here.
+	if handled, err := r.reconcileWakeAnnotations(ctx, &agent); handled {
+		return ctrl.Result{}, err
 	}
 
 	// Step 2: the system namespace is forbidden (SAN-integrity guard).
@@ -223,15 +225,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Step 4: the Degraded-triggering class-versus-spec cross-checks. All
 	// outstanding reasons are evaluated together so recovery can be
 	// per-condition.
-	if handled, res, err := r.reconcileDegraded(ctx, &agent, &class, eff); handled {
-		return res, err
+	if handled, err := r.reconcileDegraded(ctx, &agent, &class, eff); handled {
+		return ctrl.Result{}, err
 	}
 
 	// Step 5: Hibernating drives the Pod down; Hibernated holds with no Pod
 	// (PVC, Service, Certificate, SA, and NetworkPolicy persist).
 	switch agent.Status.Phase {
 	case kaalmv1beta1.AgentHibernating:
-		return r.driveHibernating(ctx, &agent)
+		return ctrl.Result{}, r.driveHibernating(ctx, &agent)
 	case kaalmv1beta1.AgentHibernated:
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
@@ -291,7 +293,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	// A rejected Pod create depends on objects the controller does not
 	// watch (RuntimeClasses, quotas, webhooks): re-check on notReadyRecheck.
-	if createRejected && !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > notReadyRecheck) {
+	if createRejected && (res.RequeueAfter == 0 || res.RequeueAfter > notReadyRecheck) {
 		res.RequeueAfter = notReadyRecheck
 	}
 	if certHeld {
@@ -332,7 +334,7 @@ func (r *AgentReconciler) awaitCertificate(
 // within certWaitRequeue when nothing else requeues it. The Certificate
 // watch is the normal trigger; this retry is the fallback.
 func withCertWaitRetry(res ctrl.Result) ctrl.Result {
-	if !res.Requeue && res.RequeueAfter == 0 {
+	if res.RequeueAfter == 0 {
 		res.RequeueAfter = certWaitRequeue
 	}
 	return res
@@ -395,20 +397,21 @@ func (r *AgentReconciler) childBlocked(
 // so a later manual wake is not counted as a channel wake.
 func (r *AgentReconciler) reconcileWakeAnnotations(
 	ctx context.Context, agent *kaalmv1beta1.Agent,
-) (bool, ctrl.Result, error) {
+) (bool, error) {
 	_, wake := wakeTrigger(agent)
 	if wake && agent.Status.Phase != kaalmv1beta1.AgentHibernating {
-		res, err := r.handleWake(ctx, agent)
-		return true, res, err
+		return true, r.handleWake(ctx, agent)
 	}
 	if _, trigger := agent.Annotations[kaalmv1beta1.AnnotationWakeTrigger]; trigger && !wake {
 		delete(agent.Annotations, kaalmv1beta1.AnnotationWakeTrigger)
 		if err := r.Update(ctx, agent); err != nil {
-			return true, ctrl.Result{}, err
+			return true, err
 		}
-		return true, ctrl.Result{Requeue: true}, nil
+		// The annotation Update raises a watch event, which runs the next
+		// pass.
+		return true, nil
 	}
-	return false, ctrl.Result{}, nil
+	return false, nil
 }
 
 // handleWake implements the phase-dependent wake-annotation protocol: on a
@@ -417,7 +420,7 @@ func (r *AgentReconciler) reconcileWakeAnnotations(
 // observable; on any other phase the annotation is removed immediately, with
 // a WakeIgnored warning except in Resuming (a benign idempotent re-attempt).
 // Reconcile never calls it while Hibernating: that wake waits for Hibernated.
-func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
+func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	trigger, _ := wakeTrigger(agent)
 	if agent.Status.Phase == kaalmv1beta1.AgentHibernated {
 		r.setPhase(agent, kaalmv1beta1.AgentResuming, "wake requested ("+trigger+")")
@@ -432,7 +435,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		agent.Status.LastActivityTime = &woke
 		r.setReady(agent, false, kaalmv1beta1.ReasonWoken, "wake requested; recreating the Pod")
 		if err := r.writeStatus(ctx, agent); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 		r.Recorder.Eventf(agent, nil, corev1.EventTypeNormal, kaalmv1beta1.ReasonWoken, kaalmv1beta1.ActionWake, "waking from hibernation")
 		wakesTotal.WithLabelValues(agent.Namespace, trigger).Inc()
@@ -440,37 +443,40 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		if err := r.Update(ctx, agent); err != nil {
 			// The next reconcile observes the annotation on a Resuming agent
 			// and removes it silently.
-			return ctrl.Result{}, err
+			return err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// The status write and the annotation Update raise watch events,
+		// which run the Resuming pass.
+		return nil
 	}
 
 	phase := agent.Status.Phase
 	clearWake(agent)
 	if err := r.Update(ctx, agent); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if phase != kaalmv1beta1.AgentResuming {
 		r.Recorder.Eventf(agent, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonWakeIgnored, kaalmv1beta1.ActionWake,
 			"wake annotation observed on non-Hibernated agent; ignored")
 	}
-	return ctrl.Result{Requeue: true}, nil
+	// The annotation Update raises a watch event, which runs the next pass.
+	return nil
 }
 
 // driveHibernating deletes the Pod (gracefully) and settles Hibernated once
 // it is gone. Everything else survives for wake-on-demand.
-func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
+func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if pod != nil {
 		if pod.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
+				return err
 			}
 		}
-		return ctrl.Result{}, r.writeStatus(ctx, agent)
+		return r.writeStatus(ctx, agent)
 	}
 	r.setPhase(agent, kaalmv1beta1.AgentHibernated, "Pod deleted, state retained")
 	// With no Pod there is nothing to replace: an Agent that waited for a
@@ -484,12 +490,13 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated, kaalmv1beta1.ActionHibernate, nil,
 		"hibernated: Pod deleted, state retained")
 	if err := r.writeStatus(ctx, agent); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
-	// A wake requested while Hibernating is honored now that the Pod is gone.
-	_, wake := wakeTrigger(agent)
-	return ctrl.Result{Requeue: wake}, nil
+	// A wake requested while Hibernating is honored now that the Pod is
+	// gone: the Hibernated status write raises a watch event, and the pass it
+	// runs commits Resuming.
+	return nil
 }
 
 // evaluateActivity reads the gateway activity data and drives Running <->
@@ -558,8 +565,10 @@ func (r *AgentReconciler) evaluateActivity(
 			lt := metav1.NewTime(marker)
 			agent.Status.LastActivityTime = &lt
 			// Re-enter promptly: an already-elapsed hibernationDelay should
-			// carry straight on to Hibernating on the next pass.
-			return ctrl.Result{Requeue: true}
+			// carry straight on to Hibernating on the next pass. The phase
+			// change makes this pass write status, and that write's watch
+			// event runs the next pass.
+			return ctrl.Result{}
 		}
 	case kaalmv1beta1.AgentIdle:
 		// Only real recorded activity returns an Idle agent to Running. The
@@ -576,7 +585,9 @@ func (r *AgentReconciler) evaluateActivity(
 			r.setPhase(agent, kaalmv1beta1.AgentRunning, "new activity")
 			lt := metav1.NewTime(*last)
 			agent.Status.LastActivityTime = &lt
-			return ctrl.Result{Requeue: true}
+			// The phase change makes this pass write status, and that
+			// write's watch event runs the next pass.
+			return ctrl.Result{}
 		}
 		// Measure the hibernation window from a stable silence marker. The
 		// synthetic path uses LastActivityTime (set once at the Idle
@@ -593,7 +604,8 @@ func (r *AgentReconciler) evaluateActivity(
 		if eff.HibernationEnabled && !hibernationHeld && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {
 			r.setPhase(agent, kaalmv1beta1.AgentHibernating,
 				fmt.Sprintf("idle for %s past the idle timeout", eff.HibernationDelay))
-			return ctrl.Result{Requeue: true}
+			// The status write's watch event runs the Hibernating pass.
+			return ctrl.Result{}
 		}
 	}
 	return ctrl.Result{RequeueAfter: activityCacheWindow}
@@ -687,16 +699,16 @@ func (r *AgentReconciler) podCreationBlocked(
 
 // reconcileDegraded runs the cross-checks and drives the Degraded enter/leave
 // protocol. handled=true means the pass ends here (either the agent is
-// Degraded, or it just recovered and requeues).
+// Degraded, or it just recovered and wrote the restored phase).
 func (r *AgentReconciler) reconcileDegraded(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
-) (bool, ctrl.Result, error) {
+) (bool, error) {
 	reasons := r.degradedReasons(ctx, agent, class, eff)
 	if len(reasons) > 0 {
-		return true, ctrl.Result{}, r.enterOrStayDegraded(ctx, agent, reasons)
+		return true, r.enterOrStayDegraded(ctx, agent, reasons)
 	}
 	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
-		return false, ctrl.Result{}, nil
+		return false, nil
 	}
 	// Every Degraded-triggering condition has cleared: restore the prior
 	// phase and null preDegradedPhase atomically in the same write.
@@ -706,7 +718,8 @@ func (r *AgentReconciler) reconcileDegraded(
 	}
 	r.setPhase(agent, restored, "every Degraded check has cleared")
 	agent.Status.PreDegradedPhase = ""
-	return true, ctrl.Result{Requeue: true}, r.writeStatus(ctx, agent)
+	// The status write raises a watch event, which runs the restored phase.
+	return true, r.writeStatus(ctx, agent)
 }
 
 // degradedReasons evaluates every Degraded-triggering cross-check and returns
@@ -1252,7 +1265,7 @@ func podDriftCause(pod *corev1.Pod, eff effectiveAgentSpec, tlsSecret string) (c
 // within driftPendingRequeue. The watch that fires when another Agent of the
 // class leaves Replacing is the normal trigger; this retry is the fallback.
 func withDriftRetry(res ctrl.Result) ctrl.Result {
-	if !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > driftPendingRequeue) {
+	if res.RequeueAfter == 0 || res.RequeueAfter > driftPendingRequeue {
 		res.RequeueAfter = driftPendingRequeue
 	}
 	return res

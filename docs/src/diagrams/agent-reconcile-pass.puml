@@ -13,7 +13,7 @@ partition "1 to 4: wake, guards, budget, degrade check" {
     :Hibernated: Resuming;\nelse remove, WakeIgnored;
     kill
   elseif (stale wake-trigger,\nno wake request?) then (yes)
-    :remove it,\nrequeue;
+    :remove it;
     kill
   elseif (namespace is\nkaalm-system?) then (yes)
     :Ready=False\nSystemNamespaceForbidden;
