@@ -9,7 +9,7 @@ This page states what each Kaalm identity can do: the operator and gateway Servi
 
 The operator runs as `kaalm-system/kaalm-controller`. It holds the ClusterRole `kaalm-controller` (generated from the reconcilers' RBAC markers and copied into the chart by `make chart-sync`) and two Roles in `kaalm-system`: `kaalm-controller-leader-election` and `kaalm-controller-credentials`.
 
-![The operator ServiceAccount's ClusterRole as a column of grants, one resource family per box, each applying in every namespace. The escalate and bind verbs on Roles are highlighted; the ClusterRole has no Secrets grant.](../diagrams/operator-rbac-cluster.svg)
+![The operator ServiceAccount's ClusterRole as a column of grants, one resource family per box, each applying in every namespace. The escalate and bind verbs on Roles are highlighted; Events are in the events.k8s.io group; the ClusterRole has no Secrets grant.](../diagrams/operator-rbac-cluster.svg)
 
 | Resource | Verbs | Why |
 |---|---|---|
@@ -21,7 +21,7 @@ The operator runs as `kaalm-system/kaalm-controller`. It holds the ClusterRole `
 | `ConfigMaps`, `PersistentVolumeClaims`, `Services`, `ServiceAccounts`, `NetworkPolicies`, `Certificates`, `Roles`, `RoleBindings` | all verbs | Child resources the reconcilers create in user namespaces and own through ownerRefs ([Child resources](../runtime/child-resources.md)) |
 | `CiliumNetworkPolicies` (`cilium.io`) | `get, create, update, patch, delete` | The per-workload FQDN egress policy for a class's `allowedHosts` ([FQDN egress policy](../runtime/child-resources.md#fqdn-egress-policy)). No `list` or `watch`: the controller gets each policy by name and does not watch the kind |
 | `Roles` | `escalate, bind` | Minting the scoped Roles; see Roles and RoleBindings |
-| `Events` | `create, patch` | [Event emission](../controller/operations.md#event-emission) |
+| `Events` (`events.k8s.io`) | `create, patch` | The reconcilers record Events through the `events.k8s.io/v1` API ([Event emission](../controller/operations.md#event-emission)) |
 
 `list` and `watch` on every child kind let the reconcilers react to changes in the resources they own. `Certificates` are granted cluster-wide because the per-Agent and per-AgentTask `Certificate` objects live beside the workload.
 
@@ -31,9 +31,9 @@ The operator runs as `kaalm-system/kaalm-controller`. It holds the ClusterRole `
 
 **Roles and RoleBindings.** The reconcilers mint the per-channel, per-task, and per-workload Roles described on this page, in whichever user namespace the resource lives. Kubernetes escalation prevention forbids creating a Role that grants a permission the creator does not hold, and binding a Role the creator could not have created. The operator holds no Secret read outside `kaalm-system`, so the ClusterRole carries `escalate` and `bind` on `roles`. That trades a standing read of every Secret for the ability to grant a named one, and each grant is a Role and a RoleBinding that the API server's audit log records.
 
-![The operator ServiceAccount's namespaced Roles. Two are in kaalm-system: the leader-election Role holding Leases, Events, and ConfigMaps, and the credentials Role holding Secrets with get, list, and watch. Three kinds are minted in user namespaces: the per-channel check Role holding every Secret the channel names with get and watch, the per-workload pull-Secret Role holding the class's named pull Secrets with get and watch, and the per-workload env-Secret Role holding the Secrets the workload's env names with get and watch.](../diagrams/operator-rbac-namespaced.svg)
+![The operator ServiceAccount's namespaced Roles. Two are in kaalm-system: the leader-election Role holding Leases, core Events, and ConfigMaps, and the credentials Role holding Secrets with get, list, and watch. Three kinds are minted in user namespaces: the per-channel check Role holding every Secret the channel names with get and watch, the per-workload pull-Secret Role holding the class's named pull Secrets with get and watch, and the per-workload env-Secret Role holding the Secrets the workload's env names with get and watch.](../diagrams/operator-rbac-namespaced.svg)
 
-**Leader election.** The Role `kaalm-controller-leader-election` grants all verbs on `Leases` in `kaalm-system`, which controller-runtime's leader-election lock requires; shipping it as a Role is what confines it to the operator's namespace. The Role also lists `Events` and all verbs on `ConfigMaps`. The lock uses Leases, and the operator's ConfigMap work in `kaalm-system` is already covered by the ClusterRole, so the ConfigMap entry grants nothing new.
+**Leader election.** The Role `kaalm-controller-leader-election` grants all verbs on `Leases` in `kaalm-system`, which controller-runtime's leader-election lock requires; shipping it as a Role is what confines it to the operator's namespace. The Role also lists all verbs on `ConfigMaps` and `create, patch` on core `Events`, because controller-runtime's leader election records its leader Event through the core API, not `events.k8s.io`. The lock uses Leases, and the operator's ConfigMap work in `kaalm-system` is already covered by the ClusterRole, so the ConfigMap entry grants nothing new.
 
 **Per-channel Roles.** For every AgentChannel, the AgentChannelReconciler ensures two Roles in the channel's namespace ([Per-channel credential Roles](../controller/reconcilers/agentchannel.md#per-channel-credential-roles) covers how it keeps them current). RBAC cannot grant a read by label, so the operator needs the check Role to see the rule 45 label on each Secret, and the gateway's credential Role then lists only the labeled ones.
 
@@ -52,7 +52,7 @@ The operator is not bound to the credential Role: the check Role already grants 
 
 The gateway runs as `kaalm-system/kaalm-gateway` and holds the ClusterRole `kaalm-gateway`, the Role `kaalm-gateway` in `kaalm-system`, and the per-object Roles the reconcilers mint.
 
-![The gateway ServiceAccount's ClusterRole as a column of grants: tokenreviews create; the five cluster-readable Kaalm kinds with get, list, and watch; AgentChannel with patch added; Pods; Services get; and Events.](../diagrams/gateway-rbac-cluster.svg)
+![The gateway ServiceAccount's ClusterRole as a column of grants: tokenreviews create; the five cluster-readable Kaalm kinds with get, list, and watch; AgentChannel with patch added; Pods; Services get; and Events in the events.k8s.io group.](../diagrams/gateway-rbac-cluster.svg)
 
 ### Namespaced grants in `kaalm-system`
 
@@ -69,7 +69,7 @@ The gateway runs as `kaalm-system/kaalm-gateway` and holds the ClusterRole `kaal
 | `AgentChannel` | `get, list, watch, patch` | Routes channel messages to an Agent and manages platform connections; `patch` writes only the `kaalm.io/channel-disconnected` annotation during the [delete handshake](../controller/finalizers.md#agentchannel) |
 | `Pods` | `get, list, watch` | The source-IP to Pod cross-check on every request and the Mode 2 precheck |
 | `Services` | `get` | Resolves an Agent's Service for message delivery. Services carry no secret material, so the cluster-wide reach is harmless |
-| `Events` | `create, patch` | `FallbackIneligible` and `CredentialsInvalid` on a ModelProvider during a fallback walk, `CredentialsInvalid` on a ToolProvider when a brokered call is rejected, `CallbackRejected` on an AgentChannel when a platform refuses a reply. ModelProviders and ToolProviders are cluster-scoped, so their events land in the `default` namespace |
+| `Events` (`events.k8s.io`) | `create, patch` | `FallbackIneligible` and `CredentialsInvalid` on a ModelProvider during a fallback walk, `CredentialsInvalid` on a ToolProvider when a brokered call is rejected, `CallbackRejected` on an AgentChannel when a platform refuses a reply. ModelProviders and ToolProviders are cluster-scoped, so their events land in the `default` namespace |
 
 The gateway does not create the per-task completion ConfigMap and does not set its ownerRef. The AgentTaskReconciler creates it at provisioning time.
 
