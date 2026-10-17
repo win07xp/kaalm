@@ -184,17 +184,12 @@ Certificates signed by `kaalm-ca` are not interchangeable: internal endpoints au
 |---|---|---|
 | An unauthorized caller wakes agents through the activator | `/v1/activate` requires a client certificate with the gateway Service SAN; any other SAN, even one signed by `kaalm-ca`, answers `403`. | Mitigated |
 | A compromised Pod with network reach to an agent's Service forges channel messages | The agent's `POST /v1/message` requires a client certificate with the gateway SAN. See [Forged channel messages from a compromised Pod](#forged-channel-messages-from-a-compromised-pod). | Mitigated |
-| An in-cluster caller POSTs `ConversionReview` payloads to the cert-less conversion listener | Conversion is a pure function with nothing to extract, and bodies are capped. See [The conversion listener's exposure](#the-conversion-listeners-exposure). | Accepted |
 | An agent answers the gateway with a redirect, to steer the gateway's client certificate and a message to another tenant's agent or an internal address | The gateway's delivery client refuses every redirect, as all of its outbound clients do, and uses no proxy; a redirect is a failed delivery. | Mitigated |
 | A caller reaches a pprof listener | The listeners are off by default. When on, they serve on their own port with no Service, and the chart's NetworkPolicy has no rule for the port, so only `kubectl port-forward` reaches them. They are unauthenticated and expose stacks, allocation sites, and command-line flags, which hold no secrets ([Profiling](../operations/observability.md#profiling)). | Accepted |
 
 #### Forged channel messages from a compromised Pod
 
 The agent's `POST /v1/message` handler requires a client certificate whose SAN is the gateway Service DNS, `kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `.svc`. A non-gateway Pod cannot present one, because the CA key is unreachable from it, so even a Pod that bypasses a misconfigured per-Agent NetworkPolicy is rejected at the handler: `401` without a certificate, `403` with the wrong SAN. The listener accepts the handshake without a client certificate so that kubelet probes on the shared port keep working, and enforces per path ([The runtime contract](../runtime/contract.md), item 4).
-
-#### The conversion listener's exposure
-
-The conversion listener on `:9444` requires no client authentication because its caller, the API server, presents no certificate. An unauthorized caller gains nothing: the handler decodes a `ConversionReview`, converts between `kaalm.io` versions, and echoes the result, reading no cluster state and holding no credentials. The remaining lever is resource exhaustion, and bodies are capped far above any real review. The chart's NetworkPolicy for the operator's own Pods leaves `:9444` open to any source, because the API server is not a Pod a policy can select ([The operator's own NetworkPolicy](../operations/deployment.md#the-operators-own-networkpolicy)).
 
 ## The console
 

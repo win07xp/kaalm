@@ -113,10 +113,31 @@ type Migrator struct {
 	// means ten minutes.
 	ResyncInterval time.Duration
 
+	// kinds and version replace the six Kaalm CRDs and StorageVersion when
+	// set. Only the tests set them, to migrate a CRD of their own.
+	kinds   []entry
+	version string
+
 	// reported is set after the first clean pass logs its summary. Later
 	// clean passes log it only when they migrate a kind, so the periodic
 	// resync stays quiet. Start runs passes on one goroutine.
 	reported bool
+}
+
+// entries returns the CRDs the migrator owns.
+func (m *Migrator) entries() []entry {
+	if m.kinds != nil {
+		return m.kinds
+	}
+	return kinds
+}
+
+// storage returns the version the migrator moves every object to.
+func (m *Migrator) storage() string {
+	if m.version != "" {
+		return m.version
+	}
+	return StorageVersion
 }
 
 // NeedLeaderElection makes the manager run the migrator on the leader
@@ -162,7 +183,7 @@ func (m *Migrator) Start(ctx context.Context) error {
 	}
 }
 
-// Migrate runs one pass over the six CRDs. A kind that fails does not stop
+// Migrate runs one pass over the CRDs the migrator owns. A kind that fails does not stop
 // the pass: every kind is attempted, only the kinds that complete have their
 // storedVersions trimmed, and the errors are joined, each naming its CRD. A
 // pass is idempotent, so the caller may run it again.
@@ -170,7 +191,7 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("storage-migrator")
 	migratedKinds := 0
 	var errs []error
-	for _, k := range kinds {
+	for _, k := range m.entries() {
 		did, err := m.migrateKind(ctx, log, k)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", k.crdName, err))
@@ -185,7 +206,7 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 	}
 	if migratedKinds > 0 || !m.reported {
 		log.Info("storage-version migration pass complete", "kindsMigrated", migratedKinds,
-			"kindsAlreadyCurrent", len(kinds)-migratedKinds)
+			"kindsAlreadyCurrent", len(m.entries())-migratedKinds)
 		m.reported = true
 	}
 	return nil
@@ -200,19 +221,20 @@ func (m *Migrator) migrateKind(ctx context.Context, log logr.Logger, k entry) (b
 	if err := m.Reader.Get(ctx, client.ObjectKey{Name: k.crdName}, &crd); err != nil {
 		return false, fmt.Errorf("get CRD: %w", err)
 	}
-	if migrated(crd.Status.StoredVersions) {
+	version := m.storage()
+	if migrated(crd.Status.StoredVersions, version) {
 		return false, nil
 	}
-	if !storesAt(crd, StorageVersion) {
+	if !storesAt(crd, version) {
 		return false, fmt.Errorf("storage version is not %s (storedVersions %v); apply the chart's CRDs first",
-			StorageVersion, crd.Status.StoredVersions)
+			version, crd.Status.StoredVersions)
 	}
 	before := append([]string(nil), crd.Status.StoredVersions...)
-	seen, moved, err := m.rewriteAll(ctx, crd.Spec.Group, k.kind)
+	seen, moved, err := m.rewriteAll(ctx, crd.Spec.Group, version, k.kind)
 	if err != nil {
 		return false, err
 	}
-	patch := fmt.Sprintf(`{"status":{"storedVersions":[%q]}}`, StorageVersion)
+	patch := fmt.Sprintf(`{"status":{"storedVersions":[%q]}}`, version)
 	if err := m.Client.Status().Patch(ctx, &crd, client.RawPatch(types.MergePatchType, []byte(patch))); err != nil {
 		return false, fmt.Errorf("trim storedVersions: %w", err)
 	}
@@ -229,18 +251,18 @@ func (m *Migrator) migrateKind(ctx context.Context, log logr.Logger, k entry) (b
 // object and bumps its resourceVersion; an object already at the storage
 // version is left untouched, resourceVersion included. It returns the
 // number of objects seen and the number actually rewritten.
-func (m *Migrator) rewriteAll(ctx context.Context, group, kindName string) (seen, moved int, err error) {
+func (m *Migrator) rewriteAll(ctx context.Context, group, version, kindName string) (seen, moved int, err error) {
 	pageSize := m.PageSize
 	if pageSize <= 0 {
 		pageSize = defaultPageSize
 	}
-	listGVK := schema.GroupVersionKind{Group: group, Version: StorageVersion, Kind: kindName + "List"}
+	listGVK := schema.GroupVersionKind{Group: group, Version: version, Kind: kindName + "List"}
 	token := ""
 	for {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(listGVK)
 		if err := m.Reader.List(ctx, list, client.Limit(pageSize), client.Continue(token)); err != nil {
-			return seen, moved, fmt.Errorf("list %s at %s: %w", kindName, StorageVersion, err)
+			return seen, moved, fmt.Errorf("list %s at %s: %w", kindName, version, err)
 		}
 		for i := range list.Items {
 			obj := &list.Items[i]
@@ -260,9 +282,9 @@ func (m *Migrator) rewriteAll(ctx context.Context, group, kindName string) (seen
 	}
 }
 
-// migrated reports whether storedVersions is exactly ["v1beta1"].
-func migrated(stored []string) bool {
-	return len(stored) == 1 && stored[0] == StorageVersion
+// migrated reports whether storedVersions is exactly [version].
+func migrated(stored []string, version string) bool {
+	return len(stored) == 1 && stored[0] == version
 }
 
 // storesAt reports whether version is the CRD's storage version.

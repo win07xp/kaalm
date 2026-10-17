@@ -31,8 +31,7 @@ spec:
   group: kaalm.io
   names:
     plural: agents
-  conversion:
-    strategy: Webhook
+  scope: Namespaced
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -61,8 +60,8 @@ func TestRunSplitsPerCRDWithControllerGenNames(t *testing.T) {
 			t.Fatalf("%s holds more than one document:\n%s", name, b)
 		}
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "kaalm.io_agents.yaml")); !strings.Contains(string(b), "strategy: Webhook") {
-		t.Fatalf("conversion stanza lost:\n%s", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, "kaalm.io_agents.yaml")); !strings.Contains(string(b), "scope: Namespaced") {
+		t.Fatalf("spec field lost:\n%s", b)
 	}
 }
 

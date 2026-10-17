@@ -192,7 +192,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 CHART_DIR ?= charts/kaalm
 
 .PHONY: chart-sync
-chart-sync: manifests kustomize ## Sync generated CRDs (with the conversion stanza) and controller RBAC into the Helm chart.
+chart-sync: manifests kustomize ## Sync generated CRDs and controller RBAC into the Helm chart.
 	rm -f $(CHART_DIR)/crds/*.yaml
 	$(KUSTOMIZE) build config/crd | go run ./hack/splitcrds $(CHART_DIR)/crds
 	@mkdir -p $(CHART_DIR)/files
@@ -338,11 +338,15 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 dashboards-verify: ## Verify config/grafana against the live e2e cluster (run after make e2e): throwaway Prometheus+Grafana, provisioning, every panel query.
 	hack/dashboards-verify.sh
 
-# The released chart the upgrade e2e starts from, and the one place it is
-# pinned. The release checklist in RELEASING.md bumps this to the newly
-# released version after each release. The upgrade workflow also runs from
-# 0.5.0, the last release before the graduation.
-PREV_CHART_VERSION ?= 1.0.0
+# The released chart the upgrade e2e starts from: the newest release tag
+# before this commit. HEAD^ keeps a run on a release tag's own commit from
+# picking that tag, which is still being published.
+PREV_CHART_VERSION ?= $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD^ 2>/dev/null | sed 's/^v//')
+
+# The oldest release this build upgrades in place from. 2.0.0 is a fresh
+# start with no upgrade path from 1.x, so the upgrade e2e skips any older
+# previous release.
+UPGRADE_FROM_MIN := 2.0.0
 
 .PHONY: upgrade-images
 upgrade-images: ## Build and import only what the upgrade e2e needs locally: the controller and gateway. The pre-upgrade world runs published $(PREV_CHART_VERSION) artifacts, and the upgrade recreates no workload Pods.
@@ -351,11 +355,16 @@ upgrade-images: ## Build and import only what the upgrade e2e needs locally: the
 	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG)
 
 .PHONY: e2e-upgrade
+ifeq ($(shell printf '%s\n%s\n' $(UPGRADE_FROM_MIN) $(or $(PREV_CHART_VERSION),0) | sort -V | head -1),$(UPGRADE_FROM_MIN))
 e2e-upgrade: chart-sync ## One-shot S21 upgrade e2e: fresh cluster, install the released $(PREV_CHART_VERSION) chart, upgrade to the local build, assert nothing lost.
 	-k3d cluster delete $(CLUSTER)
 	hack/k3d-up.sh
 	$(MAKE) upgrade-images
 	UPGRADE_PREV_VERSION=$(PREV_CHART_VERSION) go test ./test/upgrade/... -tags upgrade -v -timeout 30m
+else
+e2e-upgrade:
+	@echo "e2e-upgrade: skipped: the previous release '$(PREV_CHART_VERSION)' is older than $(UPGRADE_FROM_MIN), the oldest release this build upgrades from"
+endif
 
 .PHONY: e2e-cilium
 e2e-cilium: ## FQDN egress proof: fresh k3d cluster with Cilium, install the chart, run the FQDN spec (allowedHosts).

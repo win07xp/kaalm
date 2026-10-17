@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,12 +46,9 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
-	webhookconversion "sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
@@ -72,7 +68,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kaalmv1beta1.AddToScheme(scheme))
 	// The storage-version migrator reads and patches the Kaalm CRDs.
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
@@ -84,8 +79,6 @@ func init() {
 func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
-	var webhookCertPath, webhookCertName, webhookCertKey string
-	var webhookPort int
 	var enableLeaderElection bool
 	var probeAddr string
 	var pprofAddr string
@@ -114,18 +107,12 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
-	flag.StringVar(&webhookCertPath, "webhook-cert-path", "",
-		"The directory that contains the webhook certificate. Enables the CRD conversion webhook when set.")
-	flag.IntVar(&webhookPort, "webhook-port", 9444,
-		"The port the CRD conversion webhook listens on (the conversion port of the kaalm-controller Service).")
-	flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
-	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
-		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+		"If set, HTTP/2 will be enabled for the metrics server")
 	flag.StringVar(&controllerTLSCert, "controller-tls-cert", "",
 		"The controller's TLS certificate (kaalm-controller-tls). "+
 			"Enables the activator listener and the gateway activity client when set.")
@@ -190,35 +177,7 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	// Create watchers for metrics and webhooks certificates
-	var metricsCertWatcher, webhookCertWatcher *certwatcher.CertWatcher
-
-	// Initial webhook TLS options
-	webhookTLSOpts := tlsOpts
-
-	if len(webhookCertPath) > 0 {
-		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
-			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
-
-		var err error
-		webhookCertWatcher, err = certwatcher.New(
-			filepath.Join(webhookCertPath, webhookCertName),
-			filepath.Join(webhookCertPath, webhookCertKey),
-		)
-		if err != nil {
-			setupLog.Error(err, "Failed to initialize webhook certificate watcher")
-			os.Exit(1)
-		}
-
-		webhookTLSOpts = append(webhookTLSOpts, func(config *tls.Config) {
-			config.GetCertificate = webhookCertWatcher.GetCertificate
-		})
-	}
-
-	webhookServer := webhook.NewServer(webhook.Options{
-		Port:    webhookPort,
-		TLSOpts: webhookTLSOpts,
-	})
+	var metricsCertWatcher *certwatcher.CertWatcher
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -290,7 +249,6 @@ func main() {
 			DefaultTransform: cache.TransformStripManagedFields(),
 		},
 		Metrics:                metricsServerOptions,
-		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		// Profiling on its own port, only when asked for: unauthenticated,
 		// for a port-forward during a profiling session, never a Service.
@@ -489,47 +447,13 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// The CRD conversion webhook
-	// (docs/src/operations/api-versioning.md#where-the-conversion-webhook-runs):
-	// v1beta1 is the hub and storage version, v1alpha1 the deprecated spoke,
-	// and every replica serves the conversion on its own listener. It is
-	// enabled by the cert path, the way the activator is enabled by the
-	// controller TLS identity, so a certless local run still starts.
-	if webhookCertPath != "" {
-		for _, hub := range []runtime.Object{
-			&kaalmv1beta1.Agent{}, &kaalmv1beta1.AgentChannel{}, &kaalmv1beta1.AgentClass{},
-			&kaalmv1beta1.AgentTask{}, &kaalmv1beta1.ModelProvider{}, &kaalmv1beta1.ToolProvider{},
-		} {
-			if ok, err := webhookconversion.IsConvertible(mgr.GetScheme(), hub); err != nil || !ok {
-				setupLog.Error(err, "kind is not convertible; refusing to serve a partial conversion webhook",
-					"type", fmt.Sprintf("%T", hub), "convertible", ok)
-				os.Exit(1)
-			}
-		}
-		// The body cap is the deny half of the listener's posture: conversion
-		// is a pure function with nothing to extract, but the handler decodes
-		// without a limit and the port requires no client auth.
-		// The empty registry leaves every kind to its Hub and Convertible
-		// implementations.
-		convert := webhookconversion.NewWebhookHandler(mgr.GetScheme(), webhookconversion.NewRegistry())
-		mgr.GetWebhookServer().Register("/convert", controller.MaxBytesHandler(convert, controller.MaxConversionBodyBytes))
-		// A replica is Ready only once the conversion listener is up, so the
-		// Service never routes a conversion to a replica that cannot answer.
-		if err := mgr.AddReadyzCheck("conversion-webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
-			setupLog.Error(err, "unable to set up the conversion webhook ready check")
-			os.Exit(1)
-		}
-		setupLog.Info("serving the CRD conversion webhook", "path", "/convert", "port", webhookPort)
-	} else {
-		setupLog.Info("webhook cert path not configured; CRD conversion webhook disabled")
-	}
-
 	// The storage-version migrator
 	// (docs/src/operations/api-versioning.md#storage-version-migration):
-	// on the leader, once per start, rewrite every custom resource at
-	// v1beta1 and trim each CRD's storedVersions, so an upgraded cluster
-	// finishes the graduation on its own. Idempotent, retried with backoff,
-	// never fatal to the manager.
+	// on the leader, at start and every ten minutes, rewrite every custom
+	// resource at the storage version and trim each CRD's storedVersions, so
+	// a release that changes the storage version finishes the move on its
+	// own. A CRD already at the storage version is skipped. Idempotent,
+	// retried with backoff, never fatal to the manager.
 	if err := mgr.Add(&storagemigration.Migrator{Reader: mgr.GetAPIReader(), Client: mgr.GetClient()}); err != nil {
 		setupLog.Error(err, "unable to add the storage-version migrator to manager")
 		os.Exit(1)
@@ -553,24 +477,15 @@ func main() {
 		}
 	}
 
-	if webhookCertWatcher != nil {
-		setupLog.Info("Adding webhook certificate watcher to manager")
-		if err := mgr.Add(webhookCertWatcher); err != nil {
-			setupLog.Error(err, "unable to add webhook certificate watcher to manager")
-			os.Exit(1)
-		}
-	}
-
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
 	// Readiness covers only what works without the manager's cache. Ready
-	// Pods are the controller Service's endpoints, and that Service also
-	// serves the CRD conversion webhook, which the caches need in order to
-	// sync on an upgrade that still stores v1alpha1 objects. A check that
-	// waited on the caches (or on a runnable the manager starts after them)
-	// would deadlock that upgrade: no Ready Pod, no conversion, no sync.
+	// Pods are the controller Service's endpoints, and the activator on every
+	// replica writes without reading, so it can take a wake before the caches
+	// sync. A check that waited on the caches (or on a runnable the manager
+	// starts after them) would only hold back a new replica's wakes.
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)

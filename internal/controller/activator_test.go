@@ -375,9 +375,8 @@ func TestActivator_ReadyCheck(t *testing.T) {
 	}
 }
 
-// neverSyncedCache stands in for a cache that can't sync: the case of an
-// upgrade whose stored v1alpha1 objects need the conversion webhook, which
-// the apiserver reaches only through Ready controller Pods.
+// neverSyncedCache stands in for a cache that has not synced yet, such as a
+// new replica's caches on a large cluster.
 type neverSyncedCache struct{ cache.Cache }
 
 func (neverSyncedCache) WaitForCacheSync(ctx context.Context) bool {
@@ -393,9 +392,8 @@ func (blockedCacheRunnable) Start(ctx context.Context) error { <-ctx.Done(); ret
 func (blockedCacheRunnable) GetCache() cache.Cache           { return neverSyncedCache{} }
 
 // The activator serves, and its readiness check passes, while the manager's
-// caches have not synced. Controller readiness covers the conversion webhook,
-// which the caches may need in order to sync, so a check that waited on the
-// caches would deadlock an upgrade from before the v1beta1 graduation.
+// caches have not synced, so a new replica takes wakes as soon as its
+// listener is bound.
 func TestActivator_ServesBeforeCachesSync(t *testing.T) {
 	pki := newActivatorPKI(t)
 	certFile, keyFile, caFile := pki.writeFiles(t, pki.issue(t, "localhost"))

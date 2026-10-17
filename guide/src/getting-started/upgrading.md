@@ -76,9 +76,7 @@ The old controller's own status writes fail the same way, so expect reconcile
 errors in its log and `Warning` events on workloads for the length of the
 rollout, typically under a minute. Everything recovers on its own the moment
 the first new replica is Ready; nothing needs to be reapplied. Message
-delivery and LLM traffic continue throughout. The design book explains the
-window on
-[API versioning and deprecation](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/api-versioning.md#upgrading-in-place).
+delivery and LLM traffic continue throughout.
 
 During the upgrade, Helm reports that it skipped deleting the `standard`
 AgentClass. That is expected: the chart leaves its sample class alone for
@@ -326,6 +324,6 @@ design book explains the rule on
 ---
 
 *How this works: design book pages Operations, API versioning and deprecation
-(the storage migration, the conversion webhook, and the deprecation policy);
+(the storage migration and the deprecation policy);
 Operations, Deployment (the rolling upgrade order); Resources, Validation and
 defaulting (rules 45, 46, 48, 49, and 50); Controller, Reconcilers (the Agent certificate).*

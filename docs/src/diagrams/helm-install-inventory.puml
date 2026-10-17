@@ -21,7 +21,7 @@ rectangle "**cluster-scoped**" as band #line:9E9E9E;line.dashed;text:555555 {
 rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
   rectangle "Deployment kaalm-controller, 2 replicas, PDB" as dctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
   rectangle "Deployment kaalm-gateway, 2 replicas, PDB" as dgw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
-  rectangle "Service kaalm-controller :9443 :9444 :8080" as svcctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  rectangle "Service kaalm-controller :9443 :8080" as svcctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
   rectangle "Service kaalm-gateway :8080 :8443 :9090" as svcgw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
   rectangle "ServiceAccounts kaalm-controller, kaalm-gateway" as sas #back:FFD580;line:7a3f00;line.bold;text:3a1f00
   rectangle "Roles and bindings kaalm-controller-leader-election, kaalm-gateway" as roles #back:FFD580;line:7a3f00;line.bold;text:3a1f00

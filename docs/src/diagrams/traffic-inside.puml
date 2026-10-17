@@ -21,7 +21,7 @@ GW -[#1B5E20,bold]-> AG : 2. POST /v1/message: mTLS both ways
 GW -[#4A148C,bold]-> CTRL : 3. POST /v1/activate: mTLS, SAN
 CTRL -[#4A148C,bold]-> GW : 4. GET /v1/activity, /v1/channels/health: mTLS, SAN
 GW -[#7a3f00]-> API : 5. TokenReview, ConfigMap writes, AgentChannel annotation
-CTRL <-[#7a3f00]-> API : 6. watches, status, child objects, Events, conversion webhook
+CTRL <-[#7a3f00]-> API : 6. watches, status, child objects, Events
 CON .[#9E9E9E].> GW : 7. POST /v1/test-chat, GET /v1/spend: mTLS, SAN
 CON .[#9E9E9E].> API : 7. reads under its own ServiceAccount
 GW -[hidden]down- CTRL

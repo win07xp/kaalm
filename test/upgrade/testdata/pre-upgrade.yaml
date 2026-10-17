@@ -1,21 +1,8 @@
 # The pre-upgrade world for the S21 upgrade e2e: everything a cluster on the
-# previous release holds before the upgrade, written the way its users wrote
-# it. Every apiVersion says kaalm.io/v1alpha1 on purpose (served on every
-# previous release, and the deliberate old-manifest shape), and __PREV__ is
-# substituted with PREV_CHART_VERSION at apply time so the workloads run the
-# previous release's published base images, because the scenario upgrades
-# what users actually run. The channel Secret up-hook is left without the
-# kaalm.io/channel-credential label on purpose: the spec checks that the
-# upgraded controller reports SecretNotOptedIn and recovers once it is
-# labeled, the step the upgrade notes ask for. The provider Secret
-# up-provider-key is left without the kaalm.io/provider-credential label and
-# the kaalm.io/provider-hosts annotation on purpose, for the same reason: the
-# spec checks that the upgraded controller reports SecretNotOptedIn, then
-# EndpointHostNotApproved once it is labeled, and recovers once it is
-# annotated. The workload Secret up-env is left without the
-# kaalm.io/workload-secret label for the same reason: the keeper's and the
-# task's env read it, and the spec checks that the keeper reports
-# SecretNotOptedIn, keeps its Pod, and recovers once it is labeled.
+# previous release holds before the upgrade, written the way its users write
+# it. __PREV__ is substituted with PREV_CHART_VERSION at apply time so the
+# workloads run the previous release's published base images, because the
+# scenario upgrades what users actually run.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -26,6 +13,8 @@ kind: Secret
 metadata:
   name: up-hook
   namespace: up-e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: up-webhook-bearer-token
@@ -35,15 +24,18 @@ kind: Secret
 metadata:
   name: up-provider-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: up-provider.invalid,up-tools.invalid
 type: Opaque
 stringData:
   token: up-provider-credential
 ---
-# A model provider and a tool provider on the unlabeled, unannotated Secret.
-# Nothing references them. The probes stay on: a failing probe sets
-# Healthy=False and leaves Ready=True, so Ready shows only the credential
-# checks.
-apiVersion: kaalm.io/v1alpha1
+# A model provider and a tool provider on the provider Secret. Nothing
+# references them. The probes stay on: a failing probe sets Healthy=False
+# and leaves Ready=True, so Ready shows only the credential checks.
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: up-provider
@@ -54,7 +46,7 @@ spec:
     name: up-provider-key
     key: token
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ToolProvider
 metadata:
   name: up-tools
@@ -70,13 +62,15 @@ kind: Secret
 metadata:
   name: up-env
   namespace: up-e2e
+  labels:
+    kaalm.io/workload-secret: "true"
 type: Opaque
 stringData:
   token: up-env-token
 ---
 # The class for the agent that keeps running and for the finished task. No
 # hibernation: the keeper must sit in Running across the whole upgrade.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: up-service
@@ -94,7 +88,7 @@ spec:
 # The class for the agent that hibernates before the upgrade. Same positive
 # timers as the s7 fixtures: idle evaluation only runs when the effective
 # idleTimeout is > 0.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: up-hibernating
@@ -131,7 +125,7 @@ data:
 ---
 # The keeper: Running before the upgrade, must still be Running in the same
 # Pod with the same volume after it.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: up-keeper
@@ -158,7 +152,7 @@ spec:
 ---
 # The sleeper: Hibernated before the upgrade, must still be Hibernated after
 # it, and must wake on its next message as before.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: up-sleeper
@@ -178,7 +172,7 @@ spec:
 ---
 # Async channel on the sleeper: the post-upgrade wake message goes through
 # it, which is also the proof that the channel still answers.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: up-channel
@@ -201,7 +195,7 @@ spec:
 # Yesterday's finished task: agentReported through the published base
 # image's autocomplete hook, completed long before the upgrade, no TTL so
 # it survives to be asserted on. Its status must come through untouched.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentTask
 metadata:
   name: up-task

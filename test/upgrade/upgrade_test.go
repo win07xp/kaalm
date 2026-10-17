@@ -25,53 +25,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/util/version"
 
 	"github.com/win07xp/kaalm/test/utils"
 )
 
 // prevVersion is the released chart the cluster starts from. make
-// e2e-upgrade sets it from the Makefile's PREV_CHART_VERSION, the one place
-// the version is pinned, so there is no fallback here to drift from it.
+// e2e-upgrade sets it from the Makefile's PREV_CHART_VERSION, the newest
+// release tag, so there is no fallback here to drift from it.
 func prevVersion() string { return os.Getenv("UPGRADE_PREV_VERSION") }
-
-// prevPredatesGraduation reports whether the previous release predates the
-// v0.6.0 API graduation. Only such upgrades have the conversion window (the
-// old controller serves no webhook yet) and storage to migrate; a
-// post-graduation previous release already serves conversion and already
-// stores at v1beta1, and the spec asserts that instead.
-func prevPredatesGraduation() bool { return predatesGraduation(prevVersion()) }
-
-// graduation is the release that moved the API to v1beta1.
-var graduation = version.MustParseSemantic("0.6.0")
-
-// predatesGraduation compares v as a semantic version; a malformed value
-// panics, which Ginkgo reports as a failure naming it.
-func predatesGraduation(v string) bool { return version.MustParseSemantic(v).LessThan(graduation) }
-
-func TestPredatesGraduation(t *testing.T) {
-	for v, want := range map[string]bool{
-		"0.5.0":  true,
-		"0.6.0":  false,
-		"0.10.0": false,
-		"1.0.0":  false,
-		"1.1.0":  false,
-	} {
-		if got := predatesGraduation(v); got != want {
-			t.Errorf("predatesGraduation(%q) = %v, want %v", v, got, want)
-		}
-	}
-}
 
 const (
 	ns          = "up-e2e"
 	channelPath = "/channels/up-e2e/up-channel"
 	bearer      = "up-webhook-bearer-token"
 )
+
+var kaalmCRDs = []string{
+	"agentclasses.kaalm.io", "modelproviders.kaalm.io", "toolproviders.kaalm.io",
+	"agents.kaalm.io", "agenttasks.kaalm.io", "agentchannels.kaalm.io",
+}
 
 func helm(args ...string) (string, error) {
 	return utils.Run(exec.Command("helm", args...))
@@ -82,11 +57,22 @@ func phase(kind, name string) string {
 	return lastLine(out)
 }
 
-// lastLine strips client-go warning lines (deprecation warnings on v1alpha1
-// reads land in CombinedOutput) from a jsonpath read.
+// lastLine strips client-go warning lines, which land in CombinedOutput,
+// from a jsonpath read.
 func lastLine(out string) string {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	return lines[len(lines)-1]
+}
+
+// readyStatus reads the Ready condition's status of a namespaced object, or
+// of a cluster-scoped one when namespace is empty.
+func readyStatus(kind, namespace, name string) string {
+	args := []string{"get", kind, name, "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`}
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+	out, _ := utils.Kubectl(args...)
+	return lastLine(out)
 }
 
 // keeperPod resolves the keeper's Pod name by its stable labels (agent
@@ -117,34 +103,13 @@ func podUID(pod string) string {
 	return lastLine(out)
 }
 
-// agentUID reads an Agent's metadata.uid.
-func agentUID(name string) string {
-	out, _ := utils.Kubectl("get", "agent", name, "-n", ns, "-o", "jsonpath={.metadata.uid}")
-	return lastLine(out)
-}
-
-// keeperStatusPod reads the keeper's status.podName. Unlike keeperPod, it
-// never names a Pod that is still terminating once its replacement exists:
-// the controller sets it when it creates the new Pod.
-func keeperStatusPod() string {
-	out, _ := utils.Kubectl("get", "agent", "up-keeper", "-n", ns, "-o", "jsonpath={.status.podName}")
-	return lastLine(out)
-}
-
-// keeperCondition reads one field of the keeper's condition condType.
-func keeperCondition(condType, field string) string {
-	out, _ := utils.Kubectl("get", "agent", "up-keeper", "-n", ns,
-		"-o", `jsonpath={.status.conditions[?(@.type=="`+condType+`")].`+field+`}`)
-	return lastLine(out)
-}
-
-// The S21 story in order: the old world, the window, the upgrade, and what
-// survived. Ordered and stateful on purpose; every later assertion depends
-// on the world the earlier steps built.
+// The S21 story in order: the old world, the two documented upgrade steps,
+// and what survived. Ordered and stateful on purpose; every later assertion
+// depends on the world the earlier steps built.
 var _ = Describe("Upgrade in place (S21)", Ordered, func() {
-	var keeperPodName, keeperPodUID string
+	var keeperPodName, keeperPodUID, keeperSecret string
 
-	It("installs the previous release and its workloads at v1alpha1", func() {
+	It("installs the previous release and its workloads", func() {
 		By(fmt.Sprintf("helm install of the released %s chart", prevVersion()))
 		_, err := helm("install", "kaalm", "oci://ghcr.io/win07xp/charts/kaalm",
 			"--version", prevVersion(), "-n", "kaalm-system", "--create-namespace",
@@ -152,7 +117,7 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			"--wait", "--timeout", "5m")
 		Expect(err).NotTo(HaveOccurred())
 
-		By("applying the v1alpha1 workloads at the previous release's image versions")
+		By("applying the workloads at the previous release's image versions")
 		raw, err := os.ReadFile("test/upgrade/testdata/pre-upgrade.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		rendered := filepath.Join(GinkgoT().TempDir(), "pre-upgrade.yaml")
@@ -170,12 +135,6 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		By("the sleeper hibernates")
 		Eventually(func() string { return phase("agent", "up-sleeper") }, "180s", "5s").Should(Equal("Hibernated"))
 
-		By("the previous release binds the controller to the channel's credential Role")
-		Eventually(func() error {
-			_, err := utils.Kubectl("get", "rolebinding", "kaalm-channel-up-channel-creds-controller", "-n", ns)
-			return err
-		}, "120s", "5s").Should(Succeed())
-
 		By("a marker is written to the keeper's memory volume")
 		keeperPodName = keeperPod()
 		Expect(keeperPodName).NotTo(BeEmpty())
@@ -184,167 +143,35 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		keeperPodUID = podUID(keeperPodName)
 		Expect(keeperPodUID).NotTo(BeEmpty())
+		keeperSecret = certSecretName("up-keeper")
+		Expect(keeperSecret).NotTo(BeEmpty())
 	})
 
-	It("opens the window: new CRDs make v1alpha1 reads work; writes match the old release's era", func() {
-		By("step 1 of the documented upgrade: apply the new chart's CRDs")
+	It("upgrades with the two documented steps", func() {
+		By("step 1: apply the new chart's CRDs")
 		// --force-conflicts is part of the documented command: helm owns
 		// every CRD field from the install, and the first server-side apply
 		// must take that ownership over.
 		_, err := utils.Kubectl("apply", "--server-side", "--force-conflicts", "-f", "charts/kaalm/crds/")
 		Expect(err).NotTo(HaveOccurred())
 
-		By("reads at v1alpha1 still work")
-		out, err := utils.Kubectl("get", "agents.v1alpha1.kaalm.io", "up-keeper", "-n", ns,
-			"-o", "jsonpath={.metadata.name}")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(lastLine(out)).To(Equal("up-keeper"))
-
-		if prevPredatesGraduation() {
-			By("a write at v1alpha1 fails: storage is v1beta1 and nothing serves the webhook yet")
-			out, err = utils.Kubectl("annotate", "agentclasses.v1alpha1.kaalm.io", "up-service",
-				"upgrade-e2e/window-probe=first")
-			Expect(err).To(HaveOccurred(), "the window write should fail, got: %s", out)
-			Expect(out).To(ContainSubstring("conversion webhook"))
-		} else {
-			By("there is no window: the old release already serves the conversion webhook")
-			_, err = utils.Kubectl("annotate", "--overwrite", "agentclasses.v1alpha1.kaalm.io",
-				"up-service", "upgrade-e2e/window-probe=first")
-			Expect(err).NotTo(HaveOccurred(),
-				"a post-graduation release must convert v1alpha1 writes throughout the upgrade")
-		}
-	})
-
-	It("upgrades the release and the window closes on its own", func() {
-		By("step 2 of the documented upgrade: helm upgrade to the local build")
-		_, err := helm("upgrade", "kaalm", "charts/kaalm", "-n", "kaalm-system",
+		By("step 2: helm upgrade to the local build")
+		_, err = helm("upgrade", "kaalm", "charts/kaalm", "-n", "kaalm-system",
 			"--set", "certManager.clusterResourceNamespace=cert-manager",
 			"--wait", "--timeout", "5m")
 		Expect(err).NotTo(HaveOccurred())
-
-		By("the same v1alpha1 write now succeeds, with the deprecation warning")
-		var out string
-		Eventually(func() error {
-			out, err = utils.Kubectl("annotate", "--overwrite", "agentclasses.v1alpha1.kaalm.io",
-				"up-service", "upgrade-e2e/window-probe=second")
-			return err
-		}, "120s", "5s").Should(Succeed())
-		Expect(out).To(ContainSubstring("kaalm.io/v1alpha1 AgentClass is deprecated; use kaalm.io/v1beta1"))
-	})
-
-	It("holds a channel whose Secret lacks the opt-in label until the Secret is labeled", func() {
-		readyReason := func() string {
-			out, _ := utils.Kubectl("get", "agentchannel", "up-channel", "-n", ns,
-				"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].reason}`)
-			return lastLine(out)
-		}
-		By("rule 45: the unlabeled channel Secret leaves the channel not Ready")
-		Eventually(readyReason, "120s", "5s").Should(Equal("SecretNotOptedIn"))
-
-		By("the upgrade notes' step: label the reviewed channel Secret")
-		_, err := utils.Kubectl("label", "secret", "up-hook", "-n", ns, "kaalm.io/channel-credential=true")
-		Expect(err).NotTo(HaveOccurred())
-
-		By("the channel is Ready again on a later pass")
-		Eventually(func() string {
-			out, _ := utils.Kubectl("get", "agentchannel", "up-channel", "-n", ns,
-				"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
-			return lastLine(out)
-		}, "120s", "5s").Should(Equal("True"))
-
-		By("the controller's binding to the credential Role is removed; the gateway's stays")
-		Eventually(func() string {
-			out, err := utils.Kubectl("get", "rolebinding", "kaalm-channel-up-channel-creds-controller", "-n", ns)
-			if err == nil {
-				return "still exists"
-			}
-			return out
-		}, "120s", "5s").Should(ContainSubstring("NotFound"))
-		_, err = utils.Kubectl("get", "rolebinding", "kaalm-channel-up-channel-creds-gateway", "-n", ns)
-		Expect(err).NotTo(HaveOccurred())
-	})
-
-	It("holds providers until their credential Secret is labeled and approves the endpoint host", func() {
-		readyField := func(kind, name, field string) func() string {
-			return func() string {
-				out, _ := utils.Kubectl("get", kind, name,
-					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].`+field+`}`)
-				return lastLine(out)
-			}
-		}
-		providers := [][2]string{{"modelprovider", "up-provider"}, {"toolprovider", "up-tools"}}
-
-		By("rule 49: the unlabeled provider Secret leaves both providers not Ready")
-		for _, p := range providers {
-			Eventually(readyField(p[0], p[1], "reason"), "120s", "5s").Should(Equal("SecretNotOptedIn"))
-		}
-
-		By("the upgrade notes' step: label the reviewed provider Secret")
-		_, err := utils.Kubectl("label", "secret", "up-provider-key", "-n", "kaalm-system",
-			"kaalm.io/provider-credential=true")
-		Expect(err).NotTo(HaveOccurred())
-
-		By("rule 50: the Secret does not list the endpoint hosts yet")
-		for _, p := range providers {
-			Eventually(readyField(p[0], p[1], "reason"), "120s", "5s").Should(Equal("EndpointHostNotApproved"))
-		}
-
-		By("the upgrade notes' step: annotate the Secret with its providers' endpoint hosts")
-		_, err = utils.Kubectl("annotate", "secret", "up-provider-key", "-n", "kaalm-system",
-			"kaalm.io/provider-hosts=up-provider.invalid,up-tools.invalid")
-		Expect(err).NotTo(HaveOccurred())
-
-		By("both providers are Ready again on a later pass")
-		for _, p := range providers {
-			Eventually(readyField(p[0], p[1], "status"), "120s", "5s").Should(Equal("True"))
-		}
-	})
-
-	// The label comes before "kept every workload": that It's hash-rewrite
-	// assertion needs the keeper past its Ready=False checks to reach convergePod.
-	It("holds a workload whose env Secret lacks the opt-in label, keeping its Pod, until it is labeled", func() {
-		keeperReady := func(field string) func() string {
-			return func() string {
-				out, _ := utils.Kubectl("get", "agent", "up-keeper", "-n", ns,
-					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].`+field+`}`)
-				return lastLine(out)
-			}
-		}
-		By("rule 48: the unlabeled env Secret leaves the keeper not Ready")
-		Eventually(keeperReady("reason"), "120s", "5s").Should(Equal("SecretNotOptedIn"))
-
-		By("the running Pod is left in place")
-		Expect(phase("agent", "up-keeper")).To(Equal("Running"))
-		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID),
-			"the env-Secret check must not replace a running Pod")
-
-		By("the upgrade notes' step: label the reviewed workload Secret")
-		_, err := utils.Kubectl("label", "secret", "up-env", "-n", ns, "kaalm.io/workload-secret=true")
-		Expect(err).NotTo(HaveOccurred())
-
-		By("the keeper is Ready again on a later pass")
-		Eventually(keeperReady("status"), "120s", "5s").Should(Equal("True"))
 	})
 
 	It("kept every workload: nothing recreated, nothing lost", func() {
-		By("the keeper is still Running in the same Pod")
+		By("the keeper is still Running and Ready in the same Pod")
 		Expect(phase("agent", "up-keeper")).To(Equal("Running"))
+		Eventually(func() string { return readyStatus("agent", ns, "up-keeper") }, "120s", "5s").Should(Equal("True"))
 		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID),
 			"the upgrade must not replace running agent Pods")
 
-		By("the keeper Pod hash was rewritten in place with the current hash version")
-		Eventually(func() string {
-			out, _ := utils.Kubectl("get", "pod", keeperPodName, "-n", ns,
-				"-o", `jsonpath={.metadata.annotations.kaalm\.io/pod-spec-hash-version}`)
-			return lastLine(out)
-		}, "60s", "2s").Should(Equal("2"),
-			"the upgrade must rewrite the hash of a v1-hashed Pod instead of replacing it")
-		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID))
-
 		By("the keeper's Certificate keeps its Secret name and the Pod still mounts it")
-		Expect(certSecretName("up-keeper")).To(Equal("up-keeper-tls"),
-			"the upgrade must not rewrite an existing Certificate's spec.secretName")
-		Expect(tlsVolumeSecret(keeperPodName)).To(Equal("up-keeper-tls"))
+		Expect(certSecretName("up-keeper")).To(Equal(keeperSecret))
+		Expect(tlsVolumeSecret(keeperPodName)).To(Equal(keeperSecret))
 
 		By("the marker is still on the volume")
 		out, err := utils.Kubectl("exec", "-n", ns, keeperPodName, "--",
@@ -362,53 +189,38 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		By("the sleeper is still Hibernated")
 		Expect(phase("agent", "up-sleeper")).To(Equal("Hibernated"))
 
-		By("the chart's sample AgentClass survived: omitted from the upgrade, kept by policy")
+		By("the channel and both providers are still Ready")
+		Eventually(func() string { return readyStatus("agentchannel", ns, "up-channel") }, "120s", "5s").
+			Should(Equal("True"))
+		Eventually(func() string { return readyStatus("modelprovider", "", "up-provider") }, "120s", "5s").
+			Should(Equal("True"))
+		Eventually(func() string { return readyStatus("toolprovider", "", "up-tools") }, "120s", "5s").
+			Should(Equal("True"))
+
+		By("the chart's sample AgentClass is still there")
 		out, err = utils.Kubectl("get", "agentclass", "standard", "-o", "jsonpath={.metadata.name}")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lastLine(out)).To(Equal("standard"))
 	})
 
-	It("migrated storage: every CRD reports storedVersions [v1beta1]", func() {
-		for _, crd := range []string{
-			"agentclasses.kaalm.io", "modelproviders.kaalm.io", "toolproviders.kaalm.io",
-			"agents.kaalm.io", "agenttasks.kaalm.io", "agentchannels.kaalm.io",
-		} {
-			Eventually(func() string {
-				out, _ := utils.Kubectl("get", "crd", crd, "-o", "jsonpath={.status.storedVersions}")
-				return lastLine(out)
-			}, "120s", "5s").Should(Equal(`["v1beta1"]`), crd)
+	It("keeps storage at v1beta1, and the migrator finds every kind current", func() {
+		for _, crd := range kaalmCRDs {
+			out, err := utils.Kubectl("get", "crd", crd, "-o", "jsonpath={.status.storedVersions}")
+			Expect(err).NotTo(HaveOccurred(), crd)
+			Expect(lastLine(out)).To(Equal(`["v1beta1"]`), crd)
 		}
-
-		// The pass runs on the new leader a beat after the rollout; with a
-		// post-graduation previous release nothing above waited on it, so
-		// poll the log for the era-appropriate marker.
-		marker := `"kindsAlreadyCurrent":\s*6`
-		if prevPredatesGraduation() {
-			By("the migrator's log names the kinds it moved")
-			// \s* matches both the JSON encoder and the console one.
-			marker = `"crd":\s*"agents.kaalm.io",\s*"objects":\s*[1-9]`
-		} else {
-			By("the migrator found everything already current")
-		}
+		// The pass runs on the new leader a beat after the rollout, so poll
+		// the log. \s* matches both the JSON encoder and the console one.
 		var logs string
 		Eventually(func() string {
 			logs, _ = utils.Kubectl("logs", "-n", "kaalm-system",
 				"-l", "app.kubernetes.io/component=controller", "--tail=-1", "--prefix")
 			return logs
-		}, "120s", "5s").Should(MatchRegexp(marker))
+		}, "120s", "5s").Should(MatchRegexp(`"kindsAlreadyCurrent":\s*6`))
 		Expect(logs).NotTo(ContainSubstring("storage-version migration failed"))
 	})
 
-	It("serves both versions and wakes the sleeper on its next message", func() {
-		By("the same object reads back at both versions")
-		for _, resource := range []string{"agents.v1alpha1.kaalm.io", "agents.v1beta1.kaalm.io"} {
-			out, err := utils.Kubectl("get", resource, "up-sleeper", "-n", ns,
-				"-o", "jsonpath={.spec.image}")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(lastLine(out)).To(Equal("ghcr.io/win07xp/kaalm-agent-python:" + prevVersion()))
-		}
-
-		By("a channel message wakes it, as before the upgrade")
+	It("wakes the sleeper on its next message", func() {
 		port, stop, err := utils.PortForward("kaalm-system", "kaalm-gateway", "8080")
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(stop)
@@ -431,80 +243,6 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(json.Unmarshal([]byte(payload), &record)).To(Succeed())
 		Expect(record.Error.Type).To(BeEmpty(), "wake should succeed, not error")
 		Expect(record.Response.Content).To(ContainSubstring("upgraded greeter"))
-
-		By("the woken Pod mounts the Secret its pre-upgrade Certificate names")
-		Expect(certSecretName("up-sleeper")).To(Equal("up-sleeper-tls"))
-		out, err := utils.Kubectl("get", "pod", "-n", ns, "-l", "kaalm.io/agent=up-sleeper",
-			"-o", "jsonpath={.items[0].metadata.name}")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(tlsVolumeSecret(lastLine(out))).To(Equal("up-sleeper-tls"))
-	})
-
-	// This It comes last, for three reasons. "kept every workload" asserts
-	// the keeper keeps its Pod UID and the up-keeper-tls name, so it must
-	// run first. The Ready=False checks run before the Certificate step, so a
-	// keeper still held by rule 48 would never re-create its Certificate;
-	// the env-Secret It clears that check. And keeperPodName and keeperPodUID
-	// are stale after this It, so nothing may follow it. The behavior is
-	// docs/src/controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced.
-	It("replaces the keeper Pod when its Certificate is re-created with a UID-suffixed Secret", func() {
-		By("the keeper's Certificate still names the pre-upgrade Secret")
-		Expect(certSecretName("up-keeper")).To(Equal("up-keeper-tls"))
-		uid := agentUID("up-keeper")
-		Expect(len(uid)).To(BeNumerically(">=", 8))
-		// 8 matches certSecretUIDChars in internal/controller/agent_desired.go.
-		want := "up-keeper-tls-" + uid[:8]
-
-		By("deleting the Certificate, as an operator might")
-		_, err := utils.Kubectl("delete", "certificate.cert-manager.io", "up-keeper-tls", "-n", ns)
-		Expect(err).NotTo(HaveOccurred())
-
-		By("the controller re-creates it with the UID-suffixed Secret name")
-		Eventually(func() string { return certSecretName("up-keeper") }, "120s", "2s").Should(Equal(want))
-
-		By("cert-manager deletes the old Secret with its Certificate (--enable-certificate-owner-ref)")
-		Eventually(func() string {
-			out, err := utils.Kubectl("get", "secret", "up-keeper-tls", "-n", ns)
-			if err == nil {
-				return "still exists"
-			}
-			return out
-		}, "120s", "5s").Should(ContainSubstring("NotFound"))
-
-		By("the keeper Pod is replaced and mounts the new Secret")
-		Eventually(func() string {
-			p := keeperStatusPod()
-			if p == "" || p == keeperPodName {
-				return "old or none: " + p
-			}
-			return tlsVolumeSecret(p)
-		}, "300s", "5s").Should(Equal(want))
-		newPod := keeperStatusPod()
-		Expect(podUID(newPod)).NotTo(Equal(keeperPodUID))
-
-		By("the replacement names both Secrets, so it came from the TLS check and not from spec drift")
-		Eventually(func() string {
-			out, _ := utils.Kubectl("get", "events", "-n", ns,
-				"--field-selector", "involvedObject.name=up-keeper,reason=SpecDrift",
-				"-o", "jsonpath={.items[*].message}")
-			return out
-		}, "60s", "5s").Should(ContainSubstring(
-			"the Agent's Certificate names TLS Secret " + want + " and the Pod mounts up-keeper-tls"))
-
-		By("the keeper is Running and Ready on the new Pod, which mounts the Certificate's Secret")
-		Eventually(func() string { return phase("agent", "up-keeper") }, "300s", "5s").Should(Equal("Running"))
-		Eventually(func() string { return keeperCondition("Ready", "status") }, "120s", "5s").Should(Equal("True"))
-		Eventually(func() string { return keeperCondition("PodUpToDate", "reason") }, "120s", "5s").
-			Should(Equal("Current"))
-		// Exact: a Current message from before the delete names
-		// up-keeper-tls, a prefix of the new name.
-		Eventually(func() string { return keeperCondition("PodUpToDate", "message") }, "120s", "5s").
-			Should(Equal("agent Pod matches the derived spec and mounts the Certificate's TLS Secret " + want))
-
-		By("the memory volume came with it")
-		out, err := utils.Kubectl("exec", "-n", ns, newPod, "--", "cat", "/var/agent/memory/upgrade-marker")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("survived-the-upgrade"))
 	})
 })
 
