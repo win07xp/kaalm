@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // provisioningDeadline bounds how long an attempt may go without a Ready Pod
@@ -536,6 +537,14 @@ func (r *AgentTaskReconciler) continueRunning(
 	return runningRequeue(task), nil
 }
 
+// maxAgentMessageBytes bounds the agent's completion message where the task
+// stores it: status.agentReportedMessage and the Completed and Ready
+// condition messages. The gateway accepts a completion body of up to 1 MiB,
+// and a condition message is capped at 32768 characters by its schema, so an
+// unbounded copy could fail every status write and the task would never
+// settle. The completion mailbox keeps the full message for the task's life.
+const maxAgentMessageBytes = 4096
+
 // driveCompleting settles the terminal phase. The outcome is re-derived from
 // the mailbox, the Pod, and the clock rather than stored: mailbox payload
 // first, then container exit, then timeout.
@@ -553,15 +562,16 @@ func (r *AgentTaskReconciler) driveCompleting(
 				// firing means something drifted.
 				return r.failOrRetry(ctx, task, kaalmv1beta1.ReasonTaskFailed, "artifact validation failed: "+msg)
 			}
+			message := eventrec.Truncate(payload.Message, maxAgentMessageBytes)
 			task.Status.ArtifactValues = payload.Artifacts
 			task.Status.AgentReportedStatus = payload.Status
-			task.Status.AgentReportedMessage = payload.Message
+			task.Status.AgentReportedMessage = message
 			if payload.Status == completionStatusSuccess {
 				return r.settle(ctx, task, kaalmv1beta1.TaskSucceeded,
-					kaalmv1beta1.ReasonTaskSucceeded, payload.Message)
+					kaalmv1beta1.ReasonTaskSucceeded, message)
 			}
 			return r.failOrRetry(ctx, task, kaalmv1beta1.ReasonTaskFailed,
-				"agent reported failure: "+payload.Message)
+				"agent reported failure: "+message)
 		}
 		// No payload: this Completing pass was timeout-triggered.
 		if timedOut(task) {
