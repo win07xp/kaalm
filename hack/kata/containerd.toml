@@ -1,0 +1,11 @@
+# containerd drop-in that registers the Kata runtime-rs QEMU shim as the
+# kata-qemu-runtime-rs runtime handler. hack/k3d-up.sh mounts it into the k3d
+# node's config-v3.toml.d directory when KATA=1, alongside a read-only mount of
+# the host's Kata install at /opt/kata.
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-qemu-runtime-rs]
+  runtime_type = "io.containerd.kata-qemu-runtime-rs.v2"
+  runtime_path = "/opt/kata/runtime-rs/bin/containerd-shim-kata-v2"
+  privileged_without_host_devices = true
+  pod_annotations = ["io.katacontainers.*"]
+  [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-qemu-runtime-rs.options]
+    ConfigPath = "/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml"

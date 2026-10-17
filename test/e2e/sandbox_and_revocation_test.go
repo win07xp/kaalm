@@ -42,6 +42,22 @@ var _ = Describe("Sandboxed class (S2)", Ordered, func() {
 				`{.status.conditions[?(@.type=="Ready")].reason}`)
 		}, "120s", "5s").Should(Equal("ClassConstraintViolation"))
 	})
+
+	It("reports a Pod create rejected for a RuntimeClass the cluster lacks", func() {
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agent", "e2e", "s2-absent-runtime",
+				`{.status.conditions[?(@.type=="Ready")].reason}`)
+		}, "120s", "5s").Should(Equal("PodCreateRejected"))
+		msg, err := utils.ResourceField("agent", "e2e", "s2-absent-runtime",
+			`{.status.conditions[?(@.type=="Ready")].message}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(msg).To(ContainSubstring("absent-runtime"))
+		Eventually(func() (string, error) {
+			return utils.Kubectl("get", "events.events.k8s.io", "-n", "e2e",
+				"--field-selector", "regarding.name=s2-absent-runtime,reason=PodCreateRejected",
+				"-o", "jsonpath={.items[*].type}")
+		}, "60s", "5s").Should(ContainSubstring("Warning"))
+	})
 })
 
 // S5: revoking a namespace's provider access denies its next call and degrades

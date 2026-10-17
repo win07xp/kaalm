@@ -55,3 +55,29 @@ spec:
   agentClassRef:
     name: e2e-sandboxed
   image: ghcr.io/evil/agent:latest
+---
+# A class naming a RuntimeClass the cluster does not have: the API server
+# rejects the Pod create, and the Agent says why.
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: e2e-absent-runtime
+spec:
+  runtime:
+    backend: pod
+    runtimeClassName: absent-runtime
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+---
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: s2-absent-runtime
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-absent-runtime
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    idleTimeout: 0s

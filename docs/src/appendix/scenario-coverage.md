@@ -18,14 +18,19 @@ Coverage is one of three kinds:
   the chart, and runs the suite; CI runs it on every PR. `make e2e-cilium`
   recreates the cluster with Cilium in place of flannel and runs the FQDN
   egress spec, which flannel cannot enforce; CI runs it when the FQDN policy
-  path changes.
+  path changes. `make e2e-kata` recreates the cluster with the Kata runtime
+  and runs the MicroVM spec. It needs `/dev/kvm` and a Kata release unpacked
+  at `/opt/kata`, and CI does not run it. kata-deploy cannot install into a
+  k3d node, which runs k3s without systemd, so the target mounts the host's
+  Kata release and a containerd drop-in into the nodes and enlarges the
+  nodes' `/dev/shm`.
 
 The e2e column is the acceptance surface: every scenario names the spec that proves it on a cluster, and every spec passes. S1 to S20 and S22 to S25 run in `test/e2e/` (build tag `e2e`) against the locally built chart and images. S21 runs in `test/upgrade/` (build tag `upgrade`, `make e2e-upgrade`), which starts from the previous released chart; its CI workflow runs on release tags and on pull requests that touch the API, the CRDs, the migrator, or the suite itself. The LLM scenarios run against an in-cluster mock provider that speaks both the Anthropic and the OpenAI formats, and the channel scenarios against a mock of each platform's API.
 
 | Scenario | e2e spec | Also covered by |
 |---|---|---|
 | S1 Install and standard class | `Deployment` (six CRDs) + `Golden path` (AgentClass to Ready) | Envtest `TestAgentClass_*` |
-| S2 Sandboxed class (RuntimeClass, allowlist) | `Sandboxed class (S2)` (runtimeClassName passthrough; image-allowlist rejection) | Unit `TestDeriveEffectiveSpec_*`, `TestDesiredPod_*`, `TestAgentClassSample_Sandboxed` (the sample's gVisor runtime, allowlist, limits, baseline, and closed egress); `TestSamplesApply` in `test/cel` dry-runs every manifest in `config/samples/`, the sandboxed sample included, against the CRD schema and CEL with strict field validation, so unknown fields are rejected |
+| S2 Sandboxed class (RuntimeClass, allowlist) | `Sandboxed class (S2)` (runtimeClassName passthrough; image-allowlist rejection; a Pod create rejected for a RuntimeClass the cluster lacks) + `MicroVM isolation on Kata` (under `make e2e-kata`: the Pods run in Kata guests) | Unit `TestDeriveEffectiveSpec_*`, `TestDesiredPod_*`, `TestAgentClassSample_Sandboxed` (the sample's gVisor runtime, allowlist, limits, baseline, and closed egress); `TestSamplesApply` in `test/cel` dry-runs every manifest in `config/samples/`, the sandboxed sample included, against the CRD schema and CEL with strict field validation, so unknown fields are rejected |
 | S3 Shared provider and per-namespace budget | `Golden path` (ModelProvider to Ready) + `Fallback and budget` (S10 block) | Unit `TestBudgetLedger_EnforceThresholds`, `TestProxy_BudgetDegradeAndBlock` |
 | S4 Fallback chain for availability | `Fallback and budget` (S4: walks to the fallback provider) | Unit `TestFallback_*`, `TestIntegration_FallbackChainWalksToBackup` |
 | S5 Revoke a team | `Access revocation (S5)` (403 + Agent `Degraded`, Pod kept) | Unit `TestProxy_TenancyDenialsInOrder`; envtest `TestAgent_ProviderNamespaceDeniedDegrades` |
@@ -55,5 +60,5 @@ S4, S10, S17, S24, and S25 run against the in-cluster mock upstream; each spec a
 Two scenarios keep a scope note: their e2e spec proves the Kaalm-owned
 primitive, but part of the scenario is outside the code's test surface.
 
-- **S2**: k3d installs no gVisor `RuntimeClass`. The e2e test proves the reconciler's part (the class `runtimeClassName` reaches the Pod spec, and the image allowlist rejects a disallowed image); the sandbox-escape property is the cluster's ([Workload isolation](../security/threat-model.md#workload-isolation)).
+- **S2**: k3d installs no gVisor `RuntimeClass`. The default e2e test proves the reconciler's part (the class `runtimeClassName` reaches the Pod spec, a missing `RuntimeClass` leaves the Agent `PodCreateRejected`, and the image allowlist rejects a disallowed image). The Kata VM boundary is proven by the `MicroVM isolation on Kata` spec under `make e2e-kata`: a resident agent passes its probes and carries the RuntimeClass overhead, a task boots its own guest kernel and uses its PVC and TLS files over virtio-fs, the NetworkPolicy still denies a Pod in another namespace, and a hibernated agent wakes. The sandbox-escape property is the cluster's ([Workload isolation](../security/threat-model.md#workload-isolation)).
 - **S9**: k3d's local-path provisioner has no snapshot support. The e2e proves `existingClaim` adoption and read-back; the snapshot step is documented on [S9](scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover).

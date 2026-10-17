@@ -37,8 +37,30 @@ CILIUM_VERSION="${CILIUM_VERSION:-1.20.3}"
 # (20 QPS, burst 50). Each AgentTask gets its own Certificate, and at the
 # default limit cert-manager's queue, not Kaalm, sets how fast a burst of tasks
 # starts; the perf harness raises it so its tasks phase measures Kaalm.
+# KATA=1 adds the Kata Containers runtime for the microVM e2e (make e2e-kata).
+# kata-deploy cannot install into a k3d node, which runs k3s without systemd,
+# so the node instead mounts the host's Kata release from KATA_DIR, the
+# containerd drop-in in hack/kata, and the host's /dev/kvm (privileged k3d
+# nodes see every host device). The host needs KVM and a Kata release
+# unpacked at KATA_DIR.
+KATA="${KATA:-0}"
+KATA_DIR="${KATA_DIR:-/opt/kata}"
+# Kata backs each guest's memory with a shared file in /dev/shm for virtio-fs,
+# and Docker gives a container 64 MiB there, less than one guest's 2 GiB.
+KATA_SHM_SIZE="${KATA_SHM_SIZE:-8g}"
 CERT_MANAGER_KUBE_API_QPS="${CERT_MANAGER_KUBE_API_QPS:-}"
 CERT_MANAGER_KUBE_API_BURST="${CERT_MANAGER_KUBE_API_BURST:-}"
+
+if [ "${KATA}" = "1" ]; then
+  if [ ! -c /dev/kvm ]; then
+    echo "KATA=1 needs /dev/kvm on this host (bare metal or nested virtualization)" >&2
+    exit 1
+  fi
+  if [ ! -x "${KATA_DIR}/runtime-rs/bin/containerd-shim-kata-v2" ]; then
+    echo "KATA=1 needs a Kata Containers release unpacked at ${KATA_DIR}" >&2
+    exit 1
+  fi
+fi
 
 echo ">> ensuring k3d cluster '${CLUSTER}'"
 if k3d cluster list "${CLUSTER}" >/dev/null 2>&1; then
@@ -48,6 +70,11 @@ else
   if [ "${CNI}" = "cilium" ]; then
     args+=(--k3s-arg "--flannel-backend=none@server:0"
            --k3s-arg "--disable-network-policy@server:0")
+  fi
+  if [ "${KATA}" = "1" ]; then
+    kata_dropin="$(cd "$(dirname "$0")" && pwd)/kata/containerd.toml"
+    args+=(--volume "${KATA_DIR}:/opt/kata:ro@server:0"
+           --volume "${kata_dropin}:/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/kata.toml@server:0")
   fi
   if [ -n "${K3D_MAX_PODS}" ]; then
     args+=(--k3s-arg "--kubelet-arg=max-pods=${K3D_MAX_PODS}@server:0")
@@ -78,6 +105,24 @@ if [ "${CNI}" = "cilium" ]; then
     --set operator.replicas=1 \
     --wait --timeout 10m
   kubectl -n kube-system rollout status ds/cilium --timeout=300s
+fi
+
+if [ "${KATA}" = "1" ]; then
+  echo ">> enabling the Kata runtime (RuntimeClass kata-qemu-runtime-rs)"
+  # A node restart resets /dev/shm, so this runs on reuse too.
+  docker exec "k3d-${CLUSTER}-server-0" mount -o "remount,size=${KATA_SHM_SIZE}" /dev/shm
+  # The overhead matches the RuntimeClass kata-deploy creates for this shim.
+  kubectl apply -f - <<'YAML'
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata-qemu-runtime-rs
+handler: kata-qemu-runtime-rs
+overhead:
+  podFixed:
+    memory: 320Mi
+    cpu: 250m
+YAML
 fi
 
 echo ">> installing cert-manager ${CERT_MANAGER_VERSION}"
