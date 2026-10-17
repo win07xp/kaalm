@@ -9,7 +9,7 @@
 # your copy must build against a published release.
 ARG BASE=ghcr.io/win07xp/kaalm-agent-go:1.0.0
 
-FROM docker.io/golang:1.24 AS build
+FROM docker.io/golang:1.27.2 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

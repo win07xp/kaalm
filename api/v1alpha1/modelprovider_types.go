@@ -257,5 +257,5 @@ type ModelProviderList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&ModelProvider{}, &ModelProviderList{})
+	knownTypes = append(knownTypes, &ModelProvider{}, &ModelProviderList{})
 }

@@ -209,7 +209,7 @@ chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to C
 		helm package $(CHART_DIR) --version $$V --app-version $$V --destination dist
 
 # The books job in .github/workflows/ci.yml pins the same release by URL and checksum; both move together.
-PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
+PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.8.jar
 # Both report-only flags (--time-report, --ratchet-report) are off, so the
 # time-bound wording lint and the wording and figure ratchets are fatal.
 DOCS_CHECK_FLAGS ?=
@@ -260,9 +260,9 @@ E2E_PYTHON_BASE_IMG ?= registry.test/agents/kaalm-agent-python:e2e
 E2E_LANGGRAPH_CHAT_IMG ?= registry.test/agents/langgraph-chat:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
-CURL_IMG ?= curlimages/curl:8.10.1
+CURL_IMG ?= curlimages/curl:8.23.0
 # The OTLP sink for the tracing e2e (S20); preloaded for the same hermeticity.
-JAEGER_IMG ?= jaegertracing/all-in-one:1.62.0
+JAEGER_IMG ?= jaegertracing/jaeger:2.22.0
 PYTHON_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-python:$(CHART_APP_VERSION)
 
 .PHONY: python-test
@@ -478,13 +478,13 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.6.0
-CONTROLLER_TOOLS_VERSION ?= v0.17.2
+KUSTOMIZE_VERSION ?= v5.8.3
+CONTROLLER_TOOLS_VERSION ?= v0.23.0
 #ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')
 #ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.

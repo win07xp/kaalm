@@ -29,7 +29,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -67,8 +67,10 @@ func NewTracing(ctx context.Context, endpoint string, sampleRatio float64, pool 
 	if podName != "" {
 		attrs = append(attrs, semconv.ServiceInstanceID(podName))
 	}
-	res, err := resource.Merge(resource.Default(),
-		resource.NewWithAttributes(semconv.SchemaURL, attrs...))
+	// Schemaless, so the merge takes the default resource's schema URL: two
+	// different URLs fail the merge, and the SDK moves its own with each
+	// release.
+	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(attrs...))
 	if err != nil {
 		return nil, err
 	}

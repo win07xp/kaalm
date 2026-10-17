@@ -135,7 +135,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: curl
-      image: curlimages/curl:8.10.1
+      image: curlimages/curl:8.23.0
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "/script/call.sh"]
       env:
@@ -169,7 +169,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: curl
-      image: curlimages/curl:8.10.1
+      image: curlimages/curl:8.23.0
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "/script/call.sh"]
       env:
@@ -203,7 +203,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: curl
-      image: curlimages/curl:8.10.1
+      image: curlimages/curl:8.23.0
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "/script/call.sh"]
       env:
@@ -238,7 +238,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: curl
-      image: curlimages/curl:8.10.1
+      image: curlimages/curl:8.23.0
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "/script/call.sh"]
       env:

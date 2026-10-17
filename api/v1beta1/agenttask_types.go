@@ -205,5 +205,5 @@ type AgentTaskList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&AgentTask{}, &AgentTaskList{})
+	knownTypes = append(knownTypes, &AgentTask{}, &AgentTaskList{})
 }

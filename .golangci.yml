@@ -51,6 +51,13 @@ linters:
   exclusions:
     generated: lax
     rules:
+      # Two controller-runtime deprecations whose replacements change
+      # behavior: the events.k8s.io recorder writes a different Event shape
+      # under different RBAC, and RequeueAfter swaps rate-limited backoff for
+      # a fixed delay. Each moves in its own change with tests and docs.
+      - linters:
+          - staticcheck
+        text: "SA1019: .*(GetEventRecorderFor|controller-runtime.Result\\).Requeue) is deprecated"
       # api/v1beta1 is the v1alpha1 schema field for field by design
       # (docs/src/operations/api-versioning.md#the-v1beta1-schema), so dupl
       # would flag every type.

@@ -4,7 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: kaalm-system/kaalm-controller-tls
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.23.0
   name: agentclasses.kaalm.io
 spec:
   conversion:
@@ -331,7 +331,7 @@ spec:
                           Claims lists the names of resources, defined in spec.resourceClaims,
                           that are used by this container.
 
-                          This is an alpha field and requires enabling the
+                          This field depends on the
                           DynamicResourceAllocation feature gate.
 
                           This field is immutable. It can only be set for containers.
@@ -495,7 +495,6 @@ spec:
                           procMount denotes the type of proc mount to use for the containers.
                           The default value is Default which uses the container runtime defaults for
                           readonly paths and masked paths.
-                          This requires the ProcMountType feature flag to be enabled.
                           Note that this field cannot be set when spec.os.name is windows.
                         type: string
                       readOnlyRootFilesystem:
@@ -709,11 +708,8 @@ spec:
                           Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
                           whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
                           CSIDriver instance. Other volumes are always re-labelled recursively.
-                          "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
 
-                          If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
-                          If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
-                          and "Recursive" for all other volumes.
+                          If not specified, "MountOption" is used.
 
                           This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
 
@@ -1249,7 +1245,7 @@ spec:
                           Claims lists the names of resources, defined in spec.resourceClaims,
                           that are used by this container.
 
-                          This is an alpha field and requires enabling the
+                          This field depends on the
                           DynamicResourceAllocation feature gate.
 
                           This field is immutable. It can only be set for containers.
@@ -1413,7 +1409,6 @@ spec:
                           procMount denotes the type of proc mount to use for the containers.
                           The default value is Default which uses the container runtime defaults for
                           readonly paths and masked paths.
-                          This requires the ProcMountType feature flag to be enabled.
                           Note that this field cannot be set when spec.os.name is windows.
                         type: string
                       readOnlyRootFilesystem:
@@ -1627,11 +1622,8 @@ spec:
                           Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
                           whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
                           CSIDriver instance. Other volumes are always re-labelled recursively.
-                          "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
 
-                          If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
-                          If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
-                          and "Recursive" for all other volumes.
+                          If not specified, "MountOption" is used.
 
                           This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
 

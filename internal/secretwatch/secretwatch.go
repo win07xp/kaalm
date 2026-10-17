@@ -163,8 +163,8 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 		lastUsed: time.Now(),
 	}
 	lw := &cache.ListWatch{
-		ListFunc: func(metav1.ListOptions) (runtime.Object, error) {
-			sec, err := w.client.CoreV1().Secrets(namespace).Get(w.ctx, name, metav1.GetOptions{})
+		ListWithContextFunc: func(ctx context.Context, _ metav1.ListOptions) (runtime.Object, error) {
+			sec, err := w.client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 			if apierrors.IsNotFound(err) {
 				// An absent Secret is a valid, empty state: the watch below
 				// delivers it when it appears.
@@ -181,12 +181,12 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 				Items:    []corev1.Secret{*sec},
 			}, nil
 		},
-		WatchFunc: func(opts metav1.ListOptions) (watch.Interface, error) {
+		WatchFuncWithContext: func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 			opts.FieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
-			return w.client.CoreV1().Secrets(namespace).Watch(w.ctx, opts)
+			return w.client.CoreV1().Secrets(namespace).Watch(ctx, opts)
 		},
 	}
-	entry.informer = cache.NewSharedInformer(lw, &corev1.Secret{}, 0)
+	entry.informer = cache.NewSharedInformer(getThenWatch{lw}, &corev1.Secret{}, 0)
 	if w.hasSubscribers() {
 		// Subscribers live on the watcher, so an informer the janitor
 		// stopped and a later read restarted gets the handler again. A
@@ -325,3 +325,12 @@ func (w *Watcher) janitor() {
 		}
 	}
 }
+
+// getThenWatch opts the per-Secret informer out of client-go's streaming
+// list (WatchListClient). A streaming list skips ListFunc and opens a watch
+// that sends the initial state, so the single GET that records a read
+// failure, and answers an absent Secret as empty, would never run.
+type getThenWatch struct{ *cache.ListWatch }
+
+// IsWatchListSemanticsUnSupported tells the reflector to list with ListFunc.
+func (getThenWatch) IsWatchListSemanticsUnSupported() bool { return true }

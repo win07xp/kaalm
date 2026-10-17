@@ -66,7 +66,7 @@ func TestConversionHandlerBounded(t *testing.T) {
 	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	h := MaxBytesHandler(webhookconversion.NewWebhookHandler(scheme), 1024)
+	h := MaxBytesHandler(webhookconversion.NewWebhookHandler(scheme, webhookconversion.NewRegistry()), 1024)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/convert",

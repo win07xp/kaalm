@@ -17,6 +17,7 @@ limitations under the License.
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -387,4 +388,14 @@ func spanNames(exp *tracetest.InMemoryExporter) []string {
 		names = append(names, s.Name)
 	}
 	return names
+}
+
+func TestNewTracing_BuildsWithTheSDKDefaultResource(t *testing.T) {
+	// The service resource merges with the SDK's default resource, which
+	// fails when the two carry different semantic-convention schema URLs.
+	tr, err := NewTracing(context.Background(), "http://127.0.0.1:4318", 1, nil, "gw-0")
+	if err != nil {
+		t.Fatalf("NewTracing: %v", err)
+	}
+	t.Cleanup(func() { _ = tr.tp.Shutdown(context.Background()) })
 }

@@ -29,9 +29,9 @@ system:
 ## Check they worked
 
 Run these four commands. Each one prints a version rather than an error; the
-exact numbers matter little, as long as Docker is running, Helm is 3.8 or
-newer (the install pulls a chart from a registry), and k3d creates a
-Kubernetes 1.28 or newer cluster, which any current k3d does.
+exact numbers matter little, as long as Docker is running and Helm is 3.8 or
+newer (the install pulls a chart from a registry). The next page pins the
+Kubernetes version, so the k3d release doesn't set it.
 
 ```bash
 docker version --format '{{.Server.Version}}'

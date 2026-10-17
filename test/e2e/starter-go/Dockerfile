@@ -9,7 +9,7 @@
 #   docker build -f test/e2e/starter-go/Dockerfile --build-arg BASE=<kaalm-agent-go image> .
 ARG BASE=kaalm-agent-go:e2e
 
-FROM docker.io/golang:1.24 AS build
+FROM docker.io/golang:1.27.2 AS build
 WORKDIR /src
 COPY agentruntime/ agentruntime/
 COPY examples/starter-go/ starter/

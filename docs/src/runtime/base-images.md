@@ -89,7 +89,7 @@ A `FROM` build keeps central patching (rebuild against the bumped tag) and sheds
 Go compiles, so there is no source mount to offer. `kaalm-agent-go` is two things:
 
 - **A runnable reference agent.** It ships the default handler, so it is the zero-build way to see a full-lifecycle Agent work end to end: apply an Agent with this image and no `spec.handler`, and it comes up, hibernates, wakes, and echoes.
-- **The parent image for compiled handlers.** The contract runtime is published as a Go module, `github.com/win07xp/kaalm/agentruntime` (each release pushes the matching `agentruntime/vX.Y.Z` module tag). A custom Go agent is a `main.go` that calls the runtime with its handler, compiled and layered onto the image.
+- **The parent image for compiled handlers.** The contract runtime is published as a Go module, `github.com/win07xp/kaalm/agentruntime` (each release pushes the matching `agentruntime/vX.Y.Z` module tag). A custom Go agent is a `main.go` that calls the runtime with its handler, compiled and layered onto the image. The module requires Go 1.26 or newer.
 
 The module's surface mirrors the Python `kaalm` module in concept and is idiomatic Go in form. `New()` reads the standard Kaalm environment; `Run(ctx, handler)` serves the contract until canceled, with `nil` selecting the default handler; and a handler reaches capabilities by closing over the `Agent`, whose `Gateway` (rotation-aware mTLS client), `Memory` (persistent store behind the same `user/` key wall), and `CompleteTask` (the completion helper of [contract item 6](contract.md#6-completion-signal-agenttask-only)) correspond to the Python surface. The exported API is append-only within a minor series.
 
@@ -105,9 +105,11 @@ err = a.Run(ctx, func(ctx context.Context, env agentruntime.Envelope) (agentrunt
 Layering onto the image is one `COPY`: the entrypoint runs `/kaalm-agent`, and a build that replaces that file replaces the agent.
 
 ```dockerfile
-FROM golang:1.24 AS build
+FROM docker.io/golang:1.27.2 AS build
 WORKDIR /src
-COPY . .
+COPY go.mod go.sum ./
+RUN go mod download
+COPY *.go ./
 RUN CGO_ENABLED=0 go build -o /agent .
 
 FROM ghcr.io/win07xp/kaalm-agent-go:VERSION

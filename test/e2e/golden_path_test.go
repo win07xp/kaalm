@@ -98,7 +98,7 @@ var _ = Describe("Golden path", Ordered, func() {
 		// already proven by the sync-webhook spec above.)
 		probe := []string{
 			"run", "np-deny-probe", "-n", "default", "--rm", "-i", "--restart=Never",
-			"--image=curlimages/curl:8.10.1", "--image-pull-policy=IfNotPresent",
+			"--image=curlimages/curl:8.23.0", "--image-pull-policy=IfNotPresent",
 			"--command", "--",
 			"sh", "-c",
 			"curl -sk --max-time 6 -o /dev/null -w '%{http_code}' " +

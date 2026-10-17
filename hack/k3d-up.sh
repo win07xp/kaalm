@@ -15,8 +15,12 @@
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-kaalm-dev}"
-CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
-TRUST_MANAGER_VERSION="${TRUST_MANAGER_VERSION:-v0.13.0}"
+# The k3s image sets the cluster's Kubernetes version. Without it, the k3d
+# release picks one, so two machines with different k3d builds test different
+# Kubernetes versions.
+K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.37.1-k3s1}"
+CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.21.2}"
+TRUST_MANAGER_VERSION="${TRUST_MANAGER_VERSION:-v0.25.0}"
 TRUST_NAMESPACE="${TRUST_NAMESPACE:-cert-manager}"
 # The perf harness (make perf) asks for a wider cluster: extra agent nodes and
 # a raised kubelet max-pods (the default 110 per node caps a fleet long before
@@ -28,7 +32,7 @@ K3D_MAX_PODS="${K3D_MAX_PODS:-}"
 # socket-level replacement does not work on every kernel (WSL2 among them),
 # and the FQDN proof needs only Cilium's policy engine and DNS proxy.
 CNI="${CNI:-flannel}"
-CILIUM_VERSION="${CILIUM_VERSION:-1.20.2}"
+CILIUM_VERSION="${CILIUM_VERSION:-1.20.3}"
 # cert-manager's API client rate limit. Empty keeps cert-manager's defaults
 # (20 QPS, burst 50). Each AgentTask gets its own Certificate, and at the
 # default limit cert-manager's queue, not Kaalm, sets how fast a burst of tasks
@@ -40,7 +44,7 @@ echo ">> ensuring k3d cluster '${CLUSTER}'"
 if k3d cluster list "${CLUSTER}" >/dev/null 2>&1; then
   echo "   cluster exists, reusing"
 else
-  args=(--wait --agents "${K3D_AGENTS}" --k3s-arg "--disable=traefik@server:0")
+  args=(--wait --image "${K3S_IMAGE}" --agents "${K3D_AGENTS}" --k3s-arg "--disable=traefik@server:0")
   if [ "${CNI}" = "cilium" ]; then
     args+=(--k3s-arg "--flannel-backend=none@server:0"
            --k3s-arg "--disable-network-policy@server:0")

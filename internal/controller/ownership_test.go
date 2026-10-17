@@ -299,7 +299,7 @@ func createForeignCertificate(t *testing.T, workload string) cmapi.Certificate {
 		ObjectMeta: metav1.ObjectMeta{Name: workload + "-tls", Namespace: "default"},
 		Spec: cmapi.CertificateSpec{
 			SecretName: workload + "-foreign",
-			IssuerRef:  cmmeta.ObjectReference{Name: "foreign-issuer", Kind: "Issuer"},
+			IssuerRef:  cmmeta.IssuerReference{Name: "foreign-issuer", Kind: "Issuer"},
 			DNSNames:   []string{"foreign.example.com"},
 		},
 	}

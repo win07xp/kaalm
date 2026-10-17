@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -94,64 +95,80 @@ var _ = Describe("Tracing across the hops (S20)", Ordered, func() {
 	})
 })
 
-// findConnectedTrace queries Jaeger for kaalm-gateway traces touching the
-// S20 namespace and demands one trace that contains every wanted operation,
-// with each non-root wanted span CHILD_OF another span of the same trace.
+// findConnectedTrace queries Jaeger's api_v3 for recent kaalm-gateway traces
+// and demands one trace that touches the S20 namespace and contains every
+// wanted operation, with each non-root wanted span the child of another span
+// of the same trace. api_v3 answers in OTLP JSON: spans arrive grouped by
+// resource and scope, so they are regrouped by trace ID here.
 func findConnectedTrace(base string, want ...string) error {
+	now := time.Now().UTC()
 	q := url.Values{
-		"service": {"kaalm-gateway"},
-		"tags":    {`{"kaalm.namespace":"tracing-e2e"}`},
-		"limit":   {"20"},
+		"query.service_name":   {"kaalm-gateway"},
+		"query.start_time_min": {now.Add(-time.Hour).Format(time.RFC3339)},
+		"query.start_time_max": {now.Add(time.Minute).Format(time.RFC3339)},
+		"query.search_depth":   {"20"},
 	}
-	status, body, err := utils.GetWithBearer(base+"/api/traces?"+q.Encode(), "")
+	status, body, err := utils.GetWithBearer(base+"/api/v3/traces?"+q.Encode(), "")
 	if err != nil {
 		return err
 	}
 	if status != 200 {
 		return fmt.Errorf("jaeger query = %d", status)
 	}
+	type span struct {
+		TraceID      string `json:"traceId"`
+		SpanID       string `json:"spanId"`
+		ParentSpanID string `json:"parentSpanId"`
+		Name         string `json:"name"`
+		Attributes   []struct {
+			Key   string `json:"key"`
+			Value struct {
+				StringValue string `json:"stringValue"`
+			} `json:"value"`
+		} `json:"attributes"`
+	}
 	var out struct {
-		Data []struct {
-			Spans []struct {
-				SpanID        string `json:"spanID"`
-				OperationName string `json:"operationName"`
-				References    []struct {
-					RefType string `json:"refType"`
-					SpanID  string `json:"spanID"`
-				} `json:"references"`
-			} `json:"spans"`
-		} `json:"data"`
+		Result struct {
+			ResourceSpans []struct {
+				ScopeSpans []struct {
+					Spans []span `json:"spans"`
+				} `json:"scopeSpans"`
+			} `json:"resourceSpans"`
+		} `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		return fmt.Errorf("jaeger response unreadable: %w", err)
 	}
-	for _, trace := range out.Data {
+	traces := map[string][]span{}
+	for _, rs := range out.Result.ResourceSpans {
+		for _, ss := range rs.ScopeSpans {
+			for _, sp := range ss.Spans {
+				traces[sp.TraceID] = append(traces[sp.TraceID], sp)
+			}
+		}
+	}
+	for _, spans := range traces {
 		ids := map[string]bool{}
-		parent := map[string]string{}
-		for _, span := range trace.Spans {
-			ids[span.SpanID] = true
-			for _, ref := range span.References {
-				if ref.RefType == "CHILD_OF" {
-					parent[span.OperationName] = ref.SpanID
+		byName := map[string]span{}
+		inNamespace := false
+		for _, sp := range spans {
+			ids[sp.SpanID] = true
+			byName[sp.Name] = sp
+			for _, a := range sp.Attributes {
+				if a.Key == "kaalm.namespace" && a.Value.StringValue == "tracing-e2e" {
+					inNamespace = true
 				}
 			}
-			parent[span.OperationName+"/id"] = span.SpanID
 		}
-		complete := true
-		for _, op := range want {
-			if !ids[parent[op+"/id"]] {
-				complete = false
-				break
-			}
-		}
-		if !complete {
+		if !inNamespace {
 			continue
 		}
 		// channel.receive is the root; every other wanted span must hang off
 		// a span inside this same trace.
 		connected := true
-		for _, op := range want[1:] {
-			if !ids[parent[op]] {
+		for i, op := range want {
+			sp, ok := byName[op]
+			if !ok || (i > 0 && !ids[sp.ParentSpanID]) {
 				connected = false
 				break
 			}
@@ -160,5 +177,5 @@ func findConnectedTrace(base string, want ...string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no connected trace with %v yet (%d candidates)", want, len(out.Data))
+	return fmt.Errorf("no connected trace with %v yet (%d candidates)", want, len(traces))
 }

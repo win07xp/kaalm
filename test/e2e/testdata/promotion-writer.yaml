@@ -14,7 +14,7 @@ spec:
     runAsGroup: 0
   containers:
     - name: writer
-      image: curlimages/curl:8.10.1
+      image: curlimages/curl:8.23.0
       imagePullPolicy: IfNotPresent
       command: ["sh", "-c", "echo PROMOTED-s9 > /data/marker && cat /data/marker"]
       volumeMounts:

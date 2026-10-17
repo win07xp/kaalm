@@ -188,7 +188,7 @@ func desiredTaskCertificate(task *kaalmv1beta1.AgentTask, lifetime CertLifetime)
 		ObjectMeta: metav1.ObjectMeta{Name: taskCertificateName(task.Name), Namespace: task.Namespace},
 		Spec: cmapi.CertificateSpec{
 			SecretName: certificateSecretName(task.Name, task.UID),
-			IssuerRef:  cmmeta.ObjectReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
+			IssuerRef:  cmmeta.IssuerReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
 			DNSNames: []string{
 				fmt.Sprintf("%s.%s.%s", task.Name, task.Namespace, kaalmv1beta1.TaskSANSuffix),
 			},

@@ -1,6 +1,6 @@
 module kaalm.io/starter-go
 
-go 1.23.0
+go 1.26.0
 
 // This template imports github.com/win07xp/kaalm/agentruntime. Inside the
 // Kaalm repo that dependency is resolved by the repo's go.work, so there is
