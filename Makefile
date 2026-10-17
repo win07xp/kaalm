@@ -249,6 +249,8 @@ MOCKPROVIDER_IMG ?= registry.test/mock/llm-provider:e2e
 MOCKMCP_IMG ?= registry.test/mock/mcp-server:e2e
 MOCKDISCORD_IMG ?= registry.test/mock/discord:e2e
 MOCKWHATSAPP_IMG ?= registry.test/mock/whatsapp:e2e
+# The probe task the microVM spec runs inside a Kata guest (make e2e-kata).
+MVPROBE_IMG ?= registry.test/agents/mvprobe:e2e
 # In-cluster names for the base images. The S16 spec references these, so the
 # suite exercises the locally built images and nothing at test time can
 # silently pull a published tag. The testdata YAML hardcodes them; change both
@@ -362,6 +364,16 @@ e2e-cilium: ## FQDN egress proof: fresh k3d cluster with Cilium, install the cha
 	$(MAKE) e2e-images
 	$(MAKE) e2e-deploy
 	go test ./test/e2e/ -tags e2e -v -timeout 20m -count=1 -ginkgo.focus="FQDN"
+
+.PHONY: e2e-kata
+e2e-kata: ## MicroVM proof: fresh k3d cluster with the Kata runtime, install the chart, run the MicroVM spec (needs KVM and Kata at /opt/kata).
+	-k3d cluster delete $(CLUSTER)
+	KATA=1 hack/k3d-up.sh
+	$(MAKE) e2e-images
+	docker build -t $(MVPROBE_IMG) -f test/e2e/mvprobe/Dockerfile .
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(MVPROBE_IMG)
+	$(MAKE) e2e-deploy
+	go test ./test/e2e/ -tags e2e -v -timeout 30m -count=1 -ginkgo.focus="MicroVM"
 
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.

@@ -1,0 +1,180 @@
+# Fixtures for the microVM e2e (make e2e-kata). The class runs its workloads
+# under the Kata RuntimeClass that hack/k3d-up.sh creates with KATA=1, so each
+# Pod is a QEMU guest with its own kernel. e2e-microvm-runc is the same class
+# under the default runtime, so the wake timings compare a VM cold start with a
+# container start.
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: e2e-microvm
+spec:
+  runtime:
+    backend: pod
+    runtimeClassName: kata-qemu-runtime-rs
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  resources:
+    defaults:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    maxLimits:
+      memory: 1Gi
+  lifecycle:
+    hibernationAllowed: true
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: e2e-microvm-runc
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  resources:
+    defaults:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+  lifecycle:
+    hibernationAllowed: true
+---
+# A resident agent that stays up: probes, NetworkPolicy, and Pod overhead.
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: mv-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-microvm
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+# Two sleepers, one per runtime, that hibernate at once and wake on a webhook.
+# The wake budget absorbs the kube-router ipset lag on the new Pod.
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: mv-sleeper
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-microvm
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationEnabled: true
+    idleTimeout: 2s
+    hibernationDelay: 2s
+    wakeTimeout: 180s
+---
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: mv-sleeper-runc
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-microvm-runc
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationEnabled: true
+    idleTimeout: 2s
+    hibernationDelay: 2s
+    wakeTimeout: 180s
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: mv-sleeper
+  namespace: e2e
+spec:
+  agentRef:
+    name: mv-sleeper
+  type: webhook
+  webhook:
+    path: /channels/e2e/mv-sleeper
+    responseMode: async
+    auth:
+      type: bearer
+      secretRef:
+        name: mv-hook
+        key: token
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: mv-sleeper-runc
+  namespace: e2e
+spec:
+  agentRef:
+    name: mv-sleeper-runc
+  type: webhook
+  webhook:
+    path: /channels/e2e/mv-sleeper-runc
+    responseMode: async
+    auth:
+      type: bearer
+      secretRef:
+        name: mv-hook
+        key: token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mv-hook
+  namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
+type: Opaque
+stringData:
+  token: mv-webhook-bearer-token
+---
+# A task that probes the guest from inside (test/e2e/mvprobe): it reads the
+# kernel the guest booted, writes and reads its PVC, loads the projected TLS
+# files, and reports what it saw as artifacts over the gateway's mTLS
+# completion endpoint.
+apiVersion: kaalm.io/v1beta1
+kind: AgentTask
+metadata:
+  name: mv-task
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-microvm
+  image: registry.test/agents/mvprobe:e2e
+  persistence:
+    enabled: true
+  completion:
+    condition: agentReported
+    timeout: 5m
+    onTimeout: Fail
+  artifacts:
+    - name: kernel
+    - name: memTotal
+    - name: cpus
+    - name: memory
+    - name: tls
