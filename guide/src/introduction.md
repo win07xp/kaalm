@@ -47,7 +47,7 @@ egress for the traffic that does not go through the gateway.
 
 ## What you need before starting
 
-- A Kubernetes cluster (v1.28 or newer) with a CNI that enforces NetworkPolicy.
+- A Kubernetes cluster (v1.35 or newer) with a CNI that enforces NetworkPolicy.
 - cert-manager and trust-manager (the [Installation](getting-started/installation.md)
   page covers the required flags).
 - An API key for at least one LLM provider.

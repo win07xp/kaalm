@@ -71,8 +71,9 @@ traffic, which fails deliveries; use `CNI=cilium` for a cluster like that
 ([Performance and scale](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/performance-and-scale.md#many-namespaces) has the measurements).
 
 The cluster is named `kaalm-dev`; set `CLUSTER=CLUSTER_NAME` to pick
-another. The
-script switches your kubectl context to it. Then run the same `helm install`
+another. The script pins the k3s image, so the cluster runs the same
+Kubernetes version whichever k3d release you have; set `K3S_IMAGE=IMAGE` to
+use another image. The script switches your kubectl context to the cluster. Then run the same `helm install`
 as in [Install](#install) against it.
 
 ## From source

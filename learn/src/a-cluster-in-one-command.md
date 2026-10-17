@@ -7,8 +7,13 @@ cluster network that enforces policies, and k3d's comes with that.
 ## The cluster
 
 ```bash
-k3d cluster create kaalm-tutorial --wait --k3s-arg "--disable=traefik@server:0"
+k3d cluster create kaalm-tutorial --wait \
+  --image rancher/k3s:v1.37.1-k3s1 \
+  --k3s-arg "--disable=traefik@server:0"
 ```
+
+The `--image` flag pins the cluster to Kubernetes 1.37, so the version
+doesn't depend on your k3d release.
 
 That takes a few seconds and ends with:
 
