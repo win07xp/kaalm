@@ -63,9 +63,9 @@ func scopeFakeChannel(path string) *kaalmv1beta1.AgentChannel {
 	}
 }
 
-// preScopeObjects are the Secrets plus the credential Role and controller
-// RoleBinding an older release left: the Role grants every referenced
-// Secret, labeled or not.
+// preScopeObjects are the Secrets plus a credential Role that grants every
+// referenced Secret, labeled or not, as it stands after a Secret loses its
+// label.
 func preScopeObjects(t *testing.T, ch *kaalmv1beta1.AgentChannel) []client.Object {
 	t.Helper()
 	labeled := &corev1.Secret{
@@ -83,20 +83,10 @@ func preScopeObjects(t *testing.T, ch *kaalmv1beta1.AgentChannel) []client.Objec
 			ResourceNames: []string{"scope-labeled", "scope-unlabeled"}, Verbs: []string{"get", "watch"},
 		}},
 	}
-	rb := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: channelControllerCredsBindingName(ch.Name), Namespace: "default"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: kindRole, Name: channelRoleName(ch.Name)},
-		Subjects: []rbacv1.Subject{{
-			Kind: rbacv1.ServiceAccountKind, Name: controllerServiceAccount, Namespace: testSystemNamespace,
-		}},
+	if err := controllerutil.SetControllerReference(ch, role, testScheme(t)); err != nil {
+		t.Fatal(err)
 	}
-	scheme := testScheme(t)
-	for _, obj := range []client.Object{role, rb} {
-		if err := controllerutil.SetControllerReference(ch, obj, scheme); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return []client.Object{labeled, unlabeled, role, rb}
+	return []client.Object{labeled, unlabeled, role}
 }
 
 // scopeReconcile runs one channel pass on a fake client holding objs.
@@ -176,7 +166,7 @@ func TestChannel_NotReadyScopesCredentialRole(t *testing.T) {
 				t.Errorf("credential Role grants %v, want [scope-labeled]", got)
 			}
 			err := c.Get(context.Background(), types.NamespacedName{
-				Namespace: "default", Name: channelControllerCredsBindingName(ch.Name)}, &rbacv1.RoleBinding{})
+				Namespace: "default", Name: channelRoleName(ch.Name) + "-controller"}, &rbacv1.RoleBinding{})
 			if !apierrors.IsNotFound(err) {
 				t.Errorf("controller creds RoleBinding: err = %v, want NotFound", err)
 			}

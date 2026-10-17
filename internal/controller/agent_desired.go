@@ -88,7 +88,8 @@ const (
 	annotationPodSpecHash = "kaalm.io/pod-spec-hash"
 
 	// annotationPodSpecHashVersion names the formula that produced
-	// annotationPodSpecHash. A Pod without it was hashed by formula 1.
+	// annotationPodSpecHash, so a release that changes the formula can tell
+	// a Pod hashed by the old one from real drift.
 	annotationPodSpecHashVersion = "kaalm.io/pod-spec-hash-version"
 
 	// podSpecHashVersion is the formula podSpecHash implements.
@@ -174,11 +175,6 @@ type effectiveAgentSpec struct {
 	WakeTimeout        time.Duration
 	HibernationEnabled bool
 	ActivitySource     string
-
-	// LegacyClaims is used only by podSpecHashV1, to reproduce the hash of
-	// Pods created by a release that kept container claims. It never reaches
-	// the Pod or podSpecHash. Remove it together with podSpecHashV1.
-	LegacyClaims []corev1.ResourceClaim
 }
 
 // deriveEffectiveSpec merges class defaults into the Agent's spec and clamps
@@ -210,7 +206,7 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 	if eff.Image == "" {
 		eff.Image = class.Spec.Image.DefaultImage
 	}
-	eff.Resources, eff.LegacyClaims = effectiveResources(agent.Spec.Resources, class.Spec.Resources)
+	eff.Resources = effectiveResources(agent.Spec.Resources, class.Spec.Resources)
 	if eff.ServicePort == 0 {
 		eff.ServicePort = defaultHealthPort
 	}
@@ -282,22 +278,15 @@ func pickSeconds(v, def, max *int32) *int32 {
 // dropped: a container claim must name an entry in pod.spec.resourceClaims,
 // which the controller never sets. With Dynamic Resource Allocation enabled
 // the API server rejects such a Pod; with it disabled it strips the claims.
-//
-// legacyClaims holds the claims a release with hash formula 1 passed to the
-// container and hashed, which it did only when the class set no maxLimits.
 // res is a copy, so clearing its claims never mutates the workload or class.
-func effectiveResources(own corev1.ResourceRequirements, class kaalmv1beta1.AgentClassResources) (
-	res corev1.ResourceRequirements, legacyClaims []corev1.ResourceClaim) {
-	res = own
+func effectiveResources(own corev1.ResourceRequirements, class kaalmv1beta1.AgentClassResources) corev1.ResourceRequirements {
+	res := own
 	if len(res.Requests) == 0 && len(res.Limits) == 0 {
 		res = class.Defaults
 	}
-	if len(class.MaxLimits) == 0 {
-		legacyClaims = res.Claims
-	}
 	res = clampResources(res, class.MaxLimits)
 	res.Claims = nil
-	return res, legacyClaims
+	return res
 }
 
 // clampResources caps limits (and any requests above the cap) at maxLimits.
@@ -339,8 +328,7 @@ func imageAllowed(image string, allowed []string) bool {
 }
 
 // namespaceAllowed reports whether ns matches at least one glob in allowed. An
-// empty list allows none, as the provider docs have always stated: "*" is the
-// explicit opt-in to every namespace (behavior aligned in v0.4.0). A
+// empty list allows none: "*" is the explicit opt-in to every namespace. A
 // malformed pattern matches nothing; the provider reconcilers report it on
 // Ready (rule 51).
 func namespaceAllowed(ns string, allowed []string) bool {
@@ -412,47 +400,6 @@ func podSpecHash(eff effectiveAgentSpec) string {
 	raw, err := json.Marshal(h)
 	if err != nil {
 		// hashableSpec is plain data; Marshal cannot fail on it.
-		panic(err)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:8])
-}
-
-// hashableSpecV1 and podSpecHashV1 freeze hash formula 1, which v1.0.0
-// wrote on every agent Pod. They exist only to rewrite the hash of Pods created before
-// the formula changed, so an upgrade does not replace them. Remove them once
-// no supported upgrade path starts from a release that wrote v1 hashes.
-// Do not edit: for a spec as v1.0.0 derived it, the output must stay
-// byte-for-byte what v1.0.0 produced. LegacyClaims restores the container
-// claims v1.0.0 kept (and hashed) when the class set no maxLimits.
-type hashableSpecV1 struct {
-	Image     string                      `json:"image"`
-	Command   []string                    `json:"command,omitempty"`
-	Args      []string                    `json:"args,omitempty"`
-	Env       []corev1.EnvVar             `json:"env,omitempty"`
-	Resources corev1.ResourceRequirements `json:"resources"`
-	Providers []string                    `json:"providers,omitempty"`
-	Handler   string                      `json:"handler,omitempty"`
-}
-
-func podSpecHashV1(eff effectiveAgentSpec) string {
-	providers := append([]string(nil), eff.Providers...)
-	sort.Strings(providers)
-	res := eff.Resources
-	if len(eff.LegacyClaims) > 0 {
-		res.Claims = eff.LegacyClaims
-	}
-	h := hashableSpecV1{
-		Image:     eff.Image,
-		Command:   eff.Command,
-		Args:      eff.Args,
-		Env:       eff.Env,
-		Resources: res,
-		Providers: providers,
-		Handler:   eff.HandlerConfigMap,
-	}
-	raw, err := json.Marshal(h)
-	if err != nil {
 		panic(err)
 	}
 	sum := sha256.Sum256(raw)

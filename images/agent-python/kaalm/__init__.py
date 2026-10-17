@@ -14,12 +14,12 @@ append-only within a minor release series:
   and CA trust, rebuilt internally on certificate rotation. Their names
   mirror the ``http_client=`` / ``http_async_client=`` keyword arguments the
   framework SDKs take; extra keyword arguments pass through to the httpx
-  constructor. Since v0.4.0.
+  constructor.
 - ``kaalm.trace_context()``: the W3C trace context of the message being
   handled, as a ``{"traceparent": ..., "tracestate": ...}`` dict (empty
   outside message handling). The runtime already forwards it on every
   gateway call the ABI clients make; handlers running their own
-  OpenTelemetry SDK continue the trace from these values. Since v0.5.0.
+  OpenTelemetry SDK continue the trace from these values.
 - ``await kaalm.complete_task(status, message="", artifacts=None)``: reports
   AgentTask completion (contract item 6). It is the runtime's own completion
   coroutine, so it retries the 409 stale_pod rejection, the 503

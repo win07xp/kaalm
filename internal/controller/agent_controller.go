@@ -124,7 +124,7 @@ func (r *AgentReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
@@ -392,9 +392,9 @@ func (r *AgentReconciler) childBlocked(
 
 // reconcileWakeAnnotations runs step 1: a wake request on an Agent that is
 // not Hibernating is handled and ends the pass. A wake-trigger annotation
-// with no wake request is left over (a controller that predates the trigger
-// annotation consumed the wake and kept it); it is removed and the pass ends,
-// so a later manual wake is not counted as a channel wake.
+// with no wake request is stray (set by hand, or left by an interrupted
+// wake); it is removed and the pass ends, so a later manual wake is not
+// counted as a channel wake.
 func (r *AgentReconciler) reconcileWakeAnnotations(
 	ctx context.Context, agent *kaalmv1beta1.Agent,
 ) (bool, error) {
@@ -1112,8 +1112,7 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // mounts tlsSecret, the Secret the Agent's Certificate names. Drift is a spec
 // hash mismatch or a TLS volume that names a Secret other than tlsSecret; both
 // kinds share the maxUnavailableOnDrift slots. The Secret name stays out of
-// the hash, so a Certificate that kept its pre-v1.1.0 name replaces no Pod on
-// upgrade. While the Certificate is not Ready (certHeld), it reads the Pod as
+// the hash: the TLS volume check compares it on its own. While the Certificate is not Ready (certHeld), it reads the Pod as
 // usual but never creates or replaces one, takes no drift slot, and reports
 // Ready=False CertificateNotReady.
 func (r *AgentReconciler) convergePod(
@@ -1170,13 +1169,6 @@ func (r *AgentReconciler) convergePod(
 		r.setPhase(agent, podPendingPhase(agent), "replacing a terminal Pod")
 		ready(false, "PodDisrupted", "replacing a terminal Pod")
 		return false, false, r.Delete(ctx, pod)
-	}
-
-	// A Pod hashed by an older formula that is current under that formula
-	// is not drift: rewrite its hash annotations in place so an upgrade that changes
-	// the formula replaces no Pod.
-	if err := r.rewriteLegacyHash(ctx, pod, eff); err != nil {
-		return false, false, err
 	}
 
 	// Drift: compare the hash in the Pod's annotation against the re-derived
@@ -1338,29 +1330,6 @@ func podPendingPhase(agent *kaalmv1beta1.Agent) kaalmv1beta1.AgentPhase {
 	return kaalmv1beta1.AgentProvisioning
 }
 
-// rewriteLegacyHash rewrites the hash annotations of a Pod whose hash came
-// from formula 1 (no hash-version annotation) and still matches that
-// formula: it merge-patches only the two annotations, so the Pod keeps
-// running. A formula-1 Pod whose
-// hash does not match is real drift and is left for the caller to replace.
-func (r *AgentReconciler) rewriteLegacyHash(ctx context.Context, pod *corev1.Pod, eff effectiveAgentSpec) error {
-	if _, ok := pod.Annotations[annotationPodSpecHashVersion]; ok {
-		return nil
-	}
-	if pod.Annotations[annotationPodSpecHash] != podSpecHashV1(eff) {
-		return nil
-	}
-	patch := client.MergeFrom(pod.DeepCopy())
-	pod.Annotations[annotationPodSpecHash] = podSpecHash(eff)
-	pod.Annotations[annotationPodSpecHashVersion] = podSpecHashVersion
-	if err := r.Patch(ctx, pod, patch); err != nil {
-		return err
-	}
-	log.FromContext(ctx).Info("rewrote Pod spec hash for the current formula; Pod kept",
-		"pod", pod.Name, "hashVersion", podSpecHashVersion)
-	return nil
-}
-
 // ownedPod returns the Agent's live Pod, preferring a non-terminating one when
 // a replacement overlaps a termination.
 func (r *AgentReconciler) ownedPod(ctx context.Context, agent *kaalmv1beta1.Agent) (*corev1.Pod, error) {
@@ -1508,8 +1477,8 @@ const (
 // (kaalm.io/wake=true) and who made it. The activator writes
 // kaalm.io/wake-trigger=channel in the same patch as the wake; with no
 // trigger annotation the wake is manual (kubectl annotate). The wake value
-// stays "true" for every trigger, so a controller that predates the trigger
-// annotation still honors an activator wake during a rollout.
+// is "true" for every trigger, so a wake request reads the same whoever
+// made it.
 func wakeTrigger(agent *kaalmv1beta1.Agent) (string, bool) {
 	if agent.Annotations[kaalmv1beta1.AnnotationWake] != kaalmv1beta1.AnnotationTrue {
 		return "", false

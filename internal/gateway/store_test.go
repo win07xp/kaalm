@@ -44,13 +44,13 @@ func TestIsKaalmManagedPod(t *testing.T) {
 	if !isKaalmManagedPod(taskPod) {
 		t.Error("AgentTask-owned pod must be managed")
 	}
-	// OwnerRef written before the v0.6.0 graduation names v1alpha1; the
-	// match is by group, so the Pod is still managed.
-	oldPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: "kaalm.io/v1alpha1", Kind: "Agent"}},
+	// The match is by group, so an ownerRef at another version of the API
+	// still makes the Pod managed.
+	otherVersionPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "kaalm.io/v1", Kind: "Agent"}},
 	}}
-	if !isKaalmManagedPod(oldPod) {
-		t.Error("pod owned through kaalm.io/v1alpha1 must be managed")
+	if !isKaalmManagedPod(otherVersionPod) {
+		t.Error("pod owned through kaalm.io/v1 must be managed")
 	}
 	// Label-based.
 	labeledPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"kaalm.io/workload": "agent"}}}

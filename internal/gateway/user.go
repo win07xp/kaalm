@@ -145,7 +145,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Platform channels (since v0.7.0) hand the whole inbound half to their
+	// Platform channels hand the whole inbound half to their
 	// adapter; the webhook path below is the generic receiver.
 	if adapter, ok := s.platformAdapterFor(channel); ok {
 		s.handlePlatform(w, r, channel, body, adapter)

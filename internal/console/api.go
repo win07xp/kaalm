@@ -259,7 +259,7 @@ func (s *Server) apiSpend(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "reading spend failed")
 		return
 	}
-	// The per-workload breakdown is additive (since v0.5.0) and best-effort:
+	// The per-workload breakdown is best-effort:
 	// an unreachable gateway degrades the response to the namespace rows, so
 	// the panel never goes dark over its newest column.
 	writeJSON(w, map[string]any{"spend": rows, "workloads": s.workloadSpend(r.Context(), ns)})

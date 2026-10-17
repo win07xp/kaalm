@@ -323,7 +323,6 @@ func newFullAgentClass() *AgentClass {
 					AllowedCIDRs: []string{"10.0.0.0/8"},
 					AllowedHosts: []string{"api.example.com"},
 				},
-				AllowHostNetwork:          true,
 				AllowSameNamespaceIngress: true,
 			},
 			Security: AgentClassSecurity{

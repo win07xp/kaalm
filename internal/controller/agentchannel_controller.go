@@ -446,13 +446,6 @@ func authSecretNames(channel *kaalmv1beta1.AgentChannel) []string {
 
 func channelRoleName(channelName string) string { return "kaalm-channel-" + channelName + "-creds" }
 
-// channelControllerCredsBindingName names the RoleBinding that once bound the
-// operator to the credential Role; the reconciler removes it when the channel
-// controls it.
-func channelControllerCredsBindingName(channelName string) string {
-	return channelRoleName(channelName) + "-controller"
-}
-
 // channelCheckRoleName names the controller-only Role that lets the reconciler
 // read every Secret the channel references, to check the rule 45 label.
 func channelCheckRoleName(channelName string) string {
@@ -538,27 +531,7 @@ func (r *AgentChannelReconciler) ensureCredentialRole(
 			return rejectedWrite("updating", r.Scheme(), &currentRB, err)
 		}
 	}
-	return r.removeControllerCredsBinding(ctx, channel)
-}
-
-// removeControllerCredsBinding deletes the RoleBinding that bound the
-// operator's ServiceAccount to the credential Role. The operator needs no
-// binding to that Role: the check Role already grants it every Secret name
-// the credential Role lists. A RoleBinding of this name that the channel does
-// not control is not the channel's and is left alone. A missing one costs a
-// single cached read and no write.
-func (r *AgentChannelReconciler) removeControllerCredsBinding(
-	ctx context.Context, channel *kaalmv1beta1.AgentChannel,
-) error {
-	var rb rbacv1.RoleBinding
-	key := types.NamespacedName{Namespace: channel.Namespace, Name: channelControllerCredsBindingName(channel.Name)}
-	if err := r.Get(ctx, key, &rb); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	if !metav1.IsControlledBy(&rb, channel) {
-		return nil
-	}
-	return rejectedWrite("deleting", r.Scheme(), &rb, client.IgnoreNotFound(r.Delete(ctx, &rb)))
+	return nil
 }
 
 // updateStatusIfChanged writes the channel's status only when a pass changed

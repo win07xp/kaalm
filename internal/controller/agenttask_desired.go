@@ -101,7 +101,7 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 	if eff.Image == "" {
 		eff.Image = class.Spec.Image.DefaultImage
 	}
-	eff.Resources, _ = effectiveResources(task.Spec.Resources, class.Spec.Resources)
+	eff.Resources = effectiveResources(task.Spec.Resources, class.Spec.Resources)
 	if task.Spec.Persistence.SizeGi != nil {
 		eff.PVCSizeGi = *task.Spec.Persistence.SizeGi
 	} else {
@@ -132,15 +132,15 @@ func classTaskBounds(class *kaalmv1beta1.AgentClass) *kaalmv1beta1.AgentTaskClas
 // classTaskEgress copies the class's egress lists for the record kept in
 // status.classEgress at Pod creation, so a later class edit cannot reach it.
 // It is never nil: a class with no egress records an empty value, which
-// stays distinct from the nil of a Pod created before the record existed.
+// stays distinct from the nil of a record not yet written.
 func classTaskEgress(class *kaalmv1beta1.AgentClass) *kaalmv1beta1.AgentClassEgress {
 	return class.Spec.Network.Egress.DeepCopy()
 }
 
 // effectiveTaskTimeout derives the task's completion timeout from its current
 // spec within bounds, like the Agent timings (rule 42): the task's own value,
-// else the default, clamped to the max. Nil bounds, a task that predates the
-// snapshot, leave the spec value unbounded. Zero means no timeout.
+// else the default, clamped to the max. Nil bounds, a task whose snapshot is
+// not written yet, leave the spec value unbounded. Zero means no timeout.
 func effectiveTaskTimeout(task *kaalmv1beta1.AgentTask, b *kaalmv1beta1.AgentTaskClassBounds) time.Duration {
 	if b == nil {
 		b = &kaalmv1beta1.AgentTaskClassBounds{}

@@ -143,7 +143,7 @@ type walkState struct {
 	// candidate (hard enforcement); the walk never re-admits the primary.
 	primarySettle func(costUSD float64)
 
-	// Crossing formats (since v0.7.0). body is the prepared request: the
+	// Crossing formats. body is the prepared request: the
 	// caller's bytes with the model rewritten and any stream_options added.
 	// request decodes it, once, when a crossing candidate needs it.
 	// inboundFormat is its format, or "" when it cannot cross (the legacy
