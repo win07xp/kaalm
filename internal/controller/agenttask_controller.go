@@ -336,9 +336,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 	// Repair the observed Pod's identity when the status write after its
 	// creation was lost (the Pod UID check accepts the new Pod again after a
 	// retry). A podName that does not match shows the loss, so the class
-	// bounds and egress lists are written with it. A Pod created before
-	// status.classBounds or status.classEgress existed has a matching podName
-	// and keeps no record.
+	// bounds and egress lists are written with it.
 	lost := task.Status.PodName != pod.Name
 	if lost || (isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID)) {
 		if lost {
@@ -843,8 +841,7 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 // NetworkPolicy, CiliumNetworkPolicy, completion Role, or RoleBinding is
 // reverted; the ServiceAccount, PVC, and ConfigMap are only re-created. The
 // two policies are built from status.classEgress, so a later class edit does
-// not reach the task; for a legacy task (no record, its Pod predates the
-// field) they are only re-created, from the class as it now stands. It runs
+// not reach the task. It runs
 // only after the pass's state checks (completion, timeout, Pod loss, the
 // provisioning deadline), so it never delays them, and it never waits on
 // readiness: the Pod keeps what it already mounted. The PVC comes back only
@@ -860,14 +857,10 @@ func (r *AgentTaskReconciler) restoreTaskChildren(
 ) error {
 	var errs []error
 	eff.PersistenceOn = podMountsClaim(pod, taskPVCName(task.Name))
-	egress, revert := taskPolicyEgress(task, class)
+	egress := taskPolicyEgress(task, class)
 	for _, obj := range desiredTaskChildren(task, class, eff, egress.AllowedCIDRs, r.OperatorNamespace, r.DNS) {
 		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
 			errs = append(errs, err)
-			continue
-		}
-		if _, isPolicy := obj.(*networkingv1.NetworkPolicy); isPolicy && !revert {
-			errs = append(errs, createIfMissing(ctx, r.Client, task, obj))
 			continue
 		}
 		errs = append(errs, convergeTaskChild(ctx, r.Client, task, obj))
@@ -877,11 +870,7 @@ func (r *AgentTaskReconciler) restoreTaskChildren(
 	if hosts := egress.AllowedHosts; withFQDN && len(hosts) > 0 {
 		supported, err := fqdnSupported(r.FQDNSupport)
 		if err == nil {
-			if revert {
-				err = ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
-			} else {
-				err = restoreFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
-			}
+			err = ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
 		}
 		errs = append(errs, err)
 	}
@@ -889,17 +878,14 @@ func (r *AgentTaskReconciler) restoreTaskChildren(
 }
 
 // taskPolicyEgress returns the egress lists a task with a Pod keeps its
-// policies to: status.classEgress, recorded at Pod creation, with revert
-// true. A task whose Pod predates the record gets the class as it now
-// stands, with revert false: its policies are only re-created, never
-// updated, so an upgrade changes no running task's egress.
-func taskPolicyEgress(
-	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
-) (egress kaalmv1beta1.AgentClassEgress, revert bool) {
+// policies to: status.classEgress, recorded at Pod creation. Until the
+// record is written (a lost status write, repaired on a later pass) it is
+// the class as it now stands.
+func taskPolicyEgress(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass) kaalmv1beta1.AgentClassEgress {
 	if task.Status.ClassEgress != nil {
-		return *task.Status.ClassEgress, true
+		return *task.Status.ClassEgress
 	}
-	return class.Spec.Network.Egress, false
+	return class.Spec.Network.Egress
 }
 
 // convergeTaskChild is the update-in-place sibling of createIfMissing for a

@@ -102,7 +102,6 @@ func wantProjected(t *testing.T, pt probeTrust, want map[string]string) {
 const (
 	clusterCAPath  = "/var/run/kaalm/ca.crt"
 	upstreamCAPath = "/var/run/kaalm/upstream-ca.crt"
-	probeCAPath    = "/var/run/kaalm/probe-ca.crt"
 )
 
 // Without any trust values the controller probes with the system roots only.
@@ -137,35 +136,12 @@ func TestControllerProbeCA_GatewayValuesSeparately(t *testing.T) {
 	wantProjected(t, pt, map[string]string{"corp-ca/ca.crt": "upstream-ca.crt"})
 }
 
-// The deprecated controller values still work on their own, so existing
-// values files keep their probe trust.
-func TestControllerProbeCA_DeprecatedValuesStillHonored(t *testing.T) {
-	pt := renderProbeTrust(t,
-		"--set", "controller.trustClusterCAForProbes=true",
-		"--set", "controller.probeCA.configMap=probe-ca",
-	)
-	wantProbeFiles(t, pt, clusterCAPath, probeCAPath)
-	wantProjected(t, pt, map[string]string{"probe-ca/ca.crt": "probe-ca.crt"})
-}
-
-// Gateway and deprecated values merge into one additive pool. The cluster CA
-// is listed once, a distinct deprecated bundle is kept, and a deprecated
-// bundle naming the same ConfigMap key as the gateway's is projected once.
-func TestControllerProbeCA_MergesWithoutDuplicates(t *testing.T) {
-	both := []string{
-		"--set", "gateway.trustClusterCAForUpstream=true",
-		"--set", "controller.trustClusterCAForProbes=true",
-		"--set", "gateway.upstreamCA.configMap=corp-ca",
-	}
-
-	pt := renderProbeTrust(t, append(slices.Clone(both), "--set", "controller.probeCA.configMap=old-ca")...)
-	wantProbeFiles(t, pt, clusterCAPath, upstreamCAPath, probeCAPath)
-	wantProjected(t, pt, map[string]string{
-		"corp-ca/ca.crt": "upstream-ca.crt",
-		"old-ca/ca.crt":  "probe-ca.crt",
-	})
-
-	pt = renderProbeTrust(t, append(slices.Clone(both), "--set", "controller.probeCA.configMap=corp-ca")...)
-	wantProbeFiles(t, pt, clusterCAPath, upstreamCAPath)
-	wantProjected(t, pt, map[string]string{"corp-ca/ca.crt": "upstream-ca.crt"})
+// The removed controller probe values fail the render and name their
+// replacement, so a values file that still sets one never loses its probe
+// trust without a word.
+func TestControllerProbeCA_RemovedValuesFailTheRender(t *testing.T) {
+	renderFails(t, "controller:\n  trustClusterCAForProbes: true\n",
+		"controller.trustClusterCAForProbes is removed; set gateway.trustClusterCAForUpstream")
+	renderFails(t, "controller:\n  probeCA:\n    configMap: corp-ca\n",
+		"controller.probeCA is removed; set gateway.upstreamCA")
 }

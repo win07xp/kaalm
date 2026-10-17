@@ -58,16 +58,17 @@ trustManager.extraSources verbatim.
 {{- end }}
 
 {{/*
-Non-empty when the deprecated controller.probeCA bundle needs its own
-projection into the controller: it is set and does not name the same
-ConfigMap key as gateway.upstreamCA, which the controller already projects.
+kaalm.removedValues fails the render when a values file still sets a value
+the chart no longer reads, naming its replacement, so the setting is never
+dropped without a word.
 */}}
-{{- define "kaalm.controllerProbeCAProjected" -}}
-{{- $p := .Values.controller.probeCA }}
-{{- $u := .Values.gateway.upstreamCA }}
-{{- if and $p.configMap (not (and (eq $p.configMap $u.configMap) (eq $p.key $u.key))) -}}
-true
-{{- end }}
+{{- define "kaalm.removedValues" -}}
+{{- if hasKey .Values.controller "trustClusterCAForProbes" -}}
+{{- fail "kaalm: controller.trustClusterCAForProbes is removed; set gateway.trustClusterCAForUpstream, which provider health probes also trust" -}}
+{{- end -}}
+{{- if hasKey .Values.controller "probeCA" -}}
+{{- fail "kaalm: controller.probeCA is removed; set gateway.upstreamCA, which provider health probes also trust" -}}
+{{- end -}}
 {{- end }}
 
 {{/*

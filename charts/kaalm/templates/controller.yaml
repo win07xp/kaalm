@@ -1,4 +1,5 @@
 {{- include "kaalm.replicaFloor" .Values.controller.replicas -}}
+{{- include "kaalm.removedValues" . -}}
 {{/*
 The controller Deployment, Service, and PodDisruptionBudget. Two replicas with
 leader election: the leader reconciles, the standby keeps the activator
@@ -80,17 +81,13 @@ spec:
             {{- end }}
             {{- /* Provider health probes trust what the gateway's forwarding
                  path trusts (gateway.trustClusterCAForUpstream and
-                 gateway.upstreamCA). The deprecated controller values add to
-                 the same additive pool so older values files keep working. */}}
+                 gateway.upstreamCA). */}}
             {{- $probeCAs := list }}
-            {{- if or .Values.gateway.trustClusterCAForUpstream .Values.controller.trustClusterCAForProbes }}
+            {{- if .Values.gateway.trustClusterCAForUpstream }}
             {{- $probeCAs = append $probeCAs "/var/run/kaalm/ca.crt" }}
             {{- end }}
             {{- if .Values.gateway.upstreamCA.configMap }}
             {{- $probeCAs = append $probeCAs "/var/run/kaalm/upstream-ca.crt" }}
-            {{- end }}
-            {{- if include "kaalm.controllerProbeCAProjected" . }}
-            {{- $probeCAs = append $probeCAs "/var/run/kaalm/probe-ca.crt" }}
             {{- end }}
             {{- if $probeCAs }}
             - --probe-ca={{ join "," $probeCAs }}
@@ -159,14 +156,6 @@ spec:
                   name: {{ . }}
                   items:
                     - { key: {{ $.Values.gateway.upstreamCA.key }}, path: upstream-ca.crt }
-              {{- end }}
-              {{- if include "kaalm.controllerProbeCAProjected" . }}
-              # Deprecated controller.probeCA, kept while values files move to
-              # gateway.upstreamCA.
-              - configMap:
-                  name: {{ .Values.controller.probeCA.configMap }}
-                  items:
-                    - { key: {{ .Values.controller.probeCA.key }}, path: probe-ca.crt }
               {{- end }}
 ---
 apiVersion: v1

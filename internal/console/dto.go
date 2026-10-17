@@ -67,7 +67,7 @@ type AgentDetail struct {
 	PVCName    string         `json:"pvcName,omitempty"`
 	// Spend is this agent's own current-period spend per provider, attached
 	// from the gateway's per-workload view (empty when the agent has spent
-	// nothing or the gateway is unreachable). Added in v0.5.0, additively.
+	// nothing or the gateway is unreachable).
 	Spend []AgentSpendRow `json:"spend,omitempty"`
 }
 

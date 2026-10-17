@@ -27,7 +27,7 @@ Any other API error, such as a timeout, is retried with backoff and sets no reas
 
 A Role or RoleBinding of one of these names that the channel does not control is never written; see [Child ownership](agent.md#child-ownership).
 
-The operator needs no binding to the credential Role, because the check Role already covers every Secret name the credential Role lists. The reconciler deletes a RoleBinding named `kaalm-channel-{name}-creds-controller` when the channel controls it, so an existing binding is removed on the next pass. A refused delete reports `ChildWriteRejected`. A binding of that name that the channel does not control is left alone and does not set `ChildConflict`.
+The operator needs no binding to the credential Role, because the check Role already covers every Secret name the credential Role lists.
 
 ### Channel health poll
 
