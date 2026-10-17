@@ -8,37 +8,37 @@
 start
 :request on :8443;
 if (client certificate?) then (yes: Mode 1)
-  :verified against kaalm-ca\nat the handshake;
+  :verified against\nkaalm-ca at the\nhandshake;
   if (one recognized SAN\nwith 5 labels?) then (no)
-    :**403** invalid_cert;
+    :**403**\ninvalid_cert;
     kill
   else (yes)
   endif
-  :namespace and workload\nfrom the SAN;
+  :namespace and\nworkload from\nthe SAN;
 else (no: Mode 2)
-  if (bearer token?) then (no)
-    :**401** unauthorized;
+  if (bearer\ntoken?) then (no)
+    :**401**\nunauthorized;
     kill
   elseif (source Pod is\nKaalm-managed?) then (yes)
-    :**401** unauthorized;
+    :**401**\nunauthorized;
     kill
-  elseif (token cached?) then (no)
-    :TokenReview,\naudience kaalm-gateway;
-    if (apiserver reachable?) then (no)
-      :**503** internal_unavailable;
+  elseif (token\ncached?) then (no)
+    :TokenReview,\naudience\nkaalm-gateway;
+    if (apiserver\nreachable?) then (no)
+      :**503**\ninternal_unavailable;
       kill
     elseif (authenticated?) then (no)
-      :**401** unauthorized;
+      :**401**\nunauthorized;
       kill
     else (yes)
-      :cache, TTL from exp;
+      :cache,\nTTL from exp;
     endif
   else (yes)
   endif
   :namespace from\nthe username;
 endif
 if (Pod at the source IP\nin that namespace?) then (no)
-  :**401** unauthorized;
+  :**401**\nunauthorized;
   kill
 else (yes)
 endif

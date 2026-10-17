@@ -183,7 +183,7 @@ jobs:
 
       # PlantUML sizes each box from the text widths of the font Java
       # resolves for sans-serif, and many figures use Graphviz for layout.
-      # So the render runs in pinned Ubuntu 22.04 with only the DejaVu
+      # So the render runs in pinned Ubuntu 26.04 with only the DejaVu
       # fonts, Ubuntu's OpenJDK 17, and Graphviz: the setup the committed
       # figures come from. The jar version and checksum move together with
       # PLANTUML_JAR in the Makefile, and every figure is re-rendered in the
@@ -192,14 +192,14 @@ jobs:
         run: |
           curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
             -o "$RUNNER_TEMP/plantuml.jar" \
-            https://github.com/plantuml/plantuml/releases/download/v1.2026.6/plantuml-1.2026.6.jar
-          echo "89948f14c93756c7a3fb7b69078ff37e8489fd79dd430c582b931e2f65358690  $RUNNER_TEMP/plantuml.jar" | sha256sum -c -
+            https://github.com/plantuml/plantuml/releases/download/v1.2026.8/plantuml-1.2026.8.jar
+          echo "5e1ecfa8ecd32c90b03bbf3b1eb6f020943f98ab0fcf4032be31a0002ee2c462  $RUNNER_TEMP/plantuml.jar" | sha256sum -c -
 
       - id: render
         name: Re-render the figures and fail if a committed SVG differs
         run: |
           docker run --rm -v "$PWD:/src" -v "$RUNNER_TEMP/plantuml.jar:/opt/plantuml.jar:ro" -w /src \
-            ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 \
+            ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7 \
             bash -c 'apt-get -o Acquire::Retries=3 update -qq &&
               DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
                 make openjdk-17-jre-headless graphviz fonts-dejavu-core fonts-dejavu-extra >/dev/null &&

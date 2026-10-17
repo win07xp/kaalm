@@ -209,7 +209,7 @@ chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to C
 		helm package $(CHART_DIR) --version $$V --app-version $$V --destination dist
 
 # The books job in .github/workflows/ci.yml pins the same release by URL and checksum; both move together.
-PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
+PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.8.jar
 # Both report-only flags (--time-report, --ratchet-report) are off, so the
 # time-bound wording lint and the wording and figure ratchets are fatal.
 DOCS_CHECK_FLAGS ?=

@@ -33,7 +33,7 @@ Do not restate them:
 
 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
 Regenerate with `make diagrams` (the jar path is `PLANTUML_JAR`, default
-`~/java/plantuml-1.2026.6.jar`); the same target copies the figures the
+`~/java/plantuml-1.2026.8.jar`); the same target copies the figures the
 guide embeds into `guide/src/diagrams/`.
 
 Every diagram must `!include _style.puml`, which carries the colour language
@@ -53,8 +53,8 @@ the matching source, never a stale or hand-edited SVG.
 
 A local render matches CI only with this setup:
 
-- PlantUML 1.2026.6.
-- OpenJDK 17.
+- PlantUML 1.2026.8.
+- OpenJDK 17, as the `ubuntu:26.04` container in CI packages it.
 - Graphviz, which lays out many figures.
 - DejaVu Sans as the system sans-serif font (check with
   `fc-match sans-serif`), including its Oblique (italic) faces, which Ubuntu
