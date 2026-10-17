@@ -31,6 +31,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -156,7 +157,14 @@ func (k *cluster) scrapePod(namespace, pod, port string) (map[string]*dto.Metric
 	if len(body) == 0 {
 		return nil, fmt.Errorf("empty metrics body from %s", pod)
 	}
-	var parser expfmt.TextParser
+	return parseMetrics(body)
+}
+
+// parseMetrics reads a Prometheus text exposition. The parser must be
+// built with a name validation scheme: its zero value panics on the first
+// metric name.
+func parseMetrics(body []byte) (map[string]*dto.MetricFamily, error) {
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	return parser.TextToMetricFamilies(strings.NewReader(string(body)))
 }
 
@@ -421,8 +429,7 @@ func (k *cluster) scrapeAPIServer(ctx context.Context) (*snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	var parser expfmt.TextParser
-	fams, err := parser.TextToMetricFamilies(strings.NewReader(string(raw)))
+	fams, err := parseMetrics(raw)
 	if err != nil {
 		return nil, err
 	}
