@@ -260,9 +260,9 @@ E2E_PYTHON_BASE_IMG ?= registry.test/agents/kaalm-agent-python:e2e
 E2E_LANGGRAPH_CHAT_IMG ?= registry.test/agents/langgraph-chat:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
-CURL_IMG ?= curlimages/curl:8.10.1
+CURL_IMG ?= curlimages/curl:8.23.0
 # The OTLP sink for the tracing e2e (S20); preloaded for the same hermeticity.
-JAEGER_IMG ?= jaegertracing/all-in-one:1.62.0
+JAEGER_IMG ?= jaegertracing/jaeger:2.22.0
 PYTHON_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-python:$(CHART_APP_VERSION)
 
 .PHONY: python-test
