@@ -82,7 +82,7 @@ Fourteen traffic classes carry Kaalm's data. Seven stay inside the cluster and s
 | 3 | Gateway to controller | `POST /v1/activate` | mTLS, authorized by SAN ([Internal endpoint authentication](rbac.md#internal-endpoint-authentication)) |
 | 4 | Controller to gateway | `GET /v1/activity`, `GET /v1/channels/health` | mTLS, authorized by SAN |
 | 5 | Gateway to API server | `TokenReview`; budget, spend, async, and completion ConfigMaps; the channel-disconnected annotation | The API server's TLS |
-| 6 | Controller and API server | Watches, status writes, child objects, Events; the conversion webhook the API server calls | The API server's TLS; the webhook serves `kaalm-controller-tls` |
+| 6 | Controller to API server | Watches, status writes, child objects, Events | The API server's TLS |
 | 7 | Console (optional) | Fleet reads under its own ServiceAccount; `POST /v1/test-chat` and `GET /v1/spend` on the gateway | mTLS, authorized by SAN ([Console](../console/overview.md)) |
 | 8 | Channel platform to gateway | Inbound webhook events | HTTPS through the Ingress to the User listener |
 | 9 | Gateway to LLM provider | Prompts and completions, with the provider key injected | HTTPS, only to a host the key's Secret approves ([rule 50](../resources/validation/providers.md#provider-credentials)); custom CA bundles through [Upstream TLS configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration) |

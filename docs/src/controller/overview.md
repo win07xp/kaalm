@@ -11,7 +11,6 @@ The operator is one `controller-runtime` binary. It hosts six reconcilers, `Agen
 | Listener | Port | Serves |
 |---|---|---|
 | Activator | `:9443`, on the `kaalm-controller` Service | `POST /v1/activate/{namespace}/{agentName}` over mTLS; `/healthz` and `/readyz` answer `ok` without a client cert |
-| Conversion webhook | `:9444`, on the Service | `POST /convert`, translating the six kinds between `v1alpha1` and `v1beta1` for the apiserver ([API versioning and deprecation](../operations/api-versioning.md#where-the-conversion-webhook-runs)) |
 | Metrics | `:8080/metrics`, on the Service | Prometheus metrics over plain HTTP; the chart turns them on |
 | Probes | `:8081`, Pod-local | `/healthz` and `/readyz` for kubelet, plain HTTP |
 | pprof | `controller.pprofPort` | `net/http/pprof`, for profiling under load; off by default |
@@ -20,17 +19,16 @@ mTLS with SAN authorization is enforced on `/v1/activate` only; the rules are un
 
 ### Readiness
 
-The chart's readiness probe calls `/readyz` on `:8081`. That endpoint runs up to three checks:
+The chart's readiness probe calls `/readyz` on `:8081`. That endpoint runs up to two checks:
 
 | Check | Passes when |
 |---|---|
 | `readyz` | always (a ping) |
-| `conversion-webhook` | the conversion listener on `:9444` accepts a TLS connection |
 | `activator` | the `:9443` listener is bound |
 
-The last two exist only while their listener is enabled, which the chart always does.
+The `activator` check exists only while the activator listener is enabled, which the chart always does.
 
-Readiness covers only what works without the manager's cache. Ready Pods are the endpoints of the `kaalm-controller` Service, which also serves the conversion webhook, and on an upgrade that still stores `v1alpha1` objects the caches need that webhook to sync ([What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook)). A check that waited on the caches would deadlock that upgrade: no Ready Pod, so no conversion, so no cache sync.
+Readiness covers only what works without the manager's cache. Ready Pods are the endpoints of the `kaalm-controller` Service, and the activator on every replica writes without reading, so a new replica can take a wake before its caches sync. A check that waited on the caches would only hold back that replica's wakes.
 
 The activator never waits on the cache. A bad address or certificate exits the process at startup, and a replica serves wakes while its caches are still syncing, because the handler never reads from the cache (see [Activator handler](#activator-handler-served-on-every-replica)).
 
@@ -38,11 +36,11 @@ A replica joins the Service endpoints only while its activator listener is bound
 
 ## Deployment and leader election
 
-The operator runs as a Deployment in `kaalm-system` with leader election on the Lease `e06da714.io`. The chart enforces two replicas as a floor; only the leader runs the reconcilers, the storage-version migrator, and the [async orphan pruner](finalizers.md#async-orphan-pruning), while every replica serves the activator, the conversion webhook, metrics, and the probes. A leader that stops gracefully (a drain, a rollout, or SIGTERM) releases the Lease on its way out, so the standby acquires it on its next attempt (2 seconds by default) and reconciles from there. This is safe because `main` does nothing after the manager stops except log and exit. A leader that crashes or is killed without a graceful stop still holds the Lease until it expires, 15 seconds by default. The replica count, disruption budget, and anti-affinity are under [The two Deployments](../operations/deployment.md#the-two-deployments).
+The operator runs as a Deployment in `kaalm-system` with leader election on the Lease `e06da714.io`. The chart enforces two replicas as a floor; only the leader runs the reconcilers, the storage-version migrator, and the [async orphan pruner](finalizers.md#async-orphan-pruning), while every replica serves the activator, metrics, and the probes. A leader that stops gracefully (a drain, a rollout, or SIGTERM) releases the Lease on its way out, so the standby acquires it on its next attempt (2 seconds by default) and reconciles from there. This is safe because `main` does nothing after the manager stops except log and exit. A leader that crashes or is killed without a graceful stop still holds the Lease until it expires, 15 seconds by default. The replica count, disruption budget, and anti-affinity are under [The two Deployments](../operations/deployment.md#the-two-deployments).
 
 Every replica serves `/metrics`, but the reconcile and workqueue families read zero on a non-leader. [Observability](operations.md#observability) covers the phase gauges, which both replicas report.
 
-![Two controller replicas behind the kaalm-controller Service. Both serve the :9443 activator, the :9444 conversion webhook, and :8080 metrics; only replica A, the leader, runs the six reconcilers. The gateway POSTs /v1/activate to the Service, which lands on any replica; that replica patches kaalm.io/wake=true and kaalm.io/wake-trigger=channel on the Agent through the apiserver, and the leader's Agent watch fires. Replica A holds the leader Lease; replica B waits on it.](../diagrams/controller-replicas.svg)
+![Two controller replicas behind the kaalm-controller Service. Both serve the :9443 activator and :8080 metrics; only replica A, the leader, runs the six reconcilers. The gateway POSTs /v1/activate to the Service, which lands on any replica; that replica patches kaalm.io/wake=true and kaalm.io/wake-trigger=channel on the Agent through the apiserver, and the leader's Agent watch fires. Replica A holds the leader Lease; replica B waits on it.](../diagrams/controller-replicas.svg)
 
 ### Activator handler (served on every replica)
 
@@ -52,11 +50,11 @@ The `POST /v1/activate/{namespace}/{agentName}` handler runs on every replica, n
 
 Field-level validation uses CEL expressions in the CRD schemas (`x-kubernetes-validations`). Cross-resource validation runs at reconcile time and is surfaced as `Ready=False` conditions. This removes the availability risk of a webhook server on the apiserver's write path: a wedged admission webhook would block writes to the resources it guards.
 
-The controller serves one webhook, the CRD conversion webhook, which is not an admission webhook. It validates and mutates nothing, and it is consulted only when a request's version differs from the stored version, which after storage migration means only clients still sending `v1alpha1`. Kaalm's own components speak the storage version, so a wedged conversion path cannot block the control plane, the gateway, or the console. The availability argument in full is under [What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook).
+The controller serves no webhook of any kind, conversion included, because `kaalm.io/v1beta1` is the only served version ([API versioning and deprecation](../operations/api-versioning.md)).
 
 ## Controller TLS
 
-The activator listener and the conversion webhook serve the cert-manager `Certificate` `kaalm-controller-tls`, issued by `kaalm-ca-issuer` with `server auth` and `client auth` usages: the same cert is presented as a client cert when the controller dials the gateway's `/v1/activity` and `/v1/channels/health` endpoints. The SAN set, the issuer chain, and rotation are under [In-cluster TLS](../security/tls.md#in-cluster-tls).
+The activator listener serves the cert-manager `Certificate` `kaalm-controller-tls`, issued by `kaalm-ca-issuer` with `server auth` and `client auth` usages: the same cert is presented as a client cert when the controller dials the gateway's `/v1/activity` and `/v1/channels/health` endpoints. The SAN set, the issuer chain, and rotation are under [In-cluster TLS](../security/tls.md#in-cluster-tls).
 
 ## Reconcile interval and performance
 

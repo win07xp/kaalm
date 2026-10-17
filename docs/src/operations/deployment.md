@@ -18,7 +18,7 @@ The figure is an inventory. How the cert-manager objects chain together is drawn
 
 ### CRDs
 
-The six CRDs (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step ([Rolling upgrade order](#rolling-upgrade-order)). Keeping CRDs in `crds/` rather than `templates/` also means `helm uninstall` never deletes them, and deleting a CRD would cascade-delete every resource of that kind cluster-wide. Each CRD serves `v1beta1` (the storage version) and the deprecated `v1alpha1`, and carries the conversion stanza that points the apiserver at the controller; see [API versioning and deprecation](api-versioning.md).
+The six CRDs (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step ([Rolling upgrade order](#rolling-upgrade-order)). Keeping CRDs in `crds/` rather than `templates/` also means `helm uninstall` never deletes them, and deleting a CRD would cascade-delete every resource of that kind cluster-wide. Each CRD serves `v1beta1` only, which is also its storage version; see [API versioning and deprecation](api-versioning.md).
 
 ### The two Deployments
 
@@ -62,7 +62,6 @@ With `networkPolicy.enabled` (the default) the chart ships default-deny ingress 
 | Component | Port | Admitted from |
 |---|---|---|
 | Controller | `9443` activator | The gateway Pods |
-| Controller | `9444` conversion webhook | Any source: the API server is not a Pod, and the listener authenticates nothing and converts only what it is sent |
 | Controller | `8081` probes | Any source (kubelet) |
 | Controller | `8080` metrics | `networkPolicy.metricsFrom` |
 | Gateway | `8443` cluster listener | Every namespace: agent Pods, the controller, and the console, each authenticated by mTLS or bearer token |
@@ -184,7 +183,7 @@ The chart installs two ClusterIP `Service`s (three with `console.enabled`). Ever
 | Service | Ports |
 |---|---|
 | `kaalm-gateway` | `:8080` user listener, `:8443` LLM/internal mTLS listener, `:9090` metrics |
-| `kaalm-controller` | `:9443` activator, `:9444` conversion webhook, `:8080` metrics |
+| `kaalm-controller` | `:9443` activator, `:8080` metrics |
 | `kaalm-console` (optional) | `:8443` pages and read API |
 
 `$KAALM_GATEWAY_ENDPOINT` and every internal call in the other pages assume these names in `kaalm-system`.
@@ -219,7 +218,7 @@ cert-manager and trust-manager are required dependencies, and the chart ships on
 | `Certificate` | `kaalm-ca` | `certManager.clusterResourceNamespace` | The Kaalm root; cert-manager writes the `kaalm-ca` Secret beside it |
 | `ClusterIssuer` | `kaalm-ca-issuer` | cluster-scoped | Signs every leaf from the `kaalm-ca` Secret |
 | `Certificate` | `kaalm-gateway-tls` | `kaalm-system` | The gateway's serving certificate for both listeners and its client certificate for the activator |
-| `Certificate` | `kaalm-controller-tls` | `kaalm-system` | The controller's activator and conversion listeners, and its client certificate for the gateway; the CRDs' `caBundle` is injected from it |
+| `Certificate` | `kaalm-controller-tls` | `kaalm-system` | The controller's activator listener, and its client certificate for the gateway |
 | `Certificate` | `kaalm-console-tls` | `kaalm-system`, with `console.enabled` | The console's serving and client certificate |
 | `Certificate` | `{name}-tls`, per Agent and per AgentTask | the workload's namespace | Created by the reconcilers, not the chart ([Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)) |
 | `Bundle` | `kaalm-ca` | cluster-scoped, sources read from the trust namespace | Projects the CA as the `kaalm-ca` ConfigMap into every namespace |
@@ -260,7 +259,7 @@ Kaalm-managed Pods authenticate with the per-workload certificates cert-manager 
 
 ## Upgrade and migration
 
-This section gives the operational order of an upgrade and the chart-level notes. The API versions, the conversion webhook, storage-version migration, the window between the two upgrade steps, and the deprecation policy are specified on [API versioning and deprecation](api-versioning.md).
+This section gives the operational order of an upgrade and the chart-level notes. The API version, storage-version migration, and the deprecation policy are specified on [API versioning and deprecation](api-versioning.md).
 
 ### Rolling upgrade order
 
@@ -270,7 +269,7 @@ This section gives the operational order of an upgrade and the chart-level notes
 kubectl apply --server-side --force-conflicts -f charts/kaalm/crds/
 ```
 
-`--force-conflicts` is part of the command because Helm is the field manager for every CRD field from the install. When a release adds an API version, this step adds it and its conversion stanza, and the window between it and the `helm upgrade` has a bounded cost, stated under [Upgrading in place](api-versioning.md#upgrading-in-place).
+`--force-conflicts` is part of the command because Helm is the field manager for every CRD field from the install. Skipping the command leaves the cluster on the old CRD schema while the new controller runs.
 
 **Apply order is not a rollout barrier.** The controller and gateway Deployments are applied together and roll **concurrently**, so nothing orders the controller observing new CRD fields before the gateway consumes what the controller writes (status fields, budget `_canonical`, per-task RBAC). Version-skew tolerance, not apply order, is what makes the rollout safe. Both Deployments roll with `maxUnavailable: 1` under their PDBs, so one replica of each stays serving throughout: wake-on-demand and the LLM proxy remain available across the upgrade.
 
@@ -278,7 +277,7 @@ kubectl apply --server-side --force-conflicts -f charts/kaalm/crds/
 
 ### CRD schema evolution
 
-Within a served version, changes are additive only, and anything breaking ships as a new API version with conversion in both directions, never in place. The full rule set, the `v1alpha1` window, and the conversion mechanics are on [Deprecation policy](api-versioning.md#deprecation-policy).
+Within a served version, changes are additive only, and anything breaking ships as a new API version served alongside, with conversion in both directions, never in place. The full rule set is on [Deprecation policy](api-versioning.md#deprecation-policy).
 
 ### Helm chart upgrades
 
@@ -309,7 +308,7 @@ No Pod restarts are needed at any step, in either tier.
 
 ### Breaking spec changes
 
-A breaking spec change ships as a new API version with conversion, so an upgrade never replaces existing objects ([Deprecation policy](api-versioning.md#deprecation-policy)). The replace-not-migrate procedure (let in-flight AgentTasks run to completion or delete them, hibernate or delete Agents, apply the new CRDs, then re-apply updated manifests) is the path for a fresh install or a rollback across the `v1alpha1` to `v1beta1` storage-version change ([Upgrading in place](api-versioning.md#upgrading-in-place)).
+A breaking spec change ships as a new API version with conversion, so an upgrade never replaces existing objects ([Deprecation policy](api-versioning.md#deprecation-policy)). The replace-not-migrate procedure (let in-flight AgentTasks run to completion or delete them, hibernate or delete Agents, apply the new CRDs, then re-apply updated manifests) is the path for a fresh install, and for a rollback across a change of storage version, because a chart whose CRDs do not know the stored version cannot serve those objects ([Storage-version migration](api-versioning.md#storage-version-migration)).
 
 Agent state survives a replace through the PVC path: `pvcRetention: Retain` on delete, or snapshot and remount through [`persistence.existingClaim`](../resources/agent.md).
 

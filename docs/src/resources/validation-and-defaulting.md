@@ -14,7 +14,7 @@ A check is enforced in one of three places:
 | Apply time, CEL | `x-kubernetes-validations` in the CRD schema | The write is rejected |
 | Reconcile time | A reconciler reads the stored object | Status on the object |
 
-The line between apply time and reconcile time is etcd. A rule that spans two resources cannot be CEL, because CEL on one object cannot read another; a rule that needs `metadata.namespace` cannot be CEL either, because CRD validation reaches only `metadata.name` and `metadata.generateName`; and a rule whose violation must surface on existing objects as recoverable status is placed at reconcile time on purpose. The conversion webhook translates between API versions and enforces nothing ([API versioning and deprecation](../operations/api-versioning.md)).
+The line between apply time and reconcile time is etcd. A rule that spans two resources cannot be CEL, because CEL on one object cannot read another; a rule that needs `metadata.namespace` cannot be CEL either, because CRD validation reaches only `metadata.name` and `metadata.generateName`; and a rule whose violation must surface on existing objects as recoverable status is placed at reconcile time on purpose.
 
 ![Flow from a kubectl apply through the apiserver to etcd and the reconciler. The apiserver evaluates the schema and CEL rules and rejects a violating write, so the object never exists. A stored object is read by the reconciler, which applies the reconcile-time rules and reports on status.](../diagrams/validation-enforcement.svg)
 

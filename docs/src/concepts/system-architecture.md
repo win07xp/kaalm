@@ -19,7 +19,7 @@ In the figure, provider and tool-server egress leaves only from the gateway. For
 
 The control plane is the controller, the API server, and the objects the controller materializes.
 
-![The control plane. The controller's six reconcilers watch and reconcile through the Kubernetes API, which creates the child objects in user namespaces. The API server calls the controller's conversion webhook on :9444 for v1alpha1 objects. The gateway calls the controller's activator on :9443 over mTLS, and the reconcilers call the gateway's activity and channel-health endpoints on :8443 over mTLS.](../diagrams/system-control-plane.svg)
+![The control plane. The controller's six reconcilers watch and reconcile through the Kubernetes API, which creates the child objects in user namespaces. The gateway calls the controller's activator on :9443 over mTLS, and the reconcilers call the gateway's activity and channel-health endpoints on :8443 over mTLS.](../diagrams/system-control-plane.svg)
 
 The child objects are the Pod, PVC, Service, ServiceAccount, NetworkPolicy, and Certificate per Agent, the same set less the Service per AgentTask, plus the per-channel and per-task Roles and RoleBindings and the task completion ConfigMap ([Child resources](../runtime/child-resources.md)).
 
@@ -75,11 +75,11 @@ The controller runs as a Deployment in `kaalm-system` and hosts six reconcilers,
 | [AgentClass](../controller/reconcilers/agentclass.md) | AgentClass | Validates references and egress entries and counts the workloads in use |
 | [AgentChannel](../controller/reconcilers/agentchannel.md) | AgentChannel | Validates the channel and sets `Ready`, which decides whether the channel receives traffic; reduces the gateway's health observations into `PlatformConnected` |
 
-Leader election is on, so the reconcilers run on one replica and the Deployment survives a replica loss. Three listeners run on every replica, leader or not: the activator on `:9443`, the CRD conversion webhook on `:9444`, and metrics on `:8080`; a plain-HTTP probe listener on `:8081` serves the kubelet ([The binary](../controller/overview.md#the-binary)).
+Leader election is on, so the reconcilers run on one replica and the Deployment survives a replica loss. Two listeners run on every replica, leader or not: the activator on `:9443` and metrics on `:8080`; a plain-HTTP probe listener on `:8081` serves the kubelet ([The binary](../controller/overview.md#the-binary)).
 
 ### No admission webhooks
 
-The controller hosts no validating or mutating webhook. Field-level checks are CRD schema and CEL, and cross-resource checks run at reconcile time and surface as status ([Validation and defaulting](../resources/validation-and-defaulting.md#cross-resource-validation)). The conversion webhook on `:9444` translates between API versions and enforces nothing ([No admission webhooks](../controller/overview.md#no-admission-webhooks)).
+The controller hosts no validating, mutating, or conversion webhook. Field-level checks are CRD schema and CEL, and cross-resource checks run at reconcile time and surface as status ([Validation and defaulting](../resources/validation-and-defaulting.md#cross-resource-validation)). See [No admission webhooks](../controller/overview.md#no-admission-webhooks).
 
 ### The activator endpoint
 

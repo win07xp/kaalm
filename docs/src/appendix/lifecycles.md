@@ -32,7 +32,7 @@ ModelProvider carries one state machine, per namespace and period: the budget st
 | The per-Agent serving certificate and the per-AgentTask client certificate | [Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate), [Lifecycle of an AgentTask TLS client certificate](../security/tls.md#lifecycle-of-an-agenttask-tls-client-certificate) |
 | The LLM API key, the tool server credential, and the channel credential | [Credential handling](../security/credentials.md) |
 | Console login sessions, with the five-minute re-review | [Authentication](../console/overview.md#authentication) |
-| Storage-version migration, once per leader term | [Storage-version migration](../operations/api-versioning.md#storage-version-migration) |
+| Storage-version migration: at leader start, then every ten minutes | [Storage-version migration](../operations/api-versioning.md#storage-version-migration) |
 
 ## How the machines are enforced
 
