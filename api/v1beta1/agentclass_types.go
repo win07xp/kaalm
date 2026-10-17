@@ -300,5 +300,5 @@ type AgentClassList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&AgentClass{}, &AgentClassList{})
+	knownTypes = append(knownTypes, &AgentClass{}, &AgentClassList{})
 }

@@ -269,5 +269,5 @@ type AgentChannelList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&AgentChannel{}, &AgentChannelList{})
+	knownTypes = append(knownTypes, &AgentChannel{}, &AgentChannelList{})
 }

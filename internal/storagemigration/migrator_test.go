@@ -104,7 +104,7 @@ func runSuite(m *testing.M) int {
 	srv := webhook.NewServer(webhook.Options{
 		Host: whOpts.LocalServingHost, Port: whOpts.LocalServingPort, CertDir: whOpts.LocalServingCertDir,
 	})
-	srv.Register("/convert", webhookconversion.NewWebhookHandler(testScheme))
+	srv.Register("/convert", webhookconversion.NewWebhookHandler(testScheme, webhookconversion.NewRegistry()))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {

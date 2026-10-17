@@ -150,5 +150,5 @@ type ToolProviderList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&ToolProvider{}, &ToolProviderList{})
+	knownTypes = append(knownTypes, &ToolProvider{}, &ToolProviderList{})
 }

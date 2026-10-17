@@ -70,7 +70,8 @@ func start(t *testing.T, g Group, handler http.HandlerFunc) *harness {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-h.done:
+		case err := <-h.done:
+			_ = err // a test that cares checks Serve's error through wait
 		case <-time.After(15 * time.Second):
 			t.Error("Serve did not return")
 		}
@@ -182,8 +183,8 @@ func TestGroup_WaitsForInFlightRequests(t *testing.T) {
 	h.drain()
 
 	select {
-	case <-h.done:
-		t.Fatal("Serve returned while a request was in flight")
+	case err := <-h.done:
+		t.Fatalf("Serve returned (%v) while a request was in flight", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(release)

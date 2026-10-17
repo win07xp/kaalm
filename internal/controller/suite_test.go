@@ -291,7 +291,7 @@ func runSuite(m *testing.M) int {
 	if err != nil {
 		return setupFailed("manager", err)
 	}
-	mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(scheme))
+	mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(scheme, webhookconversion.NewRegistry()))
 
 	// Recoverable Ready=False checks poll fast in tests (production default is
 	// 30s).

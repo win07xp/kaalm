@@ -513,7 +513,7 @@ func desiredCertificate(agent *kaalmv1beta1.Agent, lifetime CertLifetime) *cmapi
 		ObjectMeta: metav1.ObjectMeta{Name: agentCertificateName(name), Namespace: ns},
 		Spec: cmapi.CertificateSpec{
 			SecretName: certificateSecretName(name, agent.UID),
-			IssuerRef:  cmmeta.ObjectReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
+			IssuerRef:  cmmeta.IssuerReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
 			DNSNames: []string{
 				fmt.Sprintf("%s.%s.svc.cluster.local", name, ns),
 				fmt.Sprintf("%s.%s.svc", name, ns),

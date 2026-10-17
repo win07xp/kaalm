@@ -68,7 +68,7 @@ func TestFuzzRoundTripSpokeHubSpoke(t *testing.T) {
 		t.Run(pair.kind, func(t *testing.T) {
 			for i := 0; i < fuzzIterations; i++ {
 				fuzzed := pair.spoke()
-				fz.Fuzz(fuzzed)
+				fz.Fill(fuzzed)
 				fuzzed.GetObjectKind().SetGroupVersionKind(GroupVersion.WithKind(pair.kind))
 				src := pair.spoke()
 				jsonCopyT(t, fuzzed, src)
@@ -94,7 +94,7 @@ func TestFuzzRoundTripHubSpokeHub(t *testing.T) {
 		t.Run(pair.kind, func(t *testing.T) {
 			for i := 0; i < fuzzIterations; i++ {
 				fuzzed := pair.hub()
-				fz.Fuzz(fuzzed)
+				fz.Fill(fuzzed)
 				fuzzed.GetObjectKind().SetGroupVersionKind(kaalmv1beta1.GroupVersion.WithKind(pair.kind))
 				src := pair.hub()
 				jsonCopyT(t, fuzzed, src)
@@ -117,7 +117,7 @@ func TestFuzzRoundTripHubSpokeHub(t *testing.T) {
 // (valid ObjectMeta, Time, ManagedFields, resource.Quantity) over both
 // registered versions. The seed is random and logged so a failure can be
 // replayed by hardcoding it.
-func newConversionFuzzer(t *testing.T) (fz interface{ Fuzz(any) }, seed int64) {
+func newConversionFuzzer(t *testing.T) (fz interface{ Fill(any) }, seed int64) {
 	t.Helper()
 	seed = time.Now().UnixNano()
 	t.Logf("fuzz seed %d", seed)
