@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -88,7 +88,7 @@ func TestConvergePod_TLSSecretMismatchReplacesPod(t *testing.T) {
 	agent := tlsDriftAgent()
 	c := slotClient(t, agent)
 	mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls", nil)
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	r := &AgentReconciler{Client: c, Recorder: rec, OperatorNamespace: "kaalm-system"}
 
 	waiting, rejected, err := r.convergePod(ctx, agent, slotClass(nil), tlsDriftEff, "legacy-tls-0f1e2d3c", false)
@@ -140,7 +140,7 @@ func TestConvergePod_TLSSecretMismatchWaitsForSlot(t *testing.T) {
 	holder := slotAgent("holder", kaalmv1beta1.AgentProvisioning, kaalmv1beta1.ReasonReplacing)
 	c := slotClient(t, agent, holder)
 	mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls", nil)
-	r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
 	class := slotClass(ptrIntOrString(intstr.FromInt32(1)))
 	waiting, _, err := r.convergePod(ctx, agent, class, tlsDriftEff, "legacy-tls-0f1e2d3c", false)
@@ -195,7 +195,7 @@ func TestConvergePod_TLSSecretMatchKeepsPod(t *testing.T) {
 			agent := tlsDriftAgent()
 			c := slotClient(t, agent)
 			mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls", tc.mutate)
-			r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+			r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
 			waiting, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff, "legacy-tls", false)
 			if err != nil || waiting {

@@ -27,7 +27,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -228,7 +228,7 @@ func TestDriftSlots_ListError(t *testing.T) {
 func TestDriveHibernating_ClearsDriftWait(t *testing.T) {
 	ag := slotAgent("sleeper", kaalmv1beta1.AgentHibernating, kaalmv1beta1.ReasonReplacementPending)
 	c := slotClient(t, ag)
-	r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
 	if _, err := r.driveHibernating(context.Background(), ag); err != nil {
 		t.Fatal(err)
 	}

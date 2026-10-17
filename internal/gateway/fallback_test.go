@@ -254,3 +254,16 @@ func TestFailClassName(t *testing.T) {
 		}
 	}
 }
+
+// A fallback-walk Event on the primary names the candidate as its related
+// object, and names none when the primary is the candidate.
+func TestFallbackCandidate(t *testing.T) {
+	primary := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1ObjectMeta("primary")}
+	backup := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1ObjectMeta("backup")}
+	if got := fallbackCandidate(primary, backup); got != backup {
+		t.Errorf("fallbackCandidate(primary, backup) = %v, want backup", got)
+	}
+	if got := fallbackCandidate(primary, primary); got != nil {
+		t.Errorf("fallbackCandidate(primary, primary) = %v, want nil", got)
+	}
+}

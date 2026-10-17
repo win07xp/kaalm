@@ -21,7 +21,7 @@ import (
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -93,7 +93,7 @@ func TestOwnStatusWrites_ModelProvider(t *testing.T) {
 		WithObjects(mp, providerKey("own-write-mp")).
 		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}).Build()
 	r := &ModelProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace,
+		Client: c, Recorder: events.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace,
 		Health: newFakeHealth(),
 	}
 	expectOwnStatusWriteSkipped(t, c, r.ownWrites.skipOwn(), mp,
@@ -109,7 +109,7 @@ func TestOwnStatusWrites_ToolProvider(t *testing.T) {
 	health := newFakeToolHealth()
 	health.set(tp.Name, ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true}})
 	r := &ToolProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace,
+		Client: c, Recorder: events.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace,
 		Health: health,
 	}
 	expectOwnStatusWriteSkipped(t, c, r.ownWrites.skipOwn(), tp,
@@ -145,7 +145,7 @@ func TestOwnStatusWrites_ToolProviderHeldDelete(t *testing.T) {
 	tp := eventsToolProvider("own-write-held-tp")
 	tp.DeletionTimestamp = &now
 	c := heldDeleteClient(t, tp.Name, tp)
-	r := &ToolProviderReconciler{Client: c, Recorder: record.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace}
+	r := &ToolProviderReconciler{Client: c, Recorder: events.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace}
 	get := func() *kaalmv1beta1.ToolProvider {
 		t.Helper()
 		var got kaalmv1beta1.ToolProvider

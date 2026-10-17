@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -396,7 +396,7 @@ func TestModelProvider_FailedCheckStillReducesBudget(t *testing.T) {
 				WithObjects(objs...).WithStatusSubresource(mp).Build()
 			health := newFakeHealth()
 			r := &ModelProviderReconciler{
-				Client: c, Recorder: record.NewFakeRecorder(16),
+				Client: c, Recorder: events.NewFakeRecorder(16),
 				OperatorNamespace: testOperatorNamespace, Health: health,
 			}
 			res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: name}})
@@ -422,7 +422,7 @@ func TestModelProvider_FailedCheckStillReducesBudget(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 			WithObjects(mp, gw).WithStatusSubresource(mp).Build()
 		r := &ModelProviderReconciler{
-			Client: c, Recorder: record.NewFakeRecorder(16),
+			Client: c, Recorder: events.NewFakeRecorder(16),
 			OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
 		}
 		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: name}})
@@ -719,7 +719,7 @@ func TestModelProvider_HeldDeleteStillReducesBudget(t *testing.T) {
 		Reason: "GatewayUnavailable", Message: "no gateway", LastTransitionTime: now,
 	})
 	c := heldDeleteClient(t, name, mp, misconfiguredBudgetObjects(name, period)...)
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	r := &ModelProviderReconciler{
 		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
 	}

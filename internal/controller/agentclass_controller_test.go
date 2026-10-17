@@ -25,7 +25,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -81,7 +81,7 @@ func TestAgentClass_ProviderReadErrorFailsThePass(t *testing.T) {
 					return c.Get(ctx, key, obj, opts...)
 				},
 			}).Build()
-			rec := record.NewFakeRecorder(8)
+			rec := events.NewFakeRecorder(8)
 			r := &AgentClassReconciler{Client: c, Recorder: rec}
 
 			_, err := r.Reconcile(ctxT(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}})
@@ -110,7 +110,7 @@ func TestAgentClass_ProviderReadErrorFailsThePass(t *testing.T) {
 
 // reconcileClass runs one AgentClassReconciler pass over the named class and
 // returns the stored class.
-func reconcileClass(t *testing.T, c client.Client, rec *record.FakeRecorder, name string) *kaalmv1beta1.AgentClass {
+func reconcileClass(t *testing.T, c client.Client, rec *events.FakeRecorder, name string) *kaalmv1beta1.AgentClass {
 	t.Helper()
 	r := &AgentClassReconciler{Client: c, Recorder: rec}
 	if _, err := r.Reconcile(ctxT(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
@@ -133,7 +133,7 @@ func TestAgentClass_MalformedNamespacePatternIsNotReady(t *testing.T) {
 	}}
 	ac.Spec.AllowedNamespaces = []string{"team-a", "team-["}
 	c := classClientBuilder(t, ac).Build()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 
 	var events []string
 	for range 2 {
@@ -176,7 +176,7 @@ func TestAgentClass_MalformedImagePatternIsNotReady(t *testing.T) {
 	}}
 	ac.Spec.Image.AllowedImages = []string{"registry.test/agents/*", "registry.test/["}
 	c := classClientBuilder(t, ac).Build()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 
 	var events []string
 	for range 2 {
@@ -256,7 +256,7 @@ func TestAgentClass_ImagePatternReasonPrecedence(t *testing.T) {
 			}}
 			ac.Spec.Image.AllowedImages = []string{"["}
 			tc.set(&ac.Spec)
-			got := reconcileClass(t, classClientBuilder(t, ac).Build(), record.NewFakeRecorder(16), name)
+			got := reconcileClass(t, classClientBuilder(t, ac).Build(), events.NewFakeRecorder(16), name)
 			ready := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
 			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.reason {
 				t.Fatalf("Ready = %+v, want False/%s", ready, tc.reason)
@@ -309,7 +309,7 @@ func TestAgentClass_NamespacePatternReasonPrecedence(t *testing.T) {
 			}}
 			ac.Spec.AllowedNamespaces = []string{"["}
 			tc.set(&ac.Spec)
-			got := reconcileClass(t, classClientBuilder(t, ac).Build(), record.NewFakeRecorder(16), name)
+			got := reconcileClass(t, classClientBuilder(t, ac).Build(), events.NewFakeRecorder(16), name)
 			ready := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
 			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.reason {
 				t.Fatalf("Ready = %+v, want False/%s", ready, tc.reason)
@@ -333,7 +333,7 @@ func TestAgentClass_UnchangedPassSkipsStatusWrite(t *testing.T) {
 	ac.Spec.AllowedProviders = []kaalmv1beta1.LocalObjectReference{{Name: "ac-no-op-missing"}}
 	writes := &statusWrites{}
 	c := classClientBuilder(t, ac).WithInterceptorFuncs(writes.funcs()).Build()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 
 	first := reconcileClass(t, c, rec, name)
 	second := reconcileClass(t, c, rec, name)

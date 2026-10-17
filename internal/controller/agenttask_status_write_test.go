@@ -25,7 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -66,7 +66,7 @@ func TestDriveProvisioning_WaitingRecheckSkipsUnchangedStatus(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(append(objs, task)...).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(writes.funcs()).Build()
-			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(16)}
+			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(16)}
 			class := &kaalmv1beta1.AgentClass{}
 
 			for range 2 {
@@ -129,7 +129,7 @@ func TestAgentTask_HeldRecheckSkipsUnchangedStatus(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(writes.funcs()).Build()
-			rec := record.NewFakeRecorder(16)
+			rec := events.NewFakeRecorder(16)
 			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
 
 			for range 3 {
@@ -161,7 +161,7 @@ func TestMarkTaskNotReady_StaleCopySkipsDuplicateEvent(t *testing.T) {
 	task := restoreTask("stale-held", kaalmv1beta1.TaskRunning, false, kaalmv1beta1.ReasonSecretNotOptedIn)
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
 	const msg = `imagePullSecret "pull" missing in namespace "default"`
 

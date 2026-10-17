@@ -763,6 +763,9 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 			if len(capture.reasons) != 1 || capture.reasons[0] != kaalmv1beta1.ReasonCredentialsInvalid {
 				t.Fatalf("event reasons = %v, want one %s", capture.reasons, kaalmv1beta1.ReasonCredentialsInvalid)
 			}
+			if capture.actions[0] != kaalmv1beta1.ActionCallTool {
+				t.Errorf("event action = %q, want %q", capture.actions[0], kaalmv1beta1.ActionCallTool)
+			}
 			tp, ok := capture.objects[0].(*kaalmv1beta1.ToolProvider)
 			if !ok || tp.Name != "search" {
 				t.Fatalf("event object = %#v, want ToolProvider search", capture.objects[0])

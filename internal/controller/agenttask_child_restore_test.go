@@ -36,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -95,7 +95,7 @@ func restoreReconciler(t *testing.T, objs ...client.Object) (*AgentTaskReconcile
 	t.Helper()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
-	return &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(16)}, c
+	return &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(16)}, c
 }
 
 func storedTask(t *testing.T, c client.Client, task *kaalmv1beta1.AgentTask) *kaalmv1beta1.AgentTask {
@@ -807,7 +807,7 @@ func TestDriveRunning_RestoresMissingChildrenOnly(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
-			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8)}
+			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8)}
 			res, err := r.driveRunning(context.Background(), storedTask(t, c, task), &kaalmv1beta1.AgentClass{}, tc.eff, pod)
 			if err != nil {
 				t.Fatal(err)
@@ -838,7 +838,7 @@ func TestTaskReconcile_ConflictDoesNotStopOtherChildren(t *testing.T) {
 	class := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "restore-class"}}
 	pod := restorePod(t, task, corev1.PodRunning, true)
 	foreign := desiredTaskCertificate(task, CertLifetime{})
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, class, pod, foreign).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
@@ -967,7 +967,7 @@ func TestDriveRunning_RevertsDriftedChildrenOnly(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
-			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8)}
+			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8)}
 			drive := func() {
 				t.Helper()
 				if _, err := r.driveRunning(context.Background(), storedTask(t, c, task),
@@ -1035,7 +1035,7 @@ func TestDriveRunning_LegacyTaskKeepsPolicyEdits(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
-	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8)}
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8)}
 	if _, err := r.driveRunning(context.Background(), storedTask(t, c, task),
 		&kaalmv1beta1.AgentClass{}, effectiveTaskSpec{}, pod); err != nil {
 		t.Fatal(err)
@@ -1171,7 +1171,7 @@ func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
-	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8),
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8),
 		FQDNSupport: func() (bool, error) { return true, nil }}
 	// The class now lists other hosts; the record wins.
 	class := &kaalmv1beta1.AgentClass{}

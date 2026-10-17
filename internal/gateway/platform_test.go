@@ -65,15 +65,19 @@ type eventCapture struct {
 	mu       sync.Mutex
 	messages []string
 	reasons  []string
+	actions  []string
 	objects  []runtime.Object
+	related  []runtime.Object
 }
 
-func (c *eventCapture) Eventf(object runtime.Object, _, reason, messageFmt string, args ...any) {
+func (c *eventCapture) Eventf(regarding, related runtime.Object, _, reason, action, noteFmt string, args ...any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.messages = append(c.messages, fmt.Sprintf(messageFmt, args...))
+	c.messages = append(c.messages, fmt.Sprintf(noteFmt, args...))
 	c.reasons = append(c.reasons, reason)
-	c.objects = append(c.objects, object)
+	c.actions = append(c.actions, action)
+	c.objects = append(c.objects, regarding)
+	c.related = append(c.related, related)
 }
 
 // TestReplyRefused_BoundsEventDetail: a 64 KiB platform error body must not
@@ -98,6 +102,9 @@ func TestReplyRefused_BoundsEventDetail(t *testing.T) {
 	defer capture.mu.Unlock()
 	if len(capture.messages) != 1 {
 		t.Fatalf("events = %d, want 1", len(capture.messages))
+	}
+	if capture.actions[0] != kaalmv1beta1.ActionDeliverReply {
+		t.Errorf("event action = %q, want %q", capture.actions[0], kaalmv1beta1.ActionDeliverReply)
 	}
 	if len(capture.messages[0]) > 1024 {
 		t.Errorf("event detail is %d bytes; the platform body was not truncated", len(capture.messages[0]))

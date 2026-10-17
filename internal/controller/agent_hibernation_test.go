@@ -27,7 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -672,7 +672,7 @@ func TestHandleWake_CountsByTriggerAndClearsBoth(t *testing.T) {
 		}
 		c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 			WithObjects(ag).WithStatusSubresource(ag).Build()
-		r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(8)}
+		r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(8)}
 		before := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.want))
 		if _, err := r.handleWake(ctxT(), ag); err != nil {
 			t.Fatalf("%s: handleWake: %v", name, err)

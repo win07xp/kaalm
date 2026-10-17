@@ -24,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -88,7 +88,7 @@ func scheduledProvider(name string) *kaalmv1beta1.ModelProvider {
 // over a fake client holding objs, counting its status writes.
 func scheduledProviderReconciler(
 	t *testing.T, health ProviderHealthChecker, objs ...client.Object,
-) (*ModelProviderReconciler, *testClock, *statusWrites, *record.FakeRecorder) {
+) (*ModelProviderReconciler, *testClock, *statusWrites, *events.FakeRecorder) {
 	t.Helper()
 	writes := &statusWrites{}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
@@ -97,7 +97,7 @@ func scheduledProviderReconciler(
 		WithInterceptorFuncs(writes.funcs()).
 		Build()
 	clock := newTestClock()
-	rec := record.NewFakeRecorder(32)
+	rec := events.NewFakeRecorder(32)
 	return &ModelProviderReconciler{
 		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health,
 		Clock: clock.now,
@@ -260,7 +260,7 @@ func TestToolProvider_ProbeRunsOnlyWhenDue(t *testing.T) {
 	})
 	clock := newTestClock()
 	r := &ToolProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(10),
+		Client: c, Recorder: events.NewFakeRecorder(10),
 		OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
 	}
 

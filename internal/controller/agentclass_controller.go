@@ -31,7 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -51,7 +51,7 @@ type AgentClassReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
 	claimsWarned claimsWarnings
-	Recorder     record.EventRecorder
+	Recorder     events.EventRecorder
 	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
 	// production passes a shared FQDNProbe. nil means unsupported.
 	FQDNSupport func() (bool, error)
@@ -66,7 +66,7 @@ type AgentClassReconciler struct {
 // +kubebuilder:rbac:groups=kaalm.io,resources=agentclasses/finalizers,verbs=update
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents;agenttasks,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile validates the class and reconciles its status and finalizer.
 func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -136,8 +136,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			fqdnCond.Reason = kaalmv1beta1.ReasonFQDNPolicyUnsupported
 			fqdnCond.Message = "the cluster CNI cannot enforce FQDN egress policies; allowedHosts is ignored"
 			if !apimeta.IsStatusConditionFalse(ac.Status.Conditions, kaalmv1beta1.ConditionFQDNPolicySupported) {
-				warnings = append(warnings, heldEvent{corev1.EventTypeWarning, kaalmv1beta1.ReasonFQDNPolicyUnsupported,
-					"allowedHosts is set but the CNI does not support FQDN egress policies"})
+				warnings = append(warnings, heldEvent{eventType: corev1.EventTypeWarning, reason: kaalmv1beta1.ReasonFQDNPolicyUnsupported, action: kaalmv1beta1.ActionValidate, message: "allowedHosts is set but the CNI does not support FQDN egress policies"})
 			}
 		}
 	} else {
@@ -157,8 +156,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		baseline.Reason = kaalmv1beta1.ReasonBelowRestrictedBaseline
 		baseline.Message = strings.Join(deviations, "; ")
 		if !apimeta.IsStatusConditionFalse(ac.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline) {
-			warnings = append(warnings, heldEvent{corev1.EventTypeWarning, kaalmv1beta1.ReasonBelowRestrictedBaseline,
-				"security block is below the restricted Pod Security Standard: " + baseline.Message})
+			warnings = append(warnings, heldEvent{eventType: corev1.EventTypeWarning, reason: kaalmv1beta1.ReasonBelowRestrictedBaseline, action: kaalmv1beta1.ActionValidate, message: "security block is below the restricted Pod Security Standard: " + baseline.Message})
 		}
 	}
 
@@ -173,7 +171,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Reason: kaalmv1beta1.ReasonDeprecatedFieldSet, Message: msg,
 		}
 		if !apimeta.IsStatusConditionTrue(ac.Status.Conditions, kaalmv1beta1.ConditionDeprecatedFields) {
-			warnings = append(warnings, heldEvent{corev1.EventTypeWarning, kaalmv1beta1.ReasonDeprecatedFieldSet, msg})
+			warnings = append(warnings, heldEvent{eventType: corev1.EventTypeWarning, reason: kaalmv1beta1.ReasonDeprecatedFieldSet, action: kaalmv1beta1.ActionValidate, message: msg})
 		}
 	} else if apimeta.FindStatusCondition(ac.Status.Conditions, kaalmv1beta1.ConditionDeprecatedFields) != nil {
 		deprecated = &metav1.Condition{
@@ -257,10 +255,10 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 		for _, w := range warnings {
-			r.Recorder.Event(&ac, w.eventType, w.reason, w.message)
+			r.Recorder.Eventf(&ac, nil, w.eventType, w.reason, w.action, "%s", w.message)
 		}
 		if invalid != nil {
-			r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
+			r.Recorder.Eventf(&ac, nil, corev1.EventTypeWarning, invalid.Reason, kaalmv1beta1.ActionValidate, "%s", invalid.Message)
 		}
 	}
 	// Rule 53 is advisory with no condition, so its rising edge is held in

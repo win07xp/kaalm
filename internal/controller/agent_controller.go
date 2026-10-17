@@ -31,8 +31,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -78,7 +79,7 @@ type AgentReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
 	claimsWarned claimsWarnings
-	Recorder     record.EventRecorder
+	Recorder     events.EventRecorder
 	// OperatorNamespace hosts the gateway and controller (kaalm-system).
 	// Agents in this namespace are rejected to protect SAN integrity.
 	OperatorNamespace string
@@ -378,7 +379,7 @@ func (r *AgentReconciler) childBlocked(
 	msg := cc.Error()
 	if prev := apimeta.FindStatusCondition(before.Conditions, kaalmv1beta1.ConditionReady); prev == nil ||
 		prev.Reason != kaalmv1beta1.ReasonChildConflict || prev.Message != msg {
-		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
+		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, kaalmv1beta1.ActionClaimChild, cc.Object, msg)
 	}
 	r.setReady(agent, false, kaalmv1beta1.ReasonChildConflict, msg)
 	if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
@@ -433,7 +434,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		if err := r.writeStatus(ctx, agent); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonWoken, "waking from hibernation")
+		r.Recorder.Eventf(agent, nil, corev1.EventTypeNormal, kaalmv1beta1.ReasonWoken, kaalmv1beta1.ActionWake, "waking from hibernation")
 		wakesTotal.WithLabelValues(agent.Namespace, trigger).Inc()
 		clearWake(agent)
 		if err := r.Update(ctx, agent); err != nil {
@@ -450,7 +451,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		return ctrl.Result{}, err
 	}
 	if phase != kaalmv1beta1.AgentResuming {
-		r.Recorder.Event(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonWakeIgnored,
+		r.Recorder.Eventf(agent, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonWakeIgnored, kaalmv1beta1.ActionWake,
 			"wake annotation observed on non-Hibernated agent; ignored")
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -480,7 +481,7 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 	agent.Status.HibernatedAt = &now
 	agent.Status.PodName = ""
 	r.setReady(agent, false, kaalmv1beta1.ReasonHibernated, "Pod deleted; PVC retained for wake")
-	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated,
+	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated, kaalmv1beta1.ActionHibernate, nil,
 		"hibernated: Pod deleted, state retained")
 	if err := r.writeStatus(ctx, agent); err != nil {
 		return ctrl.Result{}, err
@@ -796,7 +797,7 @@ func (r *AgentReconciler) enterOrStayDegraded(
 	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
 		agent.Status.PreDegradedPhase = agent.Status.Phase
 		r.setPhase(agent, kaalmv1beta1.AgentDegraded, first.Reason)
-		r.events.add(agent, corev1.EventTypeWarning, first.Reason, first.Message)
+		r.events.add(agent, corev1.EventTypeWarning, first.Reason, kaalmv1beta1.ActionValidate, nil, first.Message)
 	}
 	r.setReady(agent, false, first.Reason, first.Message)
 	return r.writeStatus(ctx, agent)
@@ -816,6 +817,8 @@ func (r *AgentReconciler) enterOrStayDegraded(
 // be read.
 func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *kaalmv1beta1.Agent) {
 	var blocking []string
+	// related is the blocking provider when exactly one blocks.
+	var related runtime.Object
 	for _, p := range agent.Spec.Providers {
 		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: p.ProviderRef.Name}, &mp); err != nil {
@@ -824,6 +827,7 @@ func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *k
 		for _, u := range mp.Status.BudgetUsage {
 			if u.Namespace == agent.Namespace && u.State == kaalmv1beta1.BudgetStateBlocked {
 				blocking = append(blocking, mp.Name)
+				related = mp.DeepCopy()
 				break
 			}
 		}
@@ -838,7 +842,10 @@ func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *k
 	// pass in between re-reads the same state.
 	if prev := apimeta.FindStatusCondition(agent.Status.Conditions, kaalmv1beta1.ConditionDegraded); prev == nil ||
 		prev.Status != metav1.ConditionTrue || prev.Reason != kaalmv1beta1.ReasonBudgetExhausted {
-		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonBudgetExhausted, msg)
+		if len(blocking) > 1 {
+			related = nil
+		}
+		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonBudgetExhausted, kaalmv1beta1.ActionCheckBudget, related, msg)
 	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
 		Type:               kaalmv1beta1.ConditionDegraded,
@@ -1145,8 +1152,8 @@ func (r *AgentReconciler) convergePod(
 	// Involuntary disruption: a terminal Pod is never resurrected by the
 	// kubelet under restartPolicy Always, so delete it and re-provision.
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-		r.Recorder.Event(agent, corev1.EventTypeWarning, "PodDisrupted",
-			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
+		r.Recorder.Eventf(agent, pod, corev1.EventTypeWarning, "PodDisrupted", kaalmv1beta1.ActionReplacePod,
+			"Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase)
 		r.setPhase(agent, podPendingPhase(agent), "replacing a terminal Pod")
 		ready(false, "PodDisrupted", "replacing a terminal Pod")
 		return false, false, r.Delete(ctx, pod)
@@ -1174,7 +1181,7 @@ func (r *AgentReconciler) convergePod(
 			return false, false, err
 		}
 		if replace {
-			r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift", cause+"; replacing the Pod")
+			r.Recorder.Eventf(agent, pod, corev1.EventTypeNormal, "SpecDrift", kaalmv1beta1.ActionReplacePod, "%s; replacing the Pod", cause)
 			return false, false, r.Delete(ctx, pod)
 		}
 		waiting = true
@@ -1269,7 +1276,7 @@ func (r *AgentReconciler) admitDriftReplacement(
 		}
 		if !granted {
 			if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacementPending {
-				r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonSpecDriftPending,
+				r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonSpecDriftPending, kaalmv1beta1.ActionReplacePod, nil,
 					cause+"; waiting for a free maxUnavailableOnDrift slot")
 			}
 			r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacementPending,
@@ -1463,7 +1470,7 @@ func (r *AgentReconciler) setPhase(agent *kaalmv1beta1.Agent, phase kaalmv1beta1
 	if why != "" {
 		msg += ": " + why
 	}
-	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged, msg)
+	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged, string(phase), nil, msg)
 }
 
 // markAgentNotReady sets Ready=False for a reconcile-time validation failure
@@ -1473,7 +1480,7 @@ func (r *AgentReconciler) setPhase(agent *kaalmv1beta1.Agent, phase kaalmv1beta1
 // as the problem lasts.
 func (r *AgentReconciler) markAgentNotReady(agent *kaalmv1beta1.Agent, reason, msg string) {
 	if readyFalseIsNew(agent.Status.Conditions, reason) {
-		r.events.add(agent, corev1.EventTypeWarning, reason, msg)
+		r.events.add(agent, corev1.EventTypeWarning, reason, notReadyAction(reason), nil, msg)
 	}
 	r.setReady(agent, false, reason, msg)
 }

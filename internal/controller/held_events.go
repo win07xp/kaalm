@@ -19,13 +19,17 @@ package controller
 import (
 	"sync"
 
-	"k8s.io/client-go/tools/record"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // heldEvent is one Event waiting for its status write.
 type heldEvent struct {
-	eventType, reason, message string
+	eventType, reason, action, message string
+	related                            runtime.Object
 }
 
 // heldEvents buffers the events a reconcile pass derives from a status change
@@ -41,13 +45,13 @@ type heldEvents struct {
 	m  map[client.Object][]heldEvent
 }
 
-func (h *heldEvents) add(obj client.Object, eventType, reason, message string) {
+func (h *heldEvents) add(obj client.Object, eventType, reason, action string, related runtime.Object, message string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.m == nil {
 		h.m = map[client.Object][]heldEvent{}
 	}
-	h.m[obj] = append(h.m[obj], heldEvent{eventType: eventType, reason: reason, message: message})
+	h.m[obj] = append(h.m[obj], heldEvent{eventType: eventType, reason: reason, action: action, related: related, message: message})
 }
 
 // take removes and returns the events held for obj.
@@ -63,12 +67,29 @@ func (h *heldEvents) take(obj client.Object) []heldEvent {
 // the pass's status write succeeded. A failed write drops them, and so does a
 // pass that found its status already stored, because the pass that stored it
 // sent them. rec may be nil.
-func (h *heldEvents) flush(rec record.EventRecorder, obj client.Object, written bool) {
+func (h *heldEvents) flush(rec events.EventRecorder, obj client.Object, written bool) {
 	evs := h.take(obj)
 	if !written || rec == nil {
 		return
 	}
 	for _, ev := range evs {
-		rec.Event(obj, ev.eventType, ev.reason, ev.message)
+		rec.Eventf(obj, ev.related, ev.eventType, ev.reason, ev.action, "%s", ev.message)
 	}
+}
+
+// notReadyAction is the Event action for a Ready=False reason: what the
+// controller was doing when the reason appeared. Reasons that come from a
+// check of the spec or of a referenced object are Validate.
+func notReadyAction(reason string) string {
+	switch reason {
+	case kaalmv1beta1.ReasonPodCreateRejected:
+		return kaalmv1beta1.ActionCreatePod
+	case kaalmv1beta1.ReasonChildWriteRejected:
+		return kaalmv1beta1.ActionWriteChild
+	case kaalmv1beta1.ReasonChildConflict:
+		return kaalmv1beta1.ActionClaimChild
+	case kaalmv1beta1.ReasonCredentialsInvalid:
+		return kaalmv1beta1.ActionProbe
+	}
+	return kaalmv1beta1.ActionValidate
 }

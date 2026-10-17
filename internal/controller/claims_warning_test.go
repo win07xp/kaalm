@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -37,7 +37,7 @@ func claimsTestAgent() *kaalmv1beta1.Agent {
 	return &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "claims", Namespace: "default", UID: "claims-uid"}}
 }
 
-func resourceClaimsEvents(rec *record.FakeRecorder) []string {
+func resourceClaimsEvents(rec *events.FakeRecorder) []string {
 	return withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonResourceClaimsIgnored)
 }
 
@@ -45,7 +45,7 @@ func resourceClaimsEvents(rec *record.FakeRecorder) []string {
 // not on every pass, and again after they are removed and added back.
 func TestClaimsWarnings_EmitsOnFirstAppearanceAndChange(t *testing.T) {
 	var w claimsWarnings
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	obj := claimsTestAgent()
 	gpu := []corev1.ResourceClaim{{Name: "gpu"}}
 
@@ -76,7 +76,7 @@ func TestClaimsWarnings_EmitsOnFirstAppearanceAndChange(t *testing.T) {
 // no-op that records nothing.
 func TestClaimsWarnings_ForgetAndNilRecorder(t *testing.T) {
 	var w claimsWarnings
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	obj := claimsTestAgent()
 	gpu := []corev1.ResourceClaim{{Name: "gpu"}}
 
@@ -106,7 +106,7 @@ func TestAgentClass_ResourceClaimsWarningFollowsStatusWrite(t *testing.T) {
 	}
 	conflicts := &statusConflicts{}
 	c := classClientBuilder(t, ac).WithInterceptorFuncs(conflicts.funcs()).Build()
-	rec := record.NewFakeRecorder(16)
+	rec := events.NewFakeRecorder(16)
 	r := &AgentClassReconciler{Client: c, Recorder: rec, FQDNSupport: func() (bool, error) { return false, nil }}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "claims-class"}}
 
@@ -178,7 +178,7 @@ func TestAgentTask_TerminalTaskDoesNotWarnAboutClaims(t *testing.T) {
 		Status: kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.TaskSucceeded, CompletionTime: &done},
 	}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).WithStatusSubresource(task).Build()
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &AgentTaskReconciler{Client: c, Recorder: rec}
 	r.claimsWarned.sent = map[types.UID]string{task.UID: "earlier"}
 	if _, err := r.Reconcile(context.Background(),

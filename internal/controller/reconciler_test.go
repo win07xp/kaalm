@@ -33,7 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -1097,7 +1097,7 @@ func costSanityFindings(t *testing.T, models []kaalmv1beta1.ModelProviderModel, 
 			AtPercent: int32(80 + i), Action: "degrade", DegradeTo: &targets[i],
 		})
 	}
-	rec := record.NewFakeRecorder(4)
+	rec := events.NewFakeRecorder(4)
 	r := &ModelProviderReconciler{Recorder: rec}
 	r.costSanity(mp)
 	return apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
@@ -1167,7 +1167,7 @@ func TestCostSanity_ComparesExactDecimals(t *testing.T) {
 }
 
 func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
-	rec := record.NewFakeRecorder(4)
+	rec := events.NewFakeRecorder(4)
 	r := &ModelProviderReconciler{Recorder: rec}
 	to := "pricey"
 	mp := &kaalmv1beta1.ModelProvider{
@@ -1196,7 +1196,7 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 	}
 
 	// Degrading to the cheapest emits nothing.
-	rec2 := record.NewFakeRecorder(4)
+	rec2 := events.NewFakeRecorder(4)
 	r2 := &ModelProviderReconciler{Recorder: rec2}
 	cheap := "cheap"
 	mp.Spec.Budget.Policies[0].DegradeTo = &cheap
@@ -1214,7 +1214,7 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 // does not emit an event on every reconcile pass. Each call stands for a pass
 // whose status write succeeded, so the held event is flushed after it.
 func TestCostSanity_RisingEdgeOnly(t *testing.T) {
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &ModelProviderReconciler{Recorder: rec}
 	to := "pricey"
 	mp := &kaalmv1beta1.ModelProvider{
@@ -1271,7 +1271,7 @@ func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 // the condition stays True updates the message and sends nothing, like
 // MaxOutputTokensUnset.
 func TestCostSanity_OneEventListsEveryFinding(t *testing.T) {
-	rec := record.NewFakeRecorder(8)
+	rec := events.NewFakeRecorder(8)
 	r := &ModelProviderReconciler{Recorder: rec}
 	pricey, mid, cheap := "pricey", "mid", "cheap"
 	mp := &kaalmv1beta1.ModelProvider{

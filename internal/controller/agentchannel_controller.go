@@ -35,7 +35,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,7 +94,7 @@ type SecretChangeSource interface {
 // docs/src/controller/reconcilers/agentchannel.md.
 type AgentChannelReconciler struct {
 	client.Client
-	Recorder          record.EventRecorder
+	Recorder          events.EventRecorder
 	OperatorNamespace string
 	// SecretReader reads Secrets in user namespaces, which the manager's
 	// cache does not hold. In production it is a secretwatch.Reader: one
@@ -386,9 +386,9 @@ func (r *AgentChannelReconciler) noteCallbackResolution(channel *kaalmv1beta1.Ag
 	if host == "" || (seen && last == host) || r.Recorder == nil {
 		return
 	}
-	r.Recorder.Event(channel, corev1.EventTypeWarning, kaalmv1beta1.ReasonCallbackHostUnresolved,
-		fmt.Sprintf("callbackUrl host %q does not resolve; the channel stays Ready and the gateway "+
-			"checks the host again before every callback delivery", host))
+	r.Recorder.Eventf(channel, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonCallbackHostUnresolved, kaalmv1beta1.ActionValidate,
+		"callbackUrl host %q does not resolve; the channel stays Ready and the gateway "+
+			"checks the host again before every callback delivery", host)
 }
 
 // forgetCallbackResolution drops a deleted channel's entry.
@@ -987,7 +987,7 @@ func (r *AgentChannelReconciler) markChannelNotReady(
 		return err
 	}
 	if first && r.Recorder != nil {
-		r.Recorder.Event(channel, corev1.EventTypeWarning, reason, msg)
+		r.Recorder.Eventf(channel, nil, corev1.EventTypeWarning, reason, notReadyAction(reason), "%s", msg)
 	}
 	return r.pruneAsyncConfigMaps(ctx, channel, false)
 }

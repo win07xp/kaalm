@@ -25,7 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -138,7 +138,7 @@ func TestModelProvider_HealthyNotProbedWhenPassEndsEarly(t *testing.T) {
 				WithObjects(objs...).WithStatusSubresource(mp).Build()
 			health := newFakeHealth()
 			r := &ModelProviderReconciler{
-				Client: c, Recorder: record.NewFakeRecorder(10),
+				Client: c, Recorder: events.NewFakeRecorder(10),
 				OperatorNamespace: testOperatorNamespace, Health: health,
 			}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
@@ -180,7 +180,7 @@ func TestModelProvider_NotProbedPassIsStable(t *testing.T) {
 			},
 		}).Build()
 	r := &ModelProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(10),
+		Client: c, Recorder: events.NewFakeRecorder(10),
 		OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mp-np-stable"}}

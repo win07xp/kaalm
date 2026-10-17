@@ -46,7 +46,8 @@ func onceReset() sync.Once { return sync.Once{} }
 // gateway to have one wired.
 type recordingRecorder struct{}
 
-func (*recordingRecorder) Eventf(runtime.Object, string, string, string, ...any) {}
+func (*recordingRecorder) Eventf(runtime.Object, runtime.Object, string, string, string, string, ...any) {
+}
 
 // addBackupProvider adds a fallback provider named "backup" (openai by
 // default) backed by its own upstream, extending the newHarness setup;

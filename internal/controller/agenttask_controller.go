@@ -32,7 +32,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -64,7 +64,7 @@ type AgentTaskReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
 	claimsWarned      claimsWarnings
-	Recorder          record.EventRecorder
+	Recorder          events.EventRecorder
 	OperatorNamespace string
 	// DNS selects the peers of the DNS egress rule on every task NetworkPolicy.
 	DNS DNSSelector
@@ -644,7 +644,7 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	}
 	// After the write that counts the retry, so a pass that lost its write
 	// to a conflict does not report the same retry twice.
-	r.Recorder.Event(task, corev1.EventTypeWarning, reason, retrying)
+	r.Recorder.Eventf(task, nil, corev1.EventTypeWarning, reason, kaalmv1beta1.ActionRetry, "%s", retrying)
 	return r.finishRetry(ctx, task)
 }
 
@@ -718,7 +718,7 @@ func (r *AgentTaskReconciler) settle(
 	if err := r.Status().Update(ctx, task); err != nil {
 		return err
 	}
-	r.Recorder.Event(task, eventType, reason, msg)
+	r.Recorder.Eventf(task, nil, eventType, reason, kaalmv1beta1.ActionSettle, "%s", msg)
 	return nil
 }
 
@@ -1102,7 +1102,7 @@ func (r *AgentTaskReconciler) childBlocked(
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
+		r.Recorder.Eventf(task, cc.Object, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, kaalmv1beta1.ActionClaimChild, "%s", msg)
 	}
 	return heldRequeue(task, r.notReadyRecheckInterval()), nil
 }
@@ -1228,7 +1228,7 @@ func (r *AgentTaskReconciler) markTaskNotReady(
 		return err
 	}
 	if first && wrote && r.Recorder != nil {
-		r.Recorder.Event(task, corev1.EventTypeWarning, reason, msg)
+		r.Recorder.Eventf(task, nil, corev1.EventTypeWarning, reason, notReadyAction(reason), "%s", msg)
 	}
 	return nil
 }

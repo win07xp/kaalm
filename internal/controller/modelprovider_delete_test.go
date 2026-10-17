@@ -29,7 +29,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -91,7 +91,7 @@ func deleteReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Obje
 		WithInterceptorFuncs(funcs).
 		Build()
 	return &ModelProviderReconciler{
-		Client: c, Recorder: record.NewFakeRecorder(32),
+		Client: c, Recorder: events.NewFakeRecorder(32),
 		OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
 	}
 }
