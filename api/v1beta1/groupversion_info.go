@@ -15,9 +15,8 @@ limitations under the License.
 */
 
 // Package v1beta1 contains API Schema definitions for the kaalm v1beta1 API group.
-// It is the hub and storage version since v0.6.0. Its schema is the v1alpha1
-// schema field for field; the reasoning and the deprecation policy are in
-// docs/src/operations/api-versioning.md.
+// It is the only served version and the storage version; the compatibility
+// policy is in docs/src/operations/api-versioning.md.
 // +kubebuilder:object:generate=true
 // +groupName=kaalm.io
 package v1beta1

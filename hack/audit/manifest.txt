@@ -15,6 +15,9 @@
 # moved here. The controller's per-Secret watches were walked against 1.1,
 # 1.7, 3.1 to 3.3, 3.6, 4.8, and 5.5 before this audited commit. 3.6 and
 # 4.8 are new checks that wave added.
+#
+# 3.3 (the CRD conversion listener) is retired: the controller serves no
+# conversion webhook, so there is no surface left to check.
 1.1 internal/gateway/auth.go internal/gateway/tokenauth.go internal/gateway/kubestore.go internal/gateway/server.go internal/gateway/store.go internal/secretwatch/
 1.2 internal/gateway/proxy.go
 1.3 internal/gateway/proxy.go internal/gateway/fallback.go
@@ -33,7 +36,6 @@
 2.6 internal/gateway/user.go
 3.1 internal/gateway/server.go cmd/gateway/main.go internal/gateway/metrics.go internal/gateway/mcpbroker.go charts/kaalm/templates/networkpolicy.yaml
 3.2 internal/controller/activator.go cmd/manager/main.go internal/tlsutil/loader.go
-3.3 cmd/manager/main.go internal/controller/webhookbody.go
 3.4 internal/console/
 3.5 agentruntime/agent.go images/agent-python/kaalm_agent/__main__.py images/agent-python/kaalm_agent/tls.py
 3.6 internal/profiling/ cmd/gateway/main.go cmd/manager/main.go charts/kaalm/templates/networkpolicy.yaml

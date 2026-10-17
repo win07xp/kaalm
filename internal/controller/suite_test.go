@@ -42,10 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
-	webhookconversion "sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/mcp"
 	"github.com/win07xp/kaalm/internal/secretwatch"
@@ -241,17 +238,8 @@ func setupFailed(step string, err error) int {
 // on every path: a setup failure returns instead of panicking, so the
 // kube-apiserver and etcd never outlive the test binary.
 func runSuite(m *testing.M) int {
-	// The scheme holds both API versions so envtest sees every kind as
-	// convertible and installs the conversion webhook into the CRDs, pointed
-	// at the local webhook server below. The reconcilers under test work at
-	// v1beta1, the hub and storage version, exactly as the controller does in
-	// a cluster; conversion_test.go is the one place that writes at v1alpha1
-	// and proves the webhook through the apiserver.
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
 		panic(err)
 	}
 	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
@@ -275,23 +263,16 @@ func runSuite(m *testing.M) int {
 	}
 	defer func() { _ = testEnv.Stop() }()
 
-	whOpts := testEnv.WebhookInstallOptions
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		// The production manager strips managedFields from its cache; tests
 		// run on objects of the same shape.
 		Cache: cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
-		WebhookServer: webhook.NewServer(webhook.Options{
-			Host:    whOpts.LocalServingHost,
-			Port:    whOpts.LocalServingPort,
-			CertDir: whOpts.LocalServingCertDir,
-		}),
 	})
 	if err != nil {
 		return setupFailed("manager", err)
 	}
-	mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(scheme, webhookconversion.NewRegistry()))
 
 	// Recoverable Ready=False checks poll fast in tests (production default is
 	// 30s).
@@ -382,15 +363,6 @@ func runSuite(m *testing.M) int {
 	}()
 	if !mgr.GetCache().WaitForCacheSync(ctx) {
 		return setupFailed("cache sync", errors.New("caches did not sync"))
-	}
-	// conversion_test.go writes at v1alpha1, which converts through the
-	// webhook, so it must be listening before any test runs.
-	started := mgr.GetWebhookServer().StartedChecker()
-	for deadline := time.Now().Add(timeout); started(nil) != nil; {
-		if time.Now().After(deadline) {
-			return setupFailed("conversion webhook server", started(nil))
-		}
-		time.Sleep(50 * time.Millisecond)
 	}
 	testClient = mgr.GetClient()
 	testAPIReader = mgr.GetAPIReader()

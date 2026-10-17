@@ -195,9 +195,8 @@ gateway:
       memory: 512Mi
 
 # NetworkPolicy for the operator's own Pods: default-deny ingress, with the
-# controller's activator, conversion, and probe ports, the gateway's two
-# listeners and probe port, and the console open to the callers that need
-# them. The metrics ports (controller :8080, gateway :9090) are unauthenticated
+# controller's activator and probe ports, the gateway's two listeners and
+# probe port, and the console open to the callers that need them. The metrics ports (controller :8080, gateway :9090) are unauthenticated
 # and label spend by namespace and model, so they open only to metricsFrom.
 # Inert on a CNI that does not enforce NetworkPolicy; set enabled to false to
 # ship no policy at all.

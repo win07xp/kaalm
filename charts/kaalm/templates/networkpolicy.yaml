@@ -29,11 +29,6 @@ spec:
       ports:
         - protocol: TCP
           port: 9443
-    # Conversion webhook: the API server is not a Pod, so any source. The
-    # listener authenticates nothing and converts only what it is sent.
-    - ports:
-        - protocol: TCP
-          port: 9444
     # Kubelet probes.
     - ports:
         - protocol: TCP

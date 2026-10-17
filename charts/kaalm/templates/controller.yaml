@@ -64,8 +64,6 @@ spec:
             - --controller-tls-key=/var/run/kaalm/tls.key
             - --controller-tls-ca=/var/run/kaalm/ca.crt
             - --activator-addr=:9443
-            - --webhook-cert-path=/var/run/kaalm
-            - --webhook-port=9444
             - --max-concurrent-reconciles={{ .Values.controller.maxConcurrentReconciles }}
             - --cert-duration={{ .Values.controller.certificate.duration }}
             - --cert-renew-before={{ .Values.controller.certificate.renewBefore }}
@@ -108,8 +106,6 @@ spec:
           ports:
             - name: activator
               containerPort: 9443
-            - name: conversion
-              containerPort: 9444
             - name: metrics
               containerPort: 8080
             {{- if .Values.controller.pprofPort }}
@@ -189,14 +185,6 @@ spec:
     - name: activator
       port: 9443
       targetPort: 9443
-    # targetPort by name: during a rolling upgrade from a release without
-    # the conversion listener, the old replicas declare no "conversion" port
-    # and so are never endpoints for it; conversions only ever reach a
-    # replica that can answer
-    # (docs/src/operations/api-versioning.md#upgrading-in-place).
-    - name: conversion
-      port: 9444
-      targetPort: conversion
     - name: metrics
       port: 8080
       targetPort: 8080

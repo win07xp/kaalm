@@ -49,10 +49,8 @@ import (
 // It never depends on the manager's cache: the handler writes without
 // reading, and Listen returns a manager.Server, which the manager starts
 // with the health probes, before the caches. Controller readiness includes
-// the activator, and the same readiness covers the conversion webhook that
-// the caches may need in order to sync (an upgrade from before the v1beta1
-// graduation still stores v1alpha1 objects). An activator that waited on
-// the caches would deadlock that upgrade.
+// the activator, so a new replica takes wakes as soon as it is bound, not
+// once its caches sync.
 type ActivatorServer struct {
 	Client            client.Client
 	OperatorNamespace string

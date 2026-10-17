@@ -90,8 +90,8 @@ func TestNetworkPolicy_Defaults(t *testing.T) {
 		activator.From[0].PodSelector.MatchLabels["app.kubernetes.io/component"] != "gateway" {
 		t.Errorf("activator port is not limited to the gateway: %+v", activator)
 	}
-	if r := ruleForPort(nps["kaalm-controller"], 9444); r == nil || len(r.From) != 0 {
-		t.Errorf("conversion port must admit any source: %+v", r)
+	if r := ruleForPort(nps["kaalm-controller"], 9444); r != nil {
+		t.Errorf("no controller listener serves 9444, yet the policy admits it: %+v", r)
 	}
 	cluster := ruleForPort(nps["kaalm-gateway"], 8443)
 	if cluster == nil || len(cluster.From) != 1 || cluster.From[0].NamespaceSelector == nil ||
