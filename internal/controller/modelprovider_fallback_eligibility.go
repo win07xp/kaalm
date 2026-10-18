@@ -197,7 +197,7 @@ const findingsSeparator = "; "
 func addedFindings(prev *metav1.Condition, findings []string) []string {
 	listed := map[string]bool{}
 	if prev != nil && prev.Status == metav1.ConditionTrue && prev.Message != "" {
-		for _, f := range strings.Split(prev.Message, findingsSeparator) {
+		for _, f := range splitFindings(prev.Message) {
 			listed[f] = true
 		}
 	}
@@ -208,4 +208,26 @@ func addedFindings(prev *metav1.Condition, findings []string) []string {
 		}
 	}
 	return added
+}
+
+// splitFindings splits a FallbackIneligible message into its findings. The
+// values in a finding are %q-quoted, and a model id can hold the separator,
+// so a separator inside a quoted value is not a boundary.
+func splitFindings(msg string) []string {
+	var parts []string
+	inQuote := false
+	start := 0
+	for i := 0; i < len(msg); i++ {
+		switch {
+		case inQuote && msg[i] == '\\':
+			i++
+		case msg[i] == '"':
+			inQuote = !inQuote
+		case !inQuote && strings.HasPrefix(msg[i:], findingsSeparator):
+			parts = append(parts, msg[start:i])
+			i += len(findingsSeparator) - 1
+			start = i + 1
+		}
+	}
+	return append(parts, msg[start:])
 }
