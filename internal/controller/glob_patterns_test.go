@@ -119,10 +119,6 @@ func firstTenMsgs(field string) []string {
 	return out
 }
 
-// conditionMessageLimit is the condition schema's maxLength for
-// status.conditions[].message. A longer message fails the whole status write.
-const conditionMessageLimit = 32768
-
 // The worst case for the AgentClass Ready message: both fields hold many long
 // malformed entries made of control bytes, which %q writes as four bytes
 // each. Joined as the reconciler joins them, the list stays under the limit.

@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"net"
 	"slices"
-	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -202,11 +201,12 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Message: "class is valid",
 		})
 	} else {
-		sort.Strings(problems)
-		// The message lists every problem; the reason follows a fixed
-		// precedence: a malformed CIDR (rule 19), then a malformed
-		// allowedNamespaces pattern (rule 51), then a malformed allowedImages
-		// pattern (rule 52), then InvalidReference.
+		// Each list in the message is bounded, and the joined message is cut
+		// at the condition schema's limit. The reason comes from the lists,
+		// not the text, and follows a fixed precedence: a malformed CIDR
+		// (rule 19), then a malformed allowedNamespaces pattern (rule 51),
+		// then a malformed allowedImages pattern (rule 52), then
+		// InvalidReference.
 		reason := kaalmv1beta1.ReasonInvalidReference
 		if len(badImagePatterns) > 0 {
 			reason = kaalmv1beta1.ReasonInvalidImagePattern
@@ -217,7 +217,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if len(badCIDRs) > 0 {
 			reason = kaalmv1beta1.ReasonInvalidCIDR
 		}
-		msg := strings.Join(problems, "; ")
+		msg := joinProblems(problems)
 		// Emitted after the status write below, and only when the reason
 		// first appears.
 		if readyFalseIsNew(ac.Status.Conditions, reason) {
@@ -273,60 +273,74 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	return ctrl.Result{}, r.Update(ctx, ac)
 }
 
-// missingProviders lists the allowedProviders entries with no ModelProvider.
-// Any other read error is returned, so the pass fails and retries with
-// backoff instead of reporting the reference as checked.
+// missingProviders lists the allowedProviders entries with no ModelProvider,
+// bounded as entryList bounds every per-entry list. Any other read error is
+// returned, so the pass fails and retries with backoff instead of reporting
+// the reference as checked.
 func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) ([]string, error) {
-	var missing []string
+	var missing entryList
 	for _, ref := range ac.Spec.AllowedProviders {
 		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &mp); err != nil {
 			if apierrors.IsNotFound(err) {
-				missing = append(missing, fmt.Sprintf("allowedProvider %q does not exist", ref.Name))
+				missing.add(ref.Name, fmt.Sprintf("allowedProvider %s does not exist", quotedEntry(ref.Name)))
 				continue
 			}
 			return nil, fmt.Errorf("get ModelProvider %q: %w", ref.Name, err)
 		}
 	}
-	return missing, nil
+	return missing.messages(
+		"allowedProviders has 1 more missing ModelProvider, not listed",
+		"allowedProviders has %d more missing ModelProviders, not listed"), nil
 }
 
 // missingToolProviders lists the allowedToolProviders entries with no
-// ToolProvider. Any other read error is returned, so the pass fails and
-// retries with backoff instead of reporting the reference as checked.
+// ToolProvider, bounded as entryList bounds every per-entry list. Any other
+// read error is returned, so the pass fails and retries with backoff instead
+// of reporting the reference as checked.
 func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) ([]string, error) {
-	var missing []string
+	var missing entryList
 	for _, ref := range ac.Spec.AllowedToolProviders {
 		var tp kaalmv1beta1.ToolProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &tp); err != nil {
 			if apierrors.IsNotFound(err) {
-				missing = append(missing, fmt.Sprintf("allowedToolProvider %q does not exist", ref.Name))
+				missing.add(ref.Name, fmt.Sprintf("allowedToolProvider %s does not exist", quotedEntry(ref.Name)))
 				continue
 			}
 			return nil, fmt.Errorf("get ToolProvider %q: %w", ref.Name, err)
 		}
 	}
-	return missing, nil
+	return missing.messages(
+		"allowedToolProviders has 1 more missing ToolProvider, not listed",
+		"allowedToolProviders has %d more missing ToolProviders, not listed"), nil
 }
 
+// invalidCIDRs lists the malformed allowedCIDRs entries (rule 19), bounded
+// as entryList bounds every per-entry list.
 func invalidCIDRs(ac *kaalmv1beta1.AgentClass) []string {
-	var bad []string
+	var bad entryList
 	for _, c := range ac.Spec.Network.Egress.AllowedCIDRs {
 		if _, _, err := net.ParseCIDR(c); err != nil {
-			bad = append(bad, fmt.Sprintf("allowedCIDR %q is not a valid CIDR", c))
+			bad.add(c, fmt.Sprintf("allowedCIDR %s is not a valid CIDR", quotedEntry(c)))
 		}
 	}
-	return bad
+	return bad.messages(
+		"allowedCIDRs has 1 more invalid CIDR, not listed",
+		"allowedCIDRs has %d more invalid CIDRs, not listed")
 }
 
+// invalidHosts lists the malformed allowedHosts entries (rule 20), bounded
+// as entryList bounds every per-entry list.
 func invalidHosts(ac *kaalmv1beta1.AgentClass) []string {
-	var bad []string
+	var bad entryList
 	for _, h := range ac.Spec.Network.Egress.AllowedHosts {
 		if errs := validation.IsDNS1123Subdomain(h); len(errs) > 0 {
-			bad = append(bad, fmt.Sprintf("allowedHost %q is not a valid DNS name", h))
+			bad.add(h, fmt.Sprintf("allowedHost %s is not a valid DNS name", quotedEntry(h)))
 		}
 	}
-	return bad
+	return bad.messages(
+		"allowedHosts has 1 more invalid DNS name, not listed",
+		"allowedHosts has %d more invalid DNS names, not listed")
 }
 
 // classUsage counts a class's referrers, and among its Agents those in a

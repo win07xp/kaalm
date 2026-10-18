@@ -102,6 +102,25 @@ func expectGone(t *testing.T, key types.NamespacedName, obj client.Object) {
 	})
 }
 
+// expectClassIndexed waits until the manager's cache lists the class under
+// the provider in index. The reconciler finds referrers in that cache, so a
+// delete sent before the cache holds the class would be released, not held.
+func expectClassIndexed(t *testing.T, index, provider, class string) {
+	t.Helper()
+	eventually(t, func() error {
+		var list kaalmv1beta1.AgentClassList
+		if err := testCache.List(ctxT(), &list, client.MatchingFields{index: provider}); err != nil {
+			return err
+		}
+		for _, ac := range list.Items {
+			if ac.Name == class {
+				return nil
+			}
+		}
+		return errString("AgentClass " + class + " not in the cache yet")
+	})
+}
+
 func TestModelProvider_DeleteBlockedIsVisible(t *testing.T) {
 	mkSecret(t, "db-mp-key")
 	mkProvider(t, "db-mp", func(mp *kaalmv1beta1.ModelProvider) {
@@ -118,6 +137,7 @@ func TestModelProvider_DeleteBlockedIsVisible(t *testing.T) {
 		}
 		return nil
 	})
+	expectClassIndexed(t, IndexAllowedProviders, "db-mp", "db-mp-class")
 
 	deleteObject(t, &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "db-mp"}})
 	expectDeletionBlocked(t, "ModelProvider", "db-mp", func() []metav1.Condition {
@@ -150,6 +170,7 @@ func TestToolProvider_DeleteBlockedIsVisible(t *testing.T) {
 		}
 		return nil
 	})
+	expectClassIndexed(t, IndexAllowedToolProviders, "db-tp", "db-tp-class")
 
 	deleteObject(t, &kaalmv1beta1.ToolProvider{ObjectMeta: metav1.ObjectMeta{Name: "db-tp"}})
 	expectDeletionBlocked(t, "ToolProvider", "db-tp", toolProviderConditions("db-tp"), "AgentClass db-tp-class")

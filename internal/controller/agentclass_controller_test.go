@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -389,4 +390,190 @@ func TestAgentClass_LongPatternListsTurnReadyFalse(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// longEntries returns twelve distinct entries, each fill repeated 4096 times
+// plus its index, after prefix.
+func longEntries(prefix, fill string) []string {
+	out := make([]string, 12)
+	for i := range out {
+		out[i] = prefix + strings.Repeat(fill, 4096) + strconv.Itoa(i)
+	}
+	return out
+}
+
+func localRefs(names []string) []kaalmv1beta1.LocalObjectReference {
+	out := make([]kaalmv1beta1.LocalObjectReference, len(names))
+	for i, n := range names {
+		out[i] = kaalmv1beta1.LocalObjectReference{Name: n}
+	}
+	return out
+}
+
+// classReadyAtGeneration waits for the class's Ready condition to be False
+// with reason at the current generation, and returns it.
+func classReadyAtGeneration(t *testing.T, name, reason string) *metav1.Condition {
+	t.Helper()
+	var ready *metav1.Condition
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentClass
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+			return err
+		}
+		c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != reason ||
+			got.Status.ObservedGeneration != got.Generation {
+			return fmt.Errorf("Ready = %+v, want False/%s at generation %d", c, reason, got.Generation)
+		}
+		ready = c
+		return nil
+	})
+	return ready
+}
+
+// Many long missing references, CIDRs, and hosts still turn Ready False: each
+// list names its first ten entries, quoted up to 256 bytes, and counts the
+// rest, so the status write fits the condition message limit.
+func TestAgentClass_LongEntryListsTurnReadyFalse(t *testing.T) {
+	const name = "ac-long-entries"
+	entries := longEntries("", "a")
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	ac.Spec.AllowedProviders = localRefs(entries)
+	ac.Spec.AllowedToolProviders = localRefs(entries)
+	ac.Spec.Network.Egress.AllowedCIDRs = entries
+	ac.Spec.Network.Egress.AllowedHosts = entries
+	if err := testClient.Create(ctxT(), ac); err != nil {
+		t.Fatalf("create class %s: %v", name, err)
+	}
+	c := classReadyAtGeneration(t, name, kaalmv1beta1.ReasonInvalidCIDR)
+	if len(c.Message) > conditionMessageLimit {
+		t.Fatalf("Ready message is %d bytes", len(c.Message))
+	}
+	for _, want := range []string{
+		"allowedCIDRs has 2 more invalid CIDRs, not listed",
+		"allowedHosts has 2 more invalid DNS names, not listed",
+		"allowedProviders has 2 more missing ModelProviders, not listed",
+		"allowedToolProviders has 2 more missing ToolProviders, not listed",
+	} {
+		if !strings.Contains(c.Message, want) {
+			t.Errorf("Ready message does not hold %q", want)
+		}
+	}
+	if strings.HasSuffix(c.Message, "... (truncated)") {
+		t.Errorf("Ready message was cut, want every list whole")
+	}
+}
+
+// When the bounded lists together still pass the condition message limit
+// (control bytes, which the quote writes as four characters each), the
+// joined message is cut, and the reason still follows the precedence.
+func TestAgentClass_OverlongReadyMessageIsCut(t *testing.T) {
+	const name = "ac-overlong-message"
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	ac.Spec.Network.Egress.AllowedCIDRs = longEntries("", "\x01")
+	ac.Spec.Network.Egress.AllowedHosts = longEntries("", "\x01")
+	ac.Spec.AllowedNamespaces = longEntries("[", "\x01")
+	ac.Spec.Image.AllowedImages = longEntries("[", "\x01")
+	ac.Spec.AllowedProviders = localRefs(longEntries("", "a"))
+	ac.Spec.AllowedToolProviders = localRefs(longEntries("", "a"))
+	if err := testClient.Create(ctxT(), ac); err != nil {
+		t.Fatalf("create class %s: %v", name, err)
+	}
+	c := classReadyAtGeneration(t, name, kaalmv1beta1.ReasonInvalidCIDR)
+	if len(c.Message) > conditionMessageLimit {
+		t.Fatalf("Ready message is %d bytes", len(c.Message))
+	}
+	if !strings.HasSuffix(c.Message, "... (truncated)") {
+		t.Errorf("Ready message does not end in the cut marker")
+	}
+}
+
+// Rule 19: invalidCIDRs names each malformed allowedCIDRs entry once, in spec
+// order, up to ten, and counts the rest.
+func TestInvalidCIDRs(t *testing.T) {
+	msg := func(c string) string { return fmt.Sprintf("allowedCIDR %q is not a valid CIDR", c) }
+	bad := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = "bad" + strconv.Itoa(i)
+		}
+		return out
+	}
+	firstTen := func() []string {
+		out := make([]string, 10)
+		for i, c := range bad(10) {
+			out[i] = msg(c)
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		cidrs []string
+		want  []string
+	}{
+		{"nil", nil, nil},
+		{"valid entries skipped", []string{"10.0.0.0/8", "2001:db8::/32"}, nil},
+		{"spec order kept", []string{"b", "10.0.0.0/8", "a"}, []string{msg("b"), msg("a")}},
+		{"repeat reported once", []string{"x", "x"}, []string{msg("x")}},
+		{"long entry quoted as its first 256 bytes", []string{strings.Repeat("a", 40<<10)},
+			[]string{`allowedCIDR "` + strings.Repeat("a", 256) + `" (first 256 of 40960 bytes) is not a valid CIDR`}},
+		{"ten entries listed, no count", bad(10), firstTen()},
+		{"eleventh entry counted", bad(11), append(firstTen(), "allowedCIDRs has 1 more invalid CIDR, not listed")},
+		{"twelfth entry counted", append(bad(12), "bad0"),
+			append(firstTen(), "allowedCIDRs has 2 more invalid CIDRs, not listed")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ac := &kaalmv1beta1.AgentClass{}
+			ac.Spec.Network.Egress.AllowedCIDRs = tc.cidrs
+			if got := invalidCIDRs(ac); !slices.Equal(got, tc.want) {
+				t.Errorf("invalidCIDRs(%q) = %q, want %q", tc.cidrs, got, tc.want)
+			}
+		})
+	}
+}
+
+// Rule 20: invalidHosts names each malformed allowedHosts entry once, in spec
+// order, up to ten, and counts the rest.
+func TestInvalidHosts(t *testing.T) {
+	msg := func(h string) string { return fmt.Sprintf("allowedHost %q is not a valid DNS name", h) }
+	bad := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = "Bad_" + strconv.Itoa(i)
+		}
+		return out
+	}
+	firstTen := func() []string {
+		out := make([]string, 10)
+		for i, h := range bad(10) {
+			out[i] = msg(h)
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		hosts []string
+		want  []string
+	}{
+		{"nil", nil, nil},
+		{"valid entries skipped", []string{"api.example.com", "example.com"}, nil},
+		{"spec order kept", []string{"B_", "ok.example.com", "A_"}, []string{msg("B_"), msg("A_")}},
+		{"repeat reported once", []string{"x_", "x_"}, []string{msg("x_")}},
+		{"long entry quoted as its first 256 bytes", []string{strings.Repeat("a", 40<<10)},
+			[]string{`allowedHost "` + strings.Repeat("a", 256) + `" (first 256 of 40960 bytes) is not a valid DNS name`}},
+		{"ten entries listed, no count", bad(10), firstTen()},
+		{"eleventh entry counted", bad(11), append(firstTen(), "allowedHosts has 1 more invalid DNS name, not listed")},
+		{"twelfth entry counted", append(bad(12), "Bad_0"),
+			append(firstTen(), "allowedHosts has 2 more invalid DNS names, not listed")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ac := &kaalmv1beta1.AgentClass{}
+			ac.Spec.Network.Egress.AllowedHosts = tc.hosts
+			if got := invalidHosts(ac); !slices.Equal(got, tc.want) {
+				t.Errorf("invalidHosts(%q) = %q, want %q", tc.hosts, got, tc.want)
+			}
+		})
+	}
 }
