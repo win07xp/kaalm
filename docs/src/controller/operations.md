@@ -38,6 +38,10 @@ When the API server rejects a create, update, or delete of a child other than th
 
 An AgentChannel reports the same reason when the API server refuses a write of one of its Roles or RoleBindings, and re-checks every 30 seconds ([Per-channel credential Roles](reconcilers/agentchannel.md#per-channel-credential-roles)).
 
+### A long rejection is cut
+
+For both reasons, and for an AgentChannel, the `Ready` message is cut to 1,024 bytes. For `ChildWriteRejected`, the message is the operation, the kind and name of the object, and then the API server's error, and the cut applies to all of it. A longer message ends in `... (truncated)`, and the Warning Event carries the same text. An admission webhook or policy engine writes the denial and can make it any length, and a condition message over the schema's limit fails the whole status write, so `Ready` would stay at its last value and the refusal would never show. The cut keeps the start of the text, which names the object, the webhook, and the cause.
+
 ## Event emission
 
 The controller emits these Events through the `events.k8s.io/v1` API, and `kubectl describe` and `kubectl get events` show them. Each reason is a stable string; the message carries the detail, cut to 1,024 bytes (the API's limit for a note) and ended with `... (truncated)` when it was longer. Each Event also carries an action, a short name for what the controller was doing, and some carry a related object. An Event reports either a state or an occurrence:
