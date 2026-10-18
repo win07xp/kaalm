@@ -409,18 +409,31 @@ func TestModelProvider_FallbackIneligibleNamesUnlistedFindings(t *testing.T) {
 // with. The quoted value is one finding, so a second pass over the same
 // finding must not announce it again.
 func TestSetFallbackEligibility_SeparatorInModelIDNotReannounced(t *testing.T) {
-	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	r := &ModelProviderReconciler{}
 	findings := fallbackIneligibility(
 		eligProvider("p", []string{"a; b"}, nil, edge("b", nil)),
 		index(eligProvider("b", nil, nil)), nil)
-	r.setFallbackEligibility(mp, findings)
-	if n := len(r.events.take(mp)); n != 1 {
-		t.Fatalf("first pass held %d events, want 1", n)
+	pass := func(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider) []string {
+		r.setFallbackEligibility(mp, findings)
+		var notes []string
+		for _, ev := range r.events.take(mp) {
+			notes = append(notes, ev.message)
+		}
+		if note := r.fallbackSeen.settle(mp, true); note != "" {
+			notes = append(notes, note)
+		}
+		return notes
 	}
-	r.setFallbackEligibility(mp, findings)
-	if evs := r.events.take(mp); len(evs) != 0 {
-		t.Fatalf("a pass over the same finding held %d events, want 0: %+v", len(evs), evs)
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	r := &ModelProviderReconciler{}
+	if n := len(pass(r, mp)); n != 1 {
+		t.Fatalf("first pass sent %d events, want 1", n)
+	}
+	if notes := pass(r, mp); len(notes) != 0 {
+		t.Fatalf("a pass over the same finding sent %q", notes)
+	}
+	// After a restart the pass compares against the stored message.
+	if notes := pass(&ModelProviderReconciler{}, mp); len(notes) != 0 {
+		t.Fatalf("a pass after a restart over the same finding sent %q", notes)
 	}
 }
 
@@ -494,15 +507,18 @@ func TestSetFallbackEligibility_BoundsTheMessage(t *testing.T) {
 	}
 }
 
-// fallbackPass runs one scan pass over findings for callers in namespaces,
-// stores its status as finish does, and returns the notes of the events it
-// holds.
+// fallbackPass runs one scan pass over findings for callers in namespaces
+// and returns the notes of the FallbackIneligible events finish sends after
+// a successful status write; TestModelProvider_FallbackIneligibleNamesUnlistedFindings
+// runs the passes through finish.
 func fallbackPass(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider, namespaces ...string) []string {
 	r.setFallbackEligibility(mp, nsFindings(namespaces...))
-	r.fallbackSeen.settle(mp, true)
 	var notes []string
 	for _, ev := range r.events.take(mp) {
 		notes = append(notes, ev.message)
+	}
+	if note := r.fallbackSeen.settle(mp, true); note != "" {
+		notes = append(notes, note)
 	}
 	return notes
 }
@@ -576,11 +592,13 @@ func TestSetFallbackEligibility_FixPlusNewUnlistedFindingIsNamed(t *testing.T) {
 	}
 }
 
-// After a restart or a leader change the memory is empty, so the first pass
-// compares against the stored message: it names the findings newly among the
-// listed ones as "now listed", since one may only have moved into the list,
-// and reports a growing total. The pass seeds the memory, so the next pass
-// names new findings again.
+// After a restart or a leader change the memory is empty. Over a stored
+// condition that lists findings, the first pass compares against the stored
+// message: it names the findings newly among the listed ones as "now
+// listed", since one may only have moved into the list, and reports a
+// growing total. A stored condition that is absent or False says the last
+// set was empty, so every finding is named as new. The pass seeds the
+// memory, so the next pass names new findings again.
 func TestSetFallbackEligibility_EventsAfterRestart(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -637,8 +655,9 @@ func TestSetFallbackEligibility_EventsAfterRestart(t *testing.T) {
 	}
 }
 
-// The memory drops a staged set whose status write failed, so the next pass
-// sends the event again; it ignores a set recorded under another UID, so a
+// The memory drops a staged set and its note when the status write failed,
+// so the next pass sends the event again, and returns the note once the
+// status is stored; it ignores a set recorded under another UID, so a
 // provider recreated under the same name starts with none; and forget drops
 // the provider's set.
 func TestFallbackFindingsMemory(t *testing.T) {
@@ -646,13 +665,17 @@ func TestFallbackFindingsMemory(t *testing.T) {
 	var m fallbackFindingsMemory
 	findings := nsFindings("a")
 
-	m.stage(mp, findings)
-	m.settle(mp, false)
+	m.stage(mp, findings, "new: a")
+	if note := m.settle(mp, false); note != "" {
+		t.Errorf("a failed status write returned the note %q", note)
+	}
 	if _, ok := m.lookup(mp); ok {
 		t.Fatal("a failed status write remembered its findings")
 	}
-	m.stage(mp, findings)
-	m.settle(mp, true)
+	m.stage(mp, findings, "new: a")
+	if note := m.settle(mp, true); note != "new: a" {
+		t.Errorf("a stored pass returned the note %q, want %q", note, "new: a")
+	}
 	if keys, ok := m.lookup(mp); !ok || len(keys) != 1 {
 		t.Fatalf("lookup after a stored pass = %v, %v; want one key", keys, ok)
 	}
@@ -678,7 +701,7 @@ func TestFallbackFindingsMemory(t *testing.T) {
 func TestModelProvider_DeleteForgetsFallbackFindings(t *testing.T) {
 	remember := func(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider) {
 		t.Helper()
-		r.fallbackSeen.stage(mp, nsFindings("a"))
+		r.fallbackSeen.stage(mp, nsFindings("a"), "")
 		r.fallbackSeen.settle(mp, true)
 		if _, ok := r.fallbackSeen.lookup(mp); !ok {
 			t.Fatal("findings not remembered")

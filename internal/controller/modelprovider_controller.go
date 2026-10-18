@@ -792,7 +792,9 @@ func (r *ModelProviderReconciler) setHealthy(mp *kaalmv1beta1.ModelProvider, ok 
 // event, and a status write per pass is an update event for every watcher
 // whether or not anything in it moved. The events the pass held go
 // out only when its write succeeds. A pass that finds its status already
-// stored drops them: the pass that stored it sent them.
+// stored drops them: the pass that stored it sent them. The
+// FallbackIneligible note derived from the remembered findings goes out in
+// both cases (see fallbackFindingsMemory).
 func (r *ModelProviderReconciler) finish(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
@@ -800,7 +802,7 @@ func (r *ModelProviderReconciler) finish(
 	if err := r.Get(ctx, client.ObjectKeyFromObject(mp), &current); err == nil &&
 		equality.Semantic.DeepEqual(current.Status, mp.Status) {
 		r.events.flush(r.Recorder, mp, false)
-		r.fallbackSeen.settle(mp, true)
+		r.sendFallbackNote(mp, r.fallbackSeen.settle(mp, true))
 		return res, nil
 	}
 	err := r.Status().Update(ctx, mp)
@@ -808,7 +810,7 @@ func (r *ModelProviderReconciler) finish(
 		r.ownWrites.record(mp)
 	}
 	r.events.flush(r.Recorder, mp, err == nil)
-	r.fallbackSeen.settle(mp, err == nil)
+	r.sendFallbackNote(mp, r.fallbackSeen.settle(mp, err == nil))
 	if err != nil {
 		// controller-runtime drops a RequeueAfter sent with an error, and the
 		// error already requeues with backoff.
