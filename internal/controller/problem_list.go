@@ -26,14 +26,16 @@ import (
 )
 
 // The helpers here bound the per-entry problem lists the AgentClass,
-// ModelProvider, and ToolProvider reconcilers report on Ready, and the lists
-// in the advisory ModelProvider conditions, AgentClass SecurityBaseline, and
-// Agent ProvidersReady. Each list names up to maxListedEntries distinct
-// entries, each spec value quoted up to maxQuotedEntryBytes, and counts the
-// rest in one message. In the worst case (%q writes a control byte as four
-// bytes) one list is about 11 KiB, so several lists together can still pass
-// the condition message limit; cutConditionMessage cuts the joined message
-// there.
+// ModelProvider, and ToolProvider reconcilers report on Ready, the lists in
+// the advisory ModelProvider conditions, AgentClass SecurityBaseline, and
+// Agent ProvidersReady, and the rule 38 list of granted tools a ToolProvider's
+// catalog lacks. Each list names up to maxListedEntries distinct entries,
+// each spec value quoted up to maxQuotedEntryBytes, and counts the rest in
+// one message. The Agent and AgentTask class-mismatch messages quote their
+// single image and provider names the same way. In the worst case (%q writes
+// a control byte as four bytes) one list is about 11 KiB, so several lists
+// together can still pass the condition message limit; cutConditionMessage
+// cuts the joined message there.
 const (
 	maxQuotedEntryBytes = 256
 	maxListedEntries    = 10

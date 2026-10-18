@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -182,6 +183,39 @@ func TestAgentToolGrant_CatalogDenialAndRecovery(t *testing.T) {
 	expectAgentNotDegraded(t, "r38-agent")
 }
 
+// A tool provider name has no length limit in the schema. The rule 37
+// message quotes it bounded, so the Ready write still fits.
+func TestAgentToolGrant_LongProviderNameFitsReady(t *testing.T) {
+	mkWorkloadClass(t, "wc-long-tpname", nil) // no allowedToolProviders: rule 37 denies
+	mkWorkloadAgent(t, "long-tpname-agent", "wc-long-tpname", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Tools = []kaalmv1beta1.AgentToolGrant{grantOf(strings.Repeat("a", 40000))}
+	})
+	expectAgentDegradedBounded(t, "long-tpname-agent",
+		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
+}
+
+// A grant's tools list has no item or length limit. The rule 38 message
+// on Ready names the first ten missing tools and counts the rest.
+func TestAgentToolGrant_LongCatalogMissListFitsReady(t *testing.T) {
+	mkOpenTP(t, "tg-r38-long", func(tp *kaalmv1beta1.ToolProvider) {
+		tp.Spec.Tools = []kaalmv1beta1.ToolProviderTool{{ID: "web_search"}}
+	})
+	mkWorkloadClass(t, "wc-r38-long", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "tg-r38-long"}}
+	})
+	tools := make([]string, 5000)
+	for i := range tools {
+		tools[i] = fmt.Sprintf("tool-%04d", i)
+	}
+	mkWorkloadAgent(t, "r38-long-agent", "wc-r38-long", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Tools = []kaalmv1beta1.AgentToolGrant{grantOf("tg-r38-long", tools...)}
+	})
+	expectAgentDegradedBounded(t, "r38-long-agent", kaalmv1beta1.ReasonToolNotInCatalog,
+		`"tool-0000", "tool-0001"`)
+	expectAgentDegradedBounded(t, "r38-long-agent", kaalmv1beta1.ReasonToolNotInCatalog,
+		"4990 more tools, not listed")
+}
+
 func TestAgentToolGrant_NoCatalogAcceptsAnyNarrowing(t *testing.T) {
 	mkOpenTP(t, "tg-nocat", nil) // no declared catalog: rule 38 inapplicable
 	mkWorkloadClass(t, "wc-nocat", func(ac *kaalmv1beta1.AgentClass) {
@@ -206,6 +240,30 @@ func TestTaskToolGrant_ViolationIsTerminalFailed(t *testing.T) {
 	if c == nil || c.Reason != kaalmv1beta1.ReasonClassConstraintViolation {
 		t.Errorf("Completed condition wrong: %+v", c)
 	}
+}
+
+// A task settles with the first violation's message, uncut. A grant with
+// thousands of tools missing from the catalog still fails the task, because
+// the rule 38 message names ten and counts the rest.
+func TestTaskToolGrant_LongCatalogMissListStillFails(t *testing.T) {
+	mkOpenTP(t, "tg-task-r38-long", func(tp *kaalmv1beta1.ToolProvider) {
+		tp.Spec.Tools = []kaalmv1beta1.ToolProviderTool{{ID: "web_search"}}
+	})
+	// The task fails on its first violation, so the provider must be in the
+	// cache first, or the task fails on a rule 35 miss instead.
+	awaitToolProviderFinalizer(t, "tg-task-r38-long")
+	mkWorkloadClass(t, "tc-r38-long", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "tg-task-r38-long"}}
+	})
+	tools := make([]string, 5000)
+	for i := range tools {
+		tools[i] = fmt.Sprintf("tool-%04d", i)
+	}
+	mkTask(t, "t-r38-long", "tc-r38-long", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Tools = []kaalmv1beta1.AgentToolGrant{grantOf("tg-task-r38-long", tools...)}
+	})
+	expectTaskFailedBounded(t, "t-r38-long", kaalmv1beta1.ReasonToolNotInCatalog,
+		"4990 more tools, not listed")
 }
 
 func TestTaskToolGrant_ValidGrantProvisions(t *testing.T) {

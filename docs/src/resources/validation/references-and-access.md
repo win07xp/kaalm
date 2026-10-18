@@ -41,7 +41,7 @@ Rules 4, 5, 36, and 37, with rules 3 and 35, are the access checks drawn on [Cor
 
 **Rule 37: A ToolProvider must be on the class allowlist.** Every referenced ToolProvider must appear in the AgentClass's `allowedToolProviders`, the rule 5 analog.
 
-**Rule 38: Granted tools must exist in a declared catalog.** When a ToolProvider declares a `tools` catalog, every tool name in a workload's grant must appear in it. *Reconcile time; the class-mismatch handling with its own `reason=ToolNotInCatalog`, naming the missing tools.* When no catalog is declared, the server's own `tools/list` governs and this rule does not apply.
+**Rule 38: Granted tools must exist in a declared catalog.** When a ToolProvider declares a `tools` catalog, every tool name in a workload's grant must appear in it. *Reconcile time; the class-mismatch handling with its own `reason=ToolNotInCatalog`, naming the missing tools up to the bound in [How a condition message lists problems](../validation-and-defaulting.md#how-a-condition-message-lists-problems).* When no catalog is declared, the server's own `tools/list` governs and this rule does not apply.
 
 **Rule 51: Every `allowedNamespaces` entry must be a valid pattern.** Each `allowedNamespaces` entry on an AgentClass, ModelProvider, or ToolProvider must be a valid `path.Match` pattern. `[` is not. *Reconcile time; `Ready=False, reason=InvalidNamespacePattern` on that resource, with a message naming the malformed entries (up to the bound below), and a `Warning` event when the reason first appears.* CEL cannot run `path.Match`, and the `v1beta1` policy forbids tightening apply-time validation that a stored object could already violate, so the rule reports status and does not reject the write.
 

@@ -759,7 +759,7 @@ func (r *AgentTaskReconciler) taskViolation(
 	}
 	if eff.Image != "" && !imageAllowed(eff.Image, class.Spec.Image.AllowedImages) {
 		return kaalmv1beta1.ReasonClassConstraintViolation,
-			fmt.Sprintf("image %q does not match AgentClass %q allowedImages", eff.Image, class.Name)
+			fmt.Sprintf("image %s does not match AgentClass %q allowedImages", quotedEntry(eff.Image), class.Name)
 	}
 	for _, p := range task.Spec.Providers {
 		name := p.ProviderRef.Name
@@ -772,19 +772,19 @@ func (r *AgentTaskReconciler) taskViolation(
 		}
 		if !allowed {
 			return kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("provider %q is not in AgentClass %q allowedProviders", name, class.Name)
+				fmt.Sprintf("provider %s is not in AgentClass %q allowedProviders", quotedEntry(name), class.Name)
 		}
 		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: name}, &mp); err != nil {
 			if apierrors.IsNotFound(err) {
 				return kaalmv1beta1.ReasonClassConstraintViolation,
-					fmt.Sprintf("provider %q does not exist", name)
+					fmt.Sprintf("provider %s does not exist", quotedEntry(name))
 			}
 			continue
 		}
 		if !namespaceAllowed(task.Namespace, mp.Spec.AllowedNamespaces) {
 			return kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("provider %q does not allow namespace %q", name, task.Namespace)
+				fmt.Sprintf("provider %s does not allow namespace %q", quotedEntry(name), task.Namespace)
 		}
 	}
 	// Rules 35 to 38 for the task's tool grants; the first violation wins,

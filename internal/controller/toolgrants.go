@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,7 +55,7 @@ func toolGrantViolations(
 		}
 		if !allowed {
 			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("tool provider %q is not in AgentClass %q allowedToolProviders", name, class.Name))
+				fmt.Sprintf("tool provider %s is not in AgentClass %q allowedToolProviders", quotedEntry(name), class.Name))
 			continue
 		}
 		// Rule 35: the reference must resolve.
@@ -62,14 +63,14 @@ func toolGrantViolations(
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, &tp); err != nil {
 			if apierrors.IsNotFound(err) {
 				add(kaalmv1beta1.ReasonClassConstraintViolation,
-					fmt.Sprintf("tool provider %q does not exist", name))
+					fmt.Sprintf("tool provider %s does not exist", quotedEntry(name)))
 			}
 			continue
 		}
 		// Rule 36: the provider must admit the workload's namespace.
 		if !namespaceAllowed(namespace, tp.Spec.AllowedNamespaces) {
 			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("tool provider %q does not allow namespace %q", name, namespace))
+				fmt.Sprintf("tool provider %s does not allow namespace %q", quotedEntry(name), namespace))
 			continue
 		}
 		// Rule 38: when the provider declares a catalog, every granted tool
@@ -80,15 +81,16 @@ func toolGrantViolations(
 			for _, t := range tp.Spec.Tools {
 				catalog[t.ID] = true
 			}
-			var missing []string
+			var missing entryList
 			for _, t := range g.Tools {
 				if !catalog[t] {
-					missing = append(missing, t)
+					missing.add(t, quotedEntry(t))
 				}
 			}
-			if len(missing) > 0 {
-				add(kaalmv1beta1.ReasonToolNotInCatalog,
-					fmt.Sprintf("granted tools %v are not in the declared catalog of tool provider %q", missing, name))
+			if len(missing.listed) > 0 {
+				add(kaalmv1beta1.ReasonToolNotInCatalog, cutConditionMessage(fmt.Sprintf(
+					"granted tools not in the declared catalog of tool provider %s: %s", quotedEntry(name),
+					strings.Join(missing.messages("1 more tool, not listed", "%d more tools, not listed"), ", "))))
 			}
 		}
 	}

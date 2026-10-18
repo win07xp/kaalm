@@ -96,19 +96,20 @@ A reconcile-time `Ready=False` message lists problems per list, and so do the co
 - ModelProvider: the fallback checks (rules 11 and 12, and a missing fallback provider) as one list, `modelMap` entries (rule 41), `degradeTo` targets (rule 18), unpriced models (rule 33), and `allowedNamespaces` (rule 51).
 - ToolProvider: `allowedNamespaces` (rule 51).
 
-Five other conditions follow the same bound, one list each:
+Six other conditions follow the same bound, one list each:
 
 - ModelProvider `FallbackIneligible`: the findings of the [eligibility scan](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan).
 - ModelProvider `DegradeTargetNotCheapest`: the `degradeTo` targets that cost more than the cheapest priced model.
 - ModelProvider `MaxOutputTokensUnset`: the `provider/model` pairs that declare no `maxOutputTokens`.
 - AgentClass `SecurityBaseline`: the `capabilities.add` entries other than `NET_BIND_SERVICE`. The other fields it names are single fields, so each is always named.
 - Agent `ProvidersReady`: the `spec.providers` entries with a problem.
+- Agent `Ready`, and AgentTask `Completed` and `Ready`, for rule 38: the granted tools that a ToolProvider's declared catalog lacks, one list per grant. The rest are in that grant's `tools` list in the spec.
 
 Each list names at most the first ten distinct problems it finds, then counts the rest in one entry, such as `allowedCIDRs has 3 more invalid CIDRs, not listed`. The check reads entries in spec order, except that `modelMap` keys, `MaxOutputTokensUnset` pairs, and `FallbackIneligible` findings are sorted. Findings sort by their text, so by fallback name first. For the same spec, each pass lists the same ten. `FallbackIneligible` is the exception: its findings also depend on which namespaces' workloads use the provider, so the listed ten can change as other teams' Agents and AgentTasks come and go.
 
 The message does not name the others. To find them, read the spec; after you fix the listed ones, the next pass names the next ten. For `FallbackIneligible` the spec is not enough, because the findings come from caller namespaces: [the eligibility scan](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan) states how it finds them.
 
-A value longer than 256 bytes is quoted as a prefix of at most 256 bytes, followed by its full length in bytes. The prefix can look valid, because the malformed part may lie past the cut, so the length tells you the quote is partial.
+A value longer than 256 bytes is quoted as a prefix of at most 256 bytes, followed by its full length in bytes, such as `(first 256 of 300 bytes)`. The prefix can look valid, because the malformed part may lie past the cut, so the length tells you the quote is partial. The same quoting applies to the single values the Agent and AgentTask class-mismatch messages quote (rules 2 to 5 and 35 to 38): the image, the ModelProvider and ToolProvider names, and the granted tool names. These fields have no length limit, so a long value is quoted in part. The full value is in the spec.
 
 The condition schema caps a message at 32,768 characters. A longer message fails the whole status write, and `Ready` and `observedGeneration` would keep their last values, possibly `Ready=True`. Without escaped characters, the bounded lists together stay under that cap. Values with characters the quote escapes, such as control characters, can still push them past it. The message is then cut and ends with `... (truncated)`, and the problems past the cut are not named. The reason is still picked from every problem by the usual precedence ([AgentClass](../controller/reconcilers/agentclass.md#what-it-checks), [ModelProvider](../controller/reconcilers/modelprovider.md#what-it-checks)), so a cut message keeps the right reason for alerting. `ProvidersReady` likewise takes the reason of the first problem in spec order, even one the message does not list.
 

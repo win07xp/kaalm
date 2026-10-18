@@ -1670,3 +1670,70 @@ func TestAgent_LongProviderListFitsStatus(t *testing.T) {
 		return nil
 	})
 }
+
+// expectAgentDegradedBounded waits until the Agent is Degraded at its current
+// generation, with Ready False for reason and a message that holds want and
+// fits the condition schema's maxLength. A message past that limit fails the
+// status write, so the phase would never change.
+func expectAgentDegradedBounded(t *testing.T, name, reason, want string) {
+	t.Helper()
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, name)
+		if ag.Status.Phase != kaalmv1beta1.AgentDegraded || ag.Status.ObservedGeneration != ag.Generation {
+			return fmt.Errorf("phase %s at observed generation %d, want Degraded at %d",
+				ag.Status.Phase, ag.Status.ObservedGeneration, ag.Generation)
+		}
+		c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != reason {
+			return fmt.Errorf("Ready = %+v, want False/%s", c, reason)
+		}
+		if len(c.Message) > conditionMessageLimit {
+			return fmt.Errorf("Ready message is %d bytes", len(c.Message))
+		}
+		if !strings.Contains(c.Message, want) {
+			return fmt.Errorf("Ready message does not hold %q", want)
+		}
+		return nil
+	})
+}
+
+// A provider name has no length limit in the schema. The Ready message
+// quotes it bounded, so the status write still fits.
+func TestAgent_LongProviderNameFitsReady(t *testing.T) {
+	mkWorkloadClass(t, "wc-long-provname", nil) // empty allowedProviders => none allowed
+	mkWorkloadAgent(t, "long-provname-agent", "wc-long-provname", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Providers = []kaalmv1beta1.AgentProviderReference{
+			{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: strings.Repeat("a", 40000)}},
+		}
+	})
+	expectAgentDegradedBounded(t, "long-provname-agent",
+		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
+}
+
+// spec.image has no length limit in the schema. The rule 2 message quotes
+// it bounded, so the Ready write still fits.
+func TestAgent_LongImageFitsReady(t *testing.T) {
+	image := "other.test/" + strings.Repeat("a", 40000) // outside registry.test/agents/*
+	mkWorkloadClass(t, "wc-long-image", nil)
+	mkWorkloadAgent(t, "long-image-agent", "wc-long-image", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Image = image
+	})
+	expectAgentDegradedBounded(t, "long-image-agent", kaalmv1beta1.ReasonClassConstraintViolation,
+		fmt.Sprintf("(first 256 of %d bytes) does not match", len(image)))
+}
+
+// The class allows the long name but no such ModelProvider exists: the
+// "does not exist" message quotes it bounded too.
+func TestAgent_LongMissingProviderNameFitsReady(t *testing.T) {
+	long := strings.Repeat("a", 40000)
+	mkWorkloadClass(t, "wc-long-missing-prov", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedProviders = []kaalmv1beta1.LocalObjectReference{{Name: long}}
+	})
+	mkWorkloadAgent(t, "long-missing-prov-agent", "wc-long-missing-prov", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Providers = []kaalmv1beta1.AgentProviderReference{
+			{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: long}},
+		}
+	})
+	expectAgentDegradedBounded(t, "long-missing-prov-agent",
+		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes) does not exist")
+}
