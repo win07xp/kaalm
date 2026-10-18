@@ -17,8 +17,12 @@ limitations under the License.
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // TestVertexPathsNotServed locks the reserved status: google-vertex
@@ -39,6 +43,50 @@ func TestVertexPathsNotServed(t *testing.T) {
 	// The outbound half stays: the type still has its adapter.
 	if _, ok := adapterForProviderType(providerTypeVertex); !ok {
 		t.Error("the reserved type keeps its outbound adapter")
+	}
+}
+
+// A google-vertex primary on a served path is refused with 400 before it is
+// admitted, rate limited, or forwarded.
+func TestLLMProxy_VertexPrimaryIsRefused(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h.seedRoute()
+	h.server.RateLimiter = NewRateLimiter(func() int { return 1 })
+	h.store.providers["prov"].Spec.Type = providerTypeVertex
+	h.store.providers["prov"].Spec.RateLimits = kaalmv1beta1.ModelProviderRateLimits{RequestsPerMinute: 1}
+	cert := agentCert(t, h.ca)
+
+	calls := []struct {
+		path string
+		body map[string]any
+	}{
+		{"/v1/chat/completions", map[string]any{"model": "prov/m1"}},
+		// A second call is still 400, not 429: the first took no token.
+		{"/v1/chat/completions", map[string]any{"model": "prov/m1"}},
+		{"/v1/messages", map[string]any{"model": "prov/m1", "max_tokens": 1,
+			"messages": []any{map[string]any{"role": "user", "content": "hi"}}}},
+	}
+	for i, c := range calls {
+		resp := postJSON(t, h.client(&cert), h.url(c.path), c.body, nil)
+		var envelope struct {
+			Error errorBody `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+			t.Fatalf("call %d: decoding error envelope: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || envelope.Error.Type != errInvalidRequest {
+			t.Errorf("call %d on %s = %d %q, want 400 %q", i, c.path, resp.StatusCode, envelope.Error.Type, errInvalidRequest)
+		}
+		if !strings.Contains(envelope.Error.Message, "reserved") || envelope.Error.Provider != "prov" {
+			t.Errorf("call %d: error %+v does not say the provider type is reserved", i, envelope.Error)
+		}
+	}
+	if n := len(h.upreqs); n != 0 {
+		t.Errorf("%d requests reached the upstream, want 0", n)
+	}
+	if u := h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
+		t.Errorf("spend for team-a = %+v, want none", u)
 	}
 }
 

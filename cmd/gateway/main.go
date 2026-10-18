@@ -74,6 +74,7 @@ type gatewayFlags struct {
 	maxMessageBodyBytes  int64
 	maxResponseBodyBytes int64
 	syncDeliveryDeadline time.Duration
+	maxWakeTimeout       time.Duration
 	agentReadTimeout     time.Duration
 	callbackReadTimeout  time.Duration
 	agentConnectTimeout  time.Duration
@@ -126,6 +127,8 @@ func registerFlags(fs *flag.FlagSet) *gatewayFlags {
 	fs.Int64Var(&f.maxMessageBodyBytes, "max-message-body-bytes", 1<<20, "inbound webhook body cap")
 	fs.Int64Var(&f.maxResponseBodyBytes, "max-response-body-bytes", 900<<10, "agent reply body cap")
 	fs.DurationVar(&f.syncDeliveryDeadline, "sync-delivery-deadline", 30*time.Second, "sync-mode wall-clock budget")
+	fs.DurationVar(&f.maxWakeTimeout, "max-wake-timeout", 15*time.Minute,
+		"longest the gateway waits for a woken Agent to become reachable, whatever its wakeTimeout")
 	fs.DurationVar(&f.agentReadTimeout, "agent-read-timeout", 10*time.Second, "per-attempt agent read timeout")
 	fs.DurationVar(&f.callbackReadTimeout, "callback-read-timeout", 10*time.Second, "per-attempt callback read timeout")
 	fs.DurationVar(&f.agentConnectTimeout, "agent-connect-timeout", time.Second, "agent-delivery connect timeout")
@@ -166,6 +169,10 @@ func main() {
 	}
 	if err := validateLimits(limitFlags(f)); err != nil {
 		logger.Error("invalid limit flags", "error", err)
+		os.Exit(1)
+	}
+	if err := validateMaxWakeTimeout(f.maxWakeTimeout); err != nil {
+		logger.Error("invalid --max-wake-timeout", "error", err)
 		os.Exit(1)
 	}
 
@@ -279,6 +286,7 @@ func main() {
 		MaxMessageBodyBytes:      f.maxMessageBodyBytes,
 		MaxResponseBodyBytes:     f.maxResponseBodyBytes,
 		SyncDeliveryDeadline:     f.syncDeliveryDeadline,
+		MaxWakeTimeout:           f.maxWakeTimeout,
 		AgentReadTimeout:         f.agentReadTimeout,
 		CallbackReadTimeout:      f.callbackReadTimeout,
 		AgentConnectTimeout:      f.agentConnectTimeout,
@@ -586,6 +594,16 @@ func mustParseBackoff(raw, flagName string, logger *slog.Logger) []time.Duration
 		os.Exit(1)
 	}
 	return out
+}
+
+// validateMaxWakeTimeout rejects a cap that is not positive. Zero is not
+// "no cap": an operator who sets it expecting the cap to go away finds out at
+// startup instead of getting the default.
+func validateMaxWakeTimeout(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("max wake timeout must be positive, got %v", d)
+	}
+	return nil
 }
 
 // validatePlatformBaseURL rejects a malformed platform base URL: reply URLs

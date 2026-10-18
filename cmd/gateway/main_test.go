@@ -211,6 +211,20 @@ func TestLimitFlagsAcceptZeroAndDefaults(t *testing.T) {
 	}
 }
 
+// A zero or negative wake cap is refused at startup.
+func TestValidateMaxWakeTimeout(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		if err := validateMaxWakeTimeout(d); err == nil {
+			t.Errorf("validateMaxWakeTimeout(%v) = nil, want an error", d)
+		}
+	}
+	for _, d := range []time.Duration{time.Second, 15 * time.Minute} {
+		if err := validateMaxWakeTimeout(d); err != nil {
+			t.Errorf("validateMaxWakeTimeout(%v) = %v, want nil", d, err)
+		}
+	}
+}
+
 // The request-path kinds are served from the cache without a deep copy;
 // the options that keep Secrets out of the cache and scope ConfigMaps
 // stay as they were.

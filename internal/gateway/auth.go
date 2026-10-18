@@ -164,9 +164,15 @@ func (a *Authenticator) DualModePaths(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if !a.DisableSourceIPCheck {
 			// A Pod the informer did not have at the precheck is looked up
-			// again: it may have appeared during the TokenReview.
+			// again: it may have appeared during the TokenReview. A
+			// Kaalm-managed Pod found here gets the precheck's refusal, so
+			// the TokenReview leaves no window to skip it.
 			if !found {
 				pod, found = a.Store.PodByIP(r.Context(), sourceIP(r))
+				if found && isKaalmManagedPod(pod) {
+					unauthorized(w, "Kaalm-managed Pods must authenticate with mTLS")
+					return
+				}
 			}
 			if !found || pod.Namespace != ns {
 				unauthorized(w, "source IP does not match the authenticated namespace")

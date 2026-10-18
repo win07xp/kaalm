@@ -124,6 +124,12 @@ gateway:
   agentDeliveryConnectTimeout: 1s
   # Total sync-mode wall-clock budget (wake + delivery retries + processing).
   syncDeliveryDeadline: 30s
+  # The longest the gateway waits for a woken Agent to become reachable,
+  # whatever the Agent's or class's wakeTimeout (the gateway's
+  # --max-wake-timeout). It bounds how long one async or platform message can
+  # hold the gateway. Must be positive, or the gateway exits at startup. Keep
+  # it well under the 1-hour polling-record TTL.
+  maxWakeTimeout: 15m
   # Per-attempt upstream LLM-provider bound (the gateway's --upstream-timeout).
   # It sets two bounds: the wait for the first response byte, then the
   # mid-stream idle-bytes bound between response body reads. A stream that

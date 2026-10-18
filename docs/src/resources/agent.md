@@ -127,7 +127,7 @@ status:
 | `phaseTransitionTime` | Set on every phase change, in the same status write. The condition `lastTransitionTime` values move on non-phase events too, so this field is the witness for "when did the phase last change". |
 | `hibernatedAt` | Set on entry to `Hibernated`, cleared on wake. |
 | `preDegradedPhase` | The phase the Agent was in before it went `Degraded`. The Agent returns to that phase, and the field clears, once every mismatch has cleared ([Degraded](../controller/agent-lifecycle.md#degraded)). |
-| `effectiveWakeTimeout` | The `wakeTimeout` the gateway applies to a wake: the Agent's own value, or the class `defaultWakeTimeout` when unset, clamped to the class `maxWakeTimeout` (rule 9). Unset when neither the Agent nor the class gives a value, and the gateway then uses 120 seconds. |
+| `effectiveWakeTimeout` | The `wakeTimeout` the gateway applies to a wake: the Agent's own value, or the class `defaultWakeTimeout` when unset, clamped to the class `maxWakeTimeout` (rule 9). Unset when neither the Agent nor the class gives a value, and the gateway then uses 120 seconds. The gateway applies at most `gateway.maxWakeTimeout` even when this field is larger ([The activator](../gateways/user/activation-and-activity.md#the-activator)). |
 
 ## Design notes
 

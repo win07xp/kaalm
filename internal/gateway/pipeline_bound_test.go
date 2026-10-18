@@ -39,6 +39,7 @@ func TestRetryScheduleWorstCase(t *testing.T) {
 
 func TestBackgroundPipelineBound_Arithmetic(t *testing.T) {
 	s := &Server{Config: Config{
+		MaxWakeTimeout:      time.Hour,
 		AgentConnectTimeout: time.Second,
 		AgentReadTimeout:    10 * time.Second,
 		CallbackReadTimeout: 7 * time.Second,
@@ -70,14 +71,32 @@ func TestBackgroundPipelineBound_Arithmetic(t *testing.T) {
 }
 
 func TestBackgroundPipelineBound_ScalesWithWakeTimeout(t *testing.T) {
-	s := &Server{Config: Config{AgentReadTimeout: time.Second}}
+	s := &Server{Config: Config{AgentReadTimeout: time.Second, MaxWakeTimeout: time.Hour}}
 	short := &kaalmv1beta1.Agent{}
 	long := &kaalmv1beta1.Agent{}
 	long.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 30 * time.Minute}
 
-	// The default 2-minute wake and a 30-minute wake differ by exactly the
-	// extra 28 minutes: no fixed ceiling truncates the larger one.
+	// Under a cap above both, the default 2-minute wake and a 30-minute wake
+	// differ by exactly the extra 28 minutes.
 	if diff := s.backgroundPipelineBound(long, 1) - s.backgroundPipelineBound(short, 1); diff != 28*time.Minute {
 		t.Errorf("bound difference = %s, want 28m", diff)
+	}
+}
+
+func TestBackgroundPipelineBound_CapsWakeTimeout(t *testing.T) {
+	s := &Server{Config: Config{
+		MaxWakeTimeout:      15 * time.Minute,
+		AgentReadTimeout:    time.Second,
+		CallbackReadTimeout: time.Second,
+	}}
+	atCap := &kaalmv1beta1.Agent{}
+	atCap.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 15 * time.Minute}
+	aboveCap := &kaalmv1beta1.Agent{}
+	aboveCap.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 24 * time.Hour}
+
+	// The gateway cap bounds the wake leg, so a 24h wakeTimeout cannot hold a
+	// run longer than a wakeTimeout at the cap.
+	if a, b := s.backgroundPipelineBound(aboveCap, 2), s.backgroundPipelineBound(atCap, 2); a != b {
+		t.Errorf("bound for a 24h wakeTimeout = %s, want %s (the 15m cap)", a, b)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,8 +146,9 @@ func TestDualModePaths_BearerErrorBranches(t *testing.T) {
 }
 
 // tokenCaller runs one bearer request from 10.0.0.1 through DualModePaths
-// for a token of team-a, and reports whether it reached the handler.
-func tokenCaller(t *testing.T, fs *fakeStore) bool {
+// for a token of team-a, and reports whether it reached the handler, with
+// the recorded response.
+func tokenCaller(t *testing.T, fs *fakeStore) (bool, *httptest.ResponseRecorder) {
 	t.Helper()
 	a := &Authenticator{Store: fs, Tokens: NewTokenAuthenticator(&fakeReviewer{
 		username: "system:serviceaccount:team-a:runner", authenticated: true})}
@@ -155,8 +157,9 @@ func tokenCaller(t *testing.T, fs *fakeStore) bool {
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	r.RemoteAddr = "10.0.0.1:5555"
 	r.Header.Set("Authorization", "Bearer tok")
-	h(httptest.NewRecorder(), r)
-	return reached
+	rec := httptest.NewRecorder()
+	h(rec, r)
+	return reached, rec
 }
 
 // The Kaalm-managed precheck and the namespace cross-check share one Pod
@@ -164,7 +167,7 @@ func tokenCaller(t *testing.T, fs *fakeStore) bool {
 func TestDualModePaths_TokenCallerLooksUpThePodOnce(t *testing.T) {
 	fs := newFakeStore()
 	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-a"}}
-	if !tokenCaller(t, fs) {
+	if reached, _ := tokenCaller(t, fs); !reached {
 		t.Fatal("a token caller from a Pod in its namespace must be accepted")
 	}
 	if n := fs.podByIPCalls.Load(); n != 1 {
@@ -178,7 +181,7 @@ func TestDualModePaths_PrecheckMissIsLookedUpAgain(t *testing.T) {
 	fs := newFakeStore()
 	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-a"}}
 	fs.podByIPMisses.Store(1)
-	if !tokenCaller(t, fs) {
+	if reached, _ := tokenCaller(t, fs); !reached {
 		t.Fatal("a Pod found after the precheck must be accepted")
 	}
 	if n := fs.podByIPCalls.Load(); n != 2 {
@@ -187,12 +190,35 @@ func TestDualModePaths_PrecheckMissIsLookedUpAgain(t *testing.T) {
 	// A Pod in another namespace is refused, whichever lookup finds it.
 	fs = newFakeStore()
 	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-b"}}
-	if tokenCaller(t, fs) {
+	if reached, _ := tokenCaller(t, fs); reached {
 		t.Error("a Pod in another namespace must be refused")
 	}
 	fs = newFakeStore()
-	if tokenCaller(t, fs) {
+	if reached, _ := tokenCaller(t, fs); reached {
 		t.Error("a source IP with no Pod must be refused")
+	}
+}
+
+// A Kaalm-managed Pod that appears between the precheck and the second
+// lookup gets the same refusal as the precheck, so the TokenReview leaves no
+// window for a managed Pod to pass as a bearer caller.
+func TestDualModePaths_ManagedPodOnReLookupIsRefused(t *testing.T) {
+	fs := newFakeStore()
+	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "sup-0", Namespace: "team-a", Labels: map[string]string{"kaalm.io/workload": "sup"}}}
+	fs.podByIPMisses.Store(1)
+	reached, rec := tokenCaller(t, fs)
+	if reached {
+		t.Fatal("a Kaalm-managed Pod found on the second lookup reached the handler")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Kaalm-managed Pods must authenticate with mTLS") {
+		t.Errorf("body %q does not give the managed-Pod refusal", rec.Body.String())
+	}
+	if n := fs.podByIPCalls.Load(); n != 2 {
+		t.Errorf("PodByIP calls = %d, want 2", n)
 	}
 }
 

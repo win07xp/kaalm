@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -248,10 +249,35 @@ func TestDiscord_SignatureAndTimestampPosture(t *testing.T) {
 	}
 }
 
+// lockedBuffer is a log sink the gateway's handler goroutine writes while
+// the test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) snapshot() *bytes.Buffer {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.NewBuffer(append([]byte(nil), b.buf.Bytes()...))
+}
+
 // Saving the Interactions Endpoint URL makes Discord send a deliberately
 // badly signed PING. The adapter refuses it, but it is not a health
-// observation.
+// observation, and it is logged at debug level only: anyone who knows the
+// path can send it, so it must not set the Info log volume.
 func TestDiscord_BadSignaturePingIsTheVerificationProbe(t *testing.T) {
+	logs := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	_, other, _ := ed25519.GenerateKey(nil)
 	resp := h.send(t, []byte(`{"id":"1","application_id":"2","type":1,"token":"t"}`), other, "")
@@ -261,6 +287,16 @@ func TestDiscord_BadSignaturePingIsTheVerificationProbe(t *testing.T) {
 	}
 	if reason, ok := healthReason(h.userHarness, h.channel.Spec.Discord.Path); ok || reason != "" {
 		t.Errorf("verification probe recorded a health observation: reason %q", reason)
+	}
+	// The line is written after the 401 goes out, so wait for it.
+	var recs []map[string]any
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if recs = logRecords(t, logs.snapshot(), "platform verification probe refused"); len(recs) > 0 {
+			break
+		}
+	}
+	if len(recs) != 1 || recs[0]["level"] != "DEBUG" {
+		t.Errorf("probe log records = %v, want one at DEBUG", recs)
 	}
 }
 

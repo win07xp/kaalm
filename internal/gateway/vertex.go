@@ -27,9 +27,10 @@ import (
 // routed and the OAuth2 token minting the platform requires is not
 // implemented, so the type is not servable in this release. The outbound
 // pieces below (usage extraction, URL-path model rewriting, the ?alt=sse
-// fixup) stay for the finished feature. The platform's product name is now
-// the Gemini Enterprise Agent Platform; the wire API and the enum value are
-// unchanged. See
+// fixup) stay for the finished feature; the proxy refuses a request whose
+// primary has this type. The platform's product name is now the Gemini
+// Enterprise Agent Platform; the wire API and the enum value are unchanged.
+// See
 // docs/src/gateways/llm/request-handling.md#the-google-vertex-type-is-reserved.
 
 type vertexAdapter struct{}

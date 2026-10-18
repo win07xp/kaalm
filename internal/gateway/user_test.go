@@ -945,6 +945,33 @@ func TestWebhook_AgentRedirectNotFollowed(t *testing.T) {
 	}
 }
 
+// When the gateway cap ends the wait, the error names the cap and the
+// Agent's own wakeTimeout, so the author sees why the wait was shorter.
+func TestWakeAndDeliver_GatewayCapEndsTheWait(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("async")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = kaalmv1beta1.AgentHibernated
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: time.Hour}
+	h.server.Activator = &fakeActivator{}
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+	h.server.Config.MaxWakeTimeout = 100 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, errType, err := h.server.wakeAndDeliver(ctx, "/channels/team-a/support", agent, MessageEnvelope{})
+	if errType != errWakeTimeout || err == nil {
+		t.Fatalf("wakeAndDeliver = %q, %v; want %q", errType, err, errWakeTimeout)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the caller's context ended the wait, not the gateway cap: %v", err)
+	}
+	if !strings.Contains(err.Error(), "maxWakeTimeout") || !strings.Contains(err.Error(), "1h0m0s") {
+		t.Errorf("message %q does not name the gateway cap and the Agent's wakeTimeout", err)
+	}
+}
+
 func TestWakeAndDeliver_PipelineDeadlineBeforeWakeTimeout(t *testing.T) {
 	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedChannel("async")
@@ -954,6 +981,7 @@ func TestWakeAndDeliver_PipelineDeadlineBeforeWakeTimeout(t *testing.T) {
 	h.server.Activator = &fakeActivator{}
 	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
 	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+	h.server.Config.MaxWakeTimeout = 2 * time.Hour // the hour-long wakeTimeout stays uncapped
 
 	// The caller's deadline ends long before the hour-long wakeTimeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

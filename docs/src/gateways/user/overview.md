@@ -73,11 +73,11 @@ The namespace is a fixed UUID published as part of the Kaalm API, identical acro
 
 When `spec.webhook.responseMode` is `async`, the gateway answers `202 Accepted` here, with `requestId` and `channelPath` in the body, and runs steps 7 to 10 in the background. Two checks precede the `202`, and both answer `503 internal_unavailable` with `Retry-After: 5`: the channel's live records must be below [`maxPendingAsyncResponses`](../../resources/agentchannel.md) (default 100), and the placeholder ConfigMap `kaalm-async-{requestId}` must be created in `kaalm-system`. A returned `202` therefore always means a queryable polling record exists. The `202` body, the record, the poll endpoint, its authentication, and the 1-hour TTL are specified under [The 202 contract](../api/async-responses.md#the-202-contract) and [Polling fallback](../api/async-responses.md#polling-fallback).
 
-The background pipeline has no sync deadline. It runs under a bound that the gateway derives from the wake, delivery, and callback budgets, so the wake always gets its full `wakeTimeout`. See [Async pipeline bound](../api/async-responses.md#async-pipeline-bound).
+The background pipeline has no sync deadline. It runs under a bound that the gateway derives from the wake, delivery, and callback budgets, so the wake gets its full `wakeTimeout`, up to `gateway.maxWakeTimeout` ([The activator](activation-and-activity.md#the-activator)). See [Async pipeline bound](../api/async-responses.md#async-pipeline-bound).
 
 ### 7. Activator check
 
-If the Agent's phase is `Hibernated` or `Hibernating`, the gateway calls the controller's activator over mTLS, then polls the Agent Service until it accepts a connection or the Agent's effective `wakeTimeout` elapses. In sync mode the caller waits through this. An unreachable activator is `controller_unavailable`; an elapsed timeout is `wake_timeout`. The wake sequence and its failure arms are on [The activator](activation-and-activity.md#the-activator).
+If the Agent's phase is `Hibernated` or `Hibernating`, the gateway calls the controller's activator over mTLS, then polls the Agent Service until it accepts a connection or the Agent's effective `wakeTimeout` elapses, capped at `gateway.maxWakeTimeout`. In sync mode the caller waits through this. An unreachable activator is `controller_unavailable`; an elapsed timeout is `wake_timeout`. The wake sequence and its failure arms are on [The activator](activation-and-activity.md#the-activator).
 
 ### 8. Message delivery
 

@@ -164,6 +164,13 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		attribute.String("kaalm.namespace", c.Namespace),
 		attribute.String("kaalm.workload", workloadKey(c)))
 	defer endSpan(nil)
+	if provider.Spec.Type == providerTypeVertex {
+		spanError(ctx, errInvalidRequest)
+		writeError(w, http.StatusBadRequest, errorBody{
+			Type: errInvalidRequest, Provider: providerName,
+			Message: fmt.Sprintf("provider type %q is reserved and not served by this gateway", provider.Spec.Type)}, 0)
+		return
+	}
 	typeAdapter, ok := adapterForProviderType(provider.Spec.Type)
 	if !ok {
 		writeError(w, http.StatusBadRequest, errorBody{
