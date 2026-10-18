@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -50,9 +51,10 @@ type Tracing struct {
 
 // NewTracing builds the exporter-backed tracer. endpoint is the OTLP/HTTP
 // base URL (for example http://collector:4318); it must be an http or https
-// URL with a host, and any other value returns an error, because the
-// exporter would otherwise log the bad value and send to its own default,
-// localhost:4318. An https endpoint verifies against pool when non-nil (the
+// URL with a host, an optional port in 1-65535, and an optional path, with no
+// user info, query, or fragment. Any other value returns an error, because
+// the exporter would otherwise log the bad value and send to its own default,
+// localhost:4318, or the export path built below would break. An https endpoint verifies against pool when non-nil (the
 // gateway's upstream trust pool), else the system roots. sampleRatio drives
 // parent-based head sampling for traces this gateway starts; propagated
 // decisions are honored either way.
@@ -92,9 +94,12 @@ func NewTracing(ctx context.Context, endpoint string, sampleRatio float64, pool 
 	return &Tracing{tracer: tp.Tracer("kaalm-gateway"), prop: propagation.TraceContext{}, tp: tp}, nil
 }
 
-// parseOTLPEndpoint checks that endpoint is an http or https URL with a host.
-// Neither error echoes a password in the value: a parse failure reports only
-// the inner cause, and the shape error prints the redacted URL.
+// parseOTLPEndpoint checks that endpoint is an http or https URL with a host
+// and a valid port, and that /v1/traces can be appended to it: user info is
+// dropped by the exporter, and a query or fragment (even a bare ? or #) would
+// swallow the appended path. No error echoes a password in the value: a
+// parse failure reports only the inner cause, and the shape errors print the
+// redacted URL.
 func parseOTLPEndpoint(endpoint string) (*url.URL, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -106,6 +111,15 @@ func parseOTLPEndpoint(endpoint string) (*url.URL, error) {
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path]", u.Redacted())
+	}
+	// u.Fragment is empty for a bare #, which still breaks the appended path.
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") {
+		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path] with no user info, query, or fragment", u.Redacted())
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return nil, fmt.Errorf("otlp endpoint %q: port %s is outside 1-65535", u.Redacted(), p)
+		}
 	}
 	return u, nil
 }

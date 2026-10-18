@@ -21,13 +21,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // newTestTracing wires the Tracing type onto an in-memory exporter with
@@ -412,6 +415,16 @@ func TestNewTracing_RejectsMalformedEndpoint(t *testing.T) {
 		"http://",
 		"http://:4318",
 		"",
+		// These parse with a scheme and a host, but the appended /v1/traces
+		// would land in the query or fragment, the exporter drops user info,
+		// and an out-of-range port fails only at export time.
+		"http://user:secret@collector:4318",
+		"http://collector:4318?x=1",
+		"http://collector:4318?",
+		"http://collector:4318#f",
+		"http://collector:4318#",
+		"http://collector:0",
+		"http://collector:99999",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			tr, err := NewTracing(context.Background(), endpoint, 1, nil, "gw-0")
@@ -429,6 +442,7 @@ func TestNewTracing_RejectsMalformedEndpoint(t *testing.T) {
 func TestNewTracing_HidesThePassword(t *testing.T) {
 	for _, endpoint := range []string{
 		"http://user:secret@collector:43l8",
+		"http://user:secret@collector:4318",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			tr, err := NewTracing(context.Background(), endpoint, 1, nil, "gw-0")
@@ -440,5 +454,59 @@ func TestNewTracing_HidesThePassword(t *testing.T) {
 				t.Fatalf("error %q echoes the password", err)
 			}
 		})
+	}
+}
+
+func TestNewTracing_AcceptsEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://127.0.0.1:4318",
+		"https://collector.monitoring.svc:4318",
+		"https://collector",
+		"http://collector:4318/",
+		"http://collector:4318/otlp",
+		"HTTP://collector:4318",
+		"http://[::1]:4318",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			tr, err := NewTracing(context.Background(), endpoint, 1, nil, "gw-0")
+			if err != nil {
+				t.Fatalf("NewTracing(%q): %v", endpoint, err)
+			}
+			if tr == nil {
+				t.Fatalf("NewTracing(%q) returned a nil tracer", endpoint)
+			}
+			t.Cleanup(func() { _ = tr.Shutdown(context.Background()) })
+		})
+	}
+}
+
+func TestNewTracing_ExportsToTheEndpointPath(t *testing.T) {
+	// The export URL is the endpoint with /v1/traces appended, and a plain
+	// http endpoint must export without TLS.
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := context.Background()
+	tr, err := NewTracing(ctx, srv.URL+"/otlp/", 1, nil, "gw-0")
+	if err != nil {
+		t.Fatalf("NewTracing: %v", err)
+	}
+	_, end := tr.Start(ctx, "probe", trace.SpanKindInternal)
+	end(nil)
+	if err := tr.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "POST /otlp/v1/traces" {
+		t.Fatalf("collector saw %v, want one POST /otlp/v1/traces", got)
 	}
 }
