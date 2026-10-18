@@ -732,11 +732,14 @@ func (s *Server) relayFilteredToolsList(
 		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	// A caller allowed every tool gets the upstream answer as it came, unless
-	// its result may carry a cacheScope to rewrite. Any other result is
-	// filtered, even one that arrives beside an error member: the error is
-	// relayed too, and the tools must not leak through it.
+	// the bytes it would pass on may carry a cacheScope to rewrite. The bytes
+	// are checked, not the decoded result: a second member that
+	// encoding/json also reads as result would hide the one a client reads.
+	// Any other result is filtered, even one that arrives beside an error
+	// member: the error is relayed too, and the tools must not leak through
+	// it.
 	encoded := raw
-	if filter.allow != nil || mayCarryCacheScope(parsed.Result) {
+	if filter.allow != nil || mayCarryCacheScope(raw) {
 		if parsed.Result != nil {
 			// A result that is not an object (null included) holds no
 			// tools, so it is relayed unfiltered.

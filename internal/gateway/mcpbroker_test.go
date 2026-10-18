@@ -506,7 +506,7 @@ func allowAllToolsList(t *testing.T, mode, upstream string) []byte {
 }
 
 // A caller allowed every tool gets the upstream answer as it came, unless
-// its result carries a cacheScope, which still becomes private.
+// its bytes may carry a cacheScope, which still becomes private.
 func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
 	list := `{ "jsonrpc": "2.0", "id": 3, "result": { "tools": [ {"name":"web_search","description":"<b>"}, ` +
 		`{"name":"admin_reset"} ] }, "x-extra": 1 }`
@@ -526,6 +526,34 @@ func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
 				if err := json.Unmarshal(raw, &got); err != nil || got.Result.CacheScope != "private" {
 					t.Errorf("key %s: cacheScope = %q (%v), want private: %s", key, got.Result.CacheScope, err, raw)
 				}
+			}
+		})
+	}
+}
+
+// A decoy member that encoding/json reads as result cannot hide a
+// cacheScope from the rewrite: the bytes are checked, not the decoded
+// result, and the re-encoded answer carries one result member.
+func TestMCPBroker_ToolsListAllAllowedDecoyResult(t *testing.T) {
+	upstream := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"a"}],"cacheScope":"public"},"RESULT":{"tools":[]}}`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := allowAllToolsList(t, mode, upstream)
+			if bytes.Contains(raw, []byte("public")) {
+				t.Errorf("reply carries the upstream cacheScope: %s", raw)
+			}
+			var members map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &members); err != nil {
+				t.Fatalf("decode %s: %v", raw, err)
+			}
+			results := 0
+			for k := range members {
+				if strings.EqualFold(k, "result") {
+					results++
+				}
+			}
+			if results != 1 {
+				t.Errorf("reply has %d result members, want 1: %s", results, raw)
 			}
 		})
 	}
