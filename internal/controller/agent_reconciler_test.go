@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1637,4 +1638,35 @@ func TestAgent_EnvSecretEmptyNameInvalidReference(t *testing.T) {
 	if err := testAPIReader.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
 		t.Errorf("an empty name minted an env-Secret Role: err=%v", err)
 	}
+}
+
+// Many long provider names outside the class allowlist still let the status
+// write through: ProvidersReady lists the first ten problems and counts the
+// rest, and the reason is that of the first problem.
+func TestAgent_LongProviderListFitsStatus(t *testing.T) {
+	mkWorkloadClass(t, "wc-long-providers", nil) // empty allowedProviders => none allowed
+	mkWorkloadAgent(t, "long-providers-agent", "wc-long-providers", func(ag *kaalmv1beta1.Agent) {
+		for _, n := range longEntries("prov-", "a") {
+			ag.Spec.Providers = append(ag.Spec.Providers,
+				kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: n}})
+		}
+	})
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "long-providers-agent")
+		if ag.Status.Phase != kaalmv1beta1.AgentDegraded || ag.Status.ObservedGeneration != ag.Generation {
+			return fmt.Errorf("phase %s at observed generation %d, want Degraded at %d",
+				ag.Status.Phase, ag.Status.ObservedGeneration, ag.Generation)
+		}
+		c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionProvidersReady)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonClassConstraintViolation {
+			return fmt.Errorf("ProvidersReady = %+v, want False/%s", c, kaalmv1beta1.ReasonClassConstraintViolation)
+		}
+		if len(c.Message) > conditionMessageLimit {
+			return fmt.Errorf("ProvidersReady message is %d bytes", len(c.Message))
+		}
+		if want := "spec.providers has 2 more providers with a problem, not listed"; !strings.Contains(c.Message, want) {
+			return fmt.Errorf("ProvidersReady message does not hold %q", want)
+		}
+		return nil
+	})
 }

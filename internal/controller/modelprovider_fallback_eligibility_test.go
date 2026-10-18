@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -339,4 +340,180 @@ func TestSetFallbackEligibility_SeparatorInModelIDNotReannounced(t *testing.T) {
 	if evs := r.events.take(mp); len(evs) != 0 {
 		t.Fatalf("a pass over the same finding held %d events, want 0: %+v", len(evs), evs)
 	}
+}
+
+// nsFindings returns the scan's findings for callers in the given
+// namespaces, none of which the fallback admits: one finding per namespace,
+// sorted by namespace.
+func nsFindings(namespaces ...string) []string {
+	return fallbackIneligibility(
+		eligProvider("p", []string{"m"}, []string{"*"}, edge("b", nil)),
+		index(eligProvider("b", []string{"m"}, []string{"nobody"})), namespaces)
+}
+
+// nsFinding is the listed text of the finding for a caller namespace.
+func nsFinding(ns string) string {
+	return fmt.Sprintf("fallback %q does not admit namespace %q", "b", ns)
+}
+
+// nsRange returns the namespaces ns-<from> through ns-<to>, two digits each,
+// so they sort in number order.
+func nsRange(from, to int) []string {
+	var out []string
+	for i := from; i <= to; i++ {
+		out = append(out, fmt.Sprintf("ns-%02d", i))
+	}
+	return out
+}
+
+func fallbackIneligibleMessage(t *testing.T, mp *kaalmv1beta1.ModelProvider) string {
+	t.Helper()
+	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("FallbackIneligible = %+v, want True", c)
+	}
+	return c.Message
+}
+
+// The FallbackIneligible message lists the first ten findings in sorted
+// order and counts the rest, so it fits the condition schema however many
+// caller namespaces the fallback does not admit.
+func TestSetFallbackEligibility_BoundsTheMessage(t *testing.T) {
+	listed := func(namespaces []string) string {
+		var parts []string
+		for _, ns := range namespaces {
+			parts = append(parts, nsFinding(ns))
+		}
+		return strings.Join(parts, "; ")
+	}
+	cases := []struct {
+		name string
+		ns   []string
+		want string
+	}{
+		{"twelve", nsRange(1, 12), listed(nsRange(1, 10)) + "; fallback eligibility scan has 2 more findings, not listed"},
+		{"eleven", nsRange(1, 11), listed(nsRange(1, 10)) + "; fallback eligibility scan has 1 more finding, not listed"},
+		{"ten", nsRange(1, 10), listed(nsRange(1, 10))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+			r := &ModelProviderReconciler{}
+			r.setFallbackEligibility(mp, nsFindings(tc.ns...))
+			r.events.take(mp)
+			got := fallbackIneligibleMessage(t, mp)
+			if got != tc.want {
+				t.Errorf("message =\n %q\nwant\n %q", got, tc.want)
+			}
+			if len(got) > conditionMessageLimit {
+				t.Errorf("message is %d bytes", len(got))
+			}
+		})
+	}
+}
+
+// The FallbackIneligible Warning names the findings that are new among the
+// listed ones and, when the total grows, starts with the new total. A
+// finding past the listed ten shows only as a higher total, once.
+func TestSetFallbackEligibility_Events(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	r := &ModelProviderReconciler{}
+	listed := func(namespaces ...string) string {
+		var parts []string
+		for _, ns := range namespaces {
+			parts = append(parts, nsFinding(ns))
+		}
+		return strings.Join(parts, "; ")
+	}
+	steps := []struct {
+		name string
+		ns   []string
+		want []string // the held event notes
+	}{{
+		name: "zero to twelve names the listed ten after the total",
+		ns:   nsRange(1, 12),
+		want: []string{"12 findings in total; new: " + listed(nsRange(1, 10)...)},
+	}, {
+		name: "the same twelve send nothing",
+		ns:   nsRange(1, 12),
+	}, {
+		name: "a new finding past the listed ten gives only the total",
+		ns:   nsRange(1, 13),
+		want: []string{"13 findings in total; the new findings are not among the 10 the condition lists"},
+	}, {
+		name: "the unlisted finding is not announced again",
+		ns:   nsRange(1, 13),
+	}, {
+		name: "a new finding among the listed ten is named after the total",
+		ns:   nsRange(0, 13),
+		want: []string{"14 findings in total; new: " + listed("ns-00")},
+	}, {
+		name: "a fixed listed finding names the one that moved into the list",
+		ns:   nsRange(1, 13),
+		want: []string{listed("ns-10")},
+	}, {
+		name: "fixed unlisted findings send nothing",
+		ns:   nsRange(1, 11),
+	}}
+	for _, s := range steps {
+		r.setFallbackEligibility(mp, nsFindings(s.ns...))
+		var got []string
+		for _, ev := range r.events.take(mp) {
+			got = append(got, ev.message)
+		}
+		if !reflect.DeepEqual(got, s.want) {
+			t.Errorf("%s:\n got %q\nwant %q", s.name, got, s.want)
+		}
+	}
+
+	// A short list: the total still leads when it grows.
+	short := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "q"}}
+	r.setFallbackEligibility(short, nsFindings("a"))
+	if evs := r.events.take(short); len(evs) != 1 || evs[0].message != "1 finding in total; new: "+listed("a") {
+		t.Errorf("first finding held %+v", evs)
+	}
+	r.setFallbackEligibility(short, nsFindings("a", "b"))
+	if evs := r.events.take(short); len(evs) != 1 || evs[0].message != "2 findings in total; new: "+listed("b") {
+		t.Errorf("added finding held %+v", evs)
+	}
+}
+
+// Many long model ids that a fallback does not offer still let the status
+// write through: FallbackIneligible lists the first ten findings and counts
+// the rest, and Ready is recorded at the current generation.
+func TestModelProvider_LongFallbackFindingsFitStatus(t *testing.T) {
+	const name = "mp-long-findings"
+	const child = name + "-fb"
+	mkSecret(t, name+"-key")
+	mkSecret(t, child+"-key")
+	mkProvider(t, child, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "m"}}
+	})
+	mkProvider(t, name, func(mp *kaalmv1beta1.ModelProvider) {
+		for _, id := range longEntries("model-", "a") {
+			mp.Spec.Models = append(mp.Spec.Models, kaalmv1beta1.ModelProviderModel{ID: id})
+		}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: child}}
+	})
+	eventually(t, func() error {
+		var mp kaalmv1beta1.ModelProvider
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &mp); err != nil {
+			return err
+		}
+		ready := condition(mp.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if ready == nil || ready.Status != metav1.ConditionTrue || mp.Status.ObservedGeneration != mp.Generation {
+			return fmt.Errorf("Ready = %+v, want True at generation %d", ready, mp.Generation)
+		}
+		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
+		if c == nil || c.Status != metav1.ConditionTrue {
+			return fmt.Errorf("FallbackIneligible = %+v, want True", c)
+		}
+		if len(c.Message) > conditionMessageLimit {
+			return fmt.Errorf("FallbackIneligible message is %d bytes", len(c.Message))
+		}
+		if !strings.HasSuffix(c.Message, "fallback eligibility scan has 2 more findings, not listed") {
+			return fmt.Errorf("FallbackIneligible message does not end in the count")
+		}
+		return nil
+	})
 }
