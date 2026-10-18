@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // ToolProviderReconciler validates a ToolProvider's credentials and
@@ -67,6 +68,14 @@ type ToolProviderReconciler struct {
 	// status write.
 	ownWrites ownWrites
 }
+
+// maxProbeErrorBytes bounds the probe error copied into the Healthy message
+// and the ProviderUnhealthy Event. The error carries text the tool server
+// writes, such as a JSON-RPC error message read up to the MCP response cap.
+// A condition message over the schema's 32,768-character limit fails the
+// whole status write and leaves Healthy stale. The Event carries the same
+// text, and the Event note limit is this bound.
+const maxProbeErrorBytes = eventrec.MaxNoteBytes
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/status,verbs=get;update;patch
@@ -170,10 +179,11 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			// An occurrence: reported on every failing probe, and the
 			// recorder folds the repeats into one event with a count. A pass
 			// that reuses the recorded failure has nothing new to report.
+			msg := eventrec.Truncate(res.Err.Error(), maxProbeErrorBytes)
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
-				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+				kaalmv1beta1.ReasonProviderUnhealthy, msg)
 			if !cached {
-				r.Recorder.Eventf(&tp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", res.Err.Error())
+				r.Recorder.Eventf(&tp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", msg)
 			}
 			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&tp))}
 		default: // Healthy
