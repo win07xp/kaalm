@@ -448,6 +448,11 @@ func TestNewTracing_HidesThePassword(t *testing.T) {
 		{"http://tok3n@collector:4318", "tok3n"},
 		{"http://tok3n@collector:43l8", "tok3n"},
 		{"ftp://tok3n@collector:4318", "tok3n"},
+		// Without the // after the scheme, or without a scheme, url.Parse
+		// puts the user info in the opaque part or the path, not in User.
+		{"user:secret@collector:4318", "secret"},
+		{"http:tok3n@collector:4318", "tok3n"},
+		{"tok3n@collector", "tok3n"},
 	} {
 		t.Run(tc.endpoint, func(t *testing.T) {
 			tr, err := NewTracing(context.Background(), tc.endpoint, 1, nil, "gw-0")

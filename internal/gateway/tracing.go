@@ -98,9 +98,8 @@ func NewTracing(ctx context.Context, endpoint string, sampleRatio float64, pool 
 // parseOTLPEndpoint checks that endpoint is an http or https URL with a host
 // and a valid port, and that /v1/traces can be appended to it: user info is
 // dropped by the exporter, and a query or fragment (even a bare ? or #) would
-// swallow the appended path. No error echoes a password in the value: a
-// parse failure reports only the inner cause, and the shape errors print the
-// URL with any user info replaced by a marker (see hideUserInfo).
+// swallow the appended path. A parse failure reports only the inner cause,
+// and the shape errors print the value through hideUserInfo.
 func parseOTLPEndpoint(endpoint string) (*url.URL, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -111,30 +110,37 @@ func parseOTLPEndpoint(endpoint string) (*url.URL, error) {
 		return nil, fmt.Errorf("otlp endpoint: %w", err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path]", hideUserInfo(u))
+		return nil, fmt.Errorf("otlp endpoint %s: need http(s)://host[:port][/path]", hideUserInfo(u))
 	}
 	// u.Fragment is empty for a bare #, which still breaks the appended path.
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") {
-		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path] with no user info, query, or fragment", hideUserInfo(u))
+		return nil, fmt.Errorf("otlp endpoint %s: need http(s)://host[:port][/path] with no user info, query, or fragment", hideUserInfo(u))
 	}
 	if p := u.Port(); p != "" {
 		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-			return nil, fmt.Errorf("otlp endpoint %q: port %s is outside 1-65535", hideUserInfo(u), p)
+			return nil, fmt.Errorf("otlp endpoint %s: port %s is outside 1-65535", hideUserInfo(u), p)
 		}
 	}
 	return u, nil
 }
 
-// hideUserInfo renders u with any user info replaced by "redacted".
-// url.URL.Redacted masks only a password, and a user name with no password
-// is often a bearer token.
+// hideUserInfo renders u, quoted, for an error message, with any user info
+// replaced by "redacted". url.URL.Redacted masks only a password, and a user
+// name with no password is often a bearer token. Without the // after the
+// scheme, or without a scheme, url.Parse leaves user info in the opaque part
+// or the path rather than in User, so a value with an @ anywhere else is
+// left out entirely.
 func hideUserInfo(u *url.URL) string {
-	if u.User == nil {
-		return u.String()
+	if u.User != nil {
+		c := *u
+		c.User = url.User("redacted")
+		return strconv.Quote(c.String())
 	}
-	c := *u
-	c.User = url.User("redacted")
-	return c.String()
+	s := u.String()
+	if strings.Contains(s, "@") {
+		return "(value hidden: it may hold user info)"
+	}
+	return strconv.Quote(s)
 }
 
 // Shutdown flushes buffered spans.
