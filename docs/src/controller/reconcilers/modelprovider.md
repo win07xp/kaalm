@@ -95,7 +95,12 @@ The reconciler scans the fallback tree for candidates a request could never reac
 
 **The event.** A `Warning` event of the same reason fires on the primary when a new finding appears, whether or not the condition lists it ([Event emission](../operations.md#event-emission) gives the reason). The event is how the platform team learns that other teams' workloads added findings. The condition lists only ten, so the controller keeps each provider's last full set of findings in memory and names every finding that is not in it. When the total grows, the note starts with the new total, because an Event note is cut at 1,024 bytes and the total is the part that must survive. A fix and a new finding in the same pass still names the new finding. A pass with no new finding sends no event, and neither does clearing. A failed status write does not lose the event: the next pass sends it again.
 
-**The first pass after a restart.** After a controller restart or a leader change, the first pass has no remembered set and compares against the stored condition message. Its event says `now listed:` instead of `new:`, because a finding may only have moved into the listed ten when a listed one was fixed. In that pass a fix and a new finding among the unlisted ones can go unreported, and a new finding past the listed ten shows only as a higher total. The pass seeds the memory, so later passes name every new finding.
+**The first pass after a restart.** After a controller restart or a leader change, the first pass has no remembered set. What it compares against depends on the stored `FallbackIneligible` condition:
+
+- **`True`**: the condition lists findings, so the pass compares against its message. The event says `now listed:` instead of `new:`, because a finding may only have moved into the listed ten when a listed one was fixed. In that pass a fix and a new finding among the unlisted ones can go unreported, and a new finding past the listed ten shows only as a higher total.
+- **Absent or `False`**: the last set was empty, so the pass names every finding under `new:`. A new provider's first scan is this case, so it names all of its findings, including those past the listed ten.
+
+The pass seeds the memory, so later passes name every new finding.
 
 The gateway's request-time check still runs on every request: it catches a change between passes and a request body the target format cannot express.
 
