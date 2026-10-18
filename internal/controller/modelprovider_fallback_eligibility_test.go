@@ -321,3 +321,22 @@ func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
 		t.Errorf("condition message after the removal = %q, want %q", got, teamC)
 	}
 }
+
+// A model id can hold the separator the condition message joins findings
+// with. The quoted value is one finding, so a second pass over the same
+// finding must not announce it again.
+func TestSetFallbackEligibility_SeparatorInModelIDNotReannounced(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	r := &ModelProviderReconciler{}
+	findings := fallbackIneligibility(
+		eligProvider("p", []string{"a; b"}, nil, edge("b", nil)),
+		index(eligProvider("b", nil, nil)), nil)
+	r.setFallbackEligibility(mp, findings)
+	if n := len(r.events.take(mp)); n != 1 {
+		t.Fatalf("first pass held %d events, want 1", n)
+	}
+	r.setFallbackEligibility(mp, findings)
+	if evs := r.events.take(mp); len(evs) != 0 {
+		t.Fatalf("a pass over the same finding held %d events, want 0: %+v", len(evs), evs)
+	}
+}
