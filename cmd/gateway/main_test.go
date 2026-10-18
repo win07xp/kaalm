@@ -93,14 +93,16 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 // The request-path kinds are served from the cache without a deep copy;
 // the options that keep Secrets out of the cache and scope ConfigMaps
 // stay as they were.
+type limitCase struct {
+	name      string
+	counts    map[string]int64
+	durations map[string]time.Duration
+	// wantFlags lists the flags the error must name; empty means no error.
+	wantFlags []string
+}
+
 func TestValidateLimits(t *testing.T) {
-	tests := []struct {
-		name      string
-		counts    map[string]int64
-		durations map[string]time.Duration
-		// wantFlags lists the flags the error must name; empty means no error.
-		wantFlags []string
-	}{
+	tests := []limitCase{
 		{
 			name:      "zero keeps the fallback",
 			counts:    map[string]int64{"mcp-max-body-bytes": 0},
@@ -129,6 +131,23 @@ func TestValidateLimits(t *testing.T) {
 			durations: map[string]time.Duration{"mcp-upstream-timeout": -time.Second},
 			wantFlags: []string{"--mcp-max-body-bytes", "--mcp-upstream-timeout"},
 		},
+	}
+	// The other size, count, and timeout flags main() checks: zero means
+	// the NewServer default, and a negative value fails.
+	for _, name := range []string{
+		"max-llm-body-bytes", "max-message-body-bytes", "max-response-body-bytes", "max-fallback-depth",
+	} {
+		tests = append(tests, limitCase{
+			name: "negative " + name, counts: map[string]int64{name: -1}, wantFlags: []string{"--" + name},
+		})
+	}
+	for _, name := range []string{
+		"upstream-timeout", "sync-delivery-deadline", "agent-read-timeout",
+		"callback-read-timeout", "agent-connect-timeout", "channel-health-window",
+	} {
+		tests = append(tests, limitCase{
+			name: "negative " + name, durations: map[string]time.Duration{name: -time.Second}, wantFlags: []string{"--" + name},
+		})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -154,10 +154,20 @@ func main() {
 	}
 	if err := validateLimits(
 		map[string]int64{
-			"mcp-max-body-bytes": mcpMaxBodyBytes,
+			"max-llm-body-bytes":      maxBodyBytes,
+			"max-message-body-bytes":  maxMessageBodyBytes,
+			"max-response-body-bytes": maxResponseBodyBytes,
+			"max-fallback-depth":      int64(maxFallbackDepth),
+			"mcp-max-body-bytes":      mcpMaxBodyBytes,
 		},
 		map[string]time.Duration{
-			"mcp-upstream-timeout": mcpUpstreamTimeout,
+			"upstream-timeout":       upstreamTimeout,
+			"sync-delivery-deadline": syncDeliveryDeadline,
+			"agent-read-timeout":     agentReadTimeout,
+			"callback-read-timeout":  callbackReadTimeout,
+			"agent-connect-timeout":  agentConnectTimeout,
+			"channel-health-window":  channelHealthWindow,
+			"mcp-upstream-timeout":   mcpUpstreamTimeout,
 		},
 	); err != nil {
 		logger.Error("invalid limit flags", "error", err)
@@ -503,10 +513,13 @@ func parseBackoff(raw string) ([]time.Duration, error) {
 	return out, nil
 }
 
-// parseStartupPolicy applies the strict-parse contract to the
-// Helm-derived flags whose misreads would otherwise half-apply: a malformed
-// value fails startup. otlpEndpoint gets the same treatment inside
-// NewTracing, and the CA bundle paths inside validateCABundle.
+// parseStartupPolicy applies the strict-parse contract to the callback
+// allowlist and the platform base URLs: a malformed value fails startup
+// instead of half-applying. The other Helm-derived flags get the same
+// treatment elsewhere: the CA bundle paths in validateCABundle, the backoff
+// schedules in mustParseBackoff, the size, count, and timeout flags in
+// validateLimits, and otlpEndpoint inside NewTracing, which setupTracing
+// calls after the cache syncs.
 func parseStartupPolicy(
 	callbackAllowlist, discordBaseURL, whatsAppBaseURL string, logger *slog.Logger,
 ) callbackpolicy.Policy {
