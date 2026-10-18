@@ -77,7 +77,9 @@ type inboundResult struct {
 	authFailed string
 	// verificationProbe marks an auth failure the platform causes on purpose
 	// to test the endpoint (Discord's badly signed PING). The adapter still
-	// refuses it, but it is logged instead of recorded on channel health.
+	// refuses it, but it is logged at debug level instead of recorded on
+	// channel health, because an unauthenticated caller who knows the path
+	// can send it at will.
 	verificationProbe bool
 	// rejected counts scope refusals and dropped events for the metric; they
 	// are not health observations.
@@ -112,7 +114,7 @@ func (s *Server) handlePlatform(
 	path := channel.Spec.Path()
 	switch {
 	case res.verificationProbe:
-		slog.Info("platform verification probe refused", "channelType", adapter.Type(),
+		slog.Debug("platform verification probe refused", "channelType", adapter.Type(),
 			"namespace", channel.Namespace, "channel", channel.Name, "detail", res.authFailed)
 	case res.authFailed != "":
 		s.ChannelHealth.RecordFailure(path, healthReasonAuthFailed, res.authFailed)
