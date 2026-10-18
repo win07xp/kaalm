@@ -133,6 +133,10 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 			badRequest(w, dup.Error())
 			return
 		}
+		if errors.Is(err, errStreamNotBoolean) {
+			badRequest(w, err.Error())
+			return
+		}
 		badRequest(w, "request body is not valid JSON")
 		return
 	}

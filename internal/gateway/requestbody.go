@@ -79,8 +79,18 @@ const (
 	memberStreamOptions
 )
 
-// jsonTrue is the JSON literal true.
-var jsonTrue = []byte("true")
+// jsonTrue, jsonFalse, and jsonNull are the JSON literals.
+var (
+	jsonTrue  = []byte("true")
+	jsonFalse = []byte("false")
+	jsonNull  = []byte("null")
+)
+
+// errStreamNotBoolean reports a stream member that is not true, false, or
+// null. The gateway reads stream to decide whether the request streams and
+// needs include_usage; a provider that read a string or a number as true
+// would stream with no usage and settle at zero spend.
+var errStreamNotBoolean = errors.New("stream must be a boolean")
 
 // errNotObject reports a JSON body that is not an object.
 var errNotObject = errors.New("request body is not a JSON object")
@@ -88,10 +98,13 @@ var errNotObject = errors.New("request body is not a JSON object")
 // scanRequestFields reads the routing members of body, which must already
 // pass json.Valid; the scan relies on that and checks nothing else. A null
 // body has no members, as encoding/json reads it into a map. Any other
-// non-object body is errNotObject, and a repeated model, stream, or
-// stream_options member is a *duplicateFieldError. Member names are
-// compared unescaped with jsonNameMatches, the rule encoding/json uses for
-// struct fields, so a lone case variant is that member.
+// non-object body is errNotObject, a repeated model, stream, or
+// stream_options member is a *duplicateFieldError, and a stream that is not
+// true, false, or null is errStreamNotBoolean. The duplicate check covers
+// the whole body first, so a repeated stream gets the duplicate error.
+// Member names are compared unescaped with jsonNameMatches, the rule
+// encoding/json uses for struct fields, so a lone case variant is that
+// member.
 func scanRequestFields(body []byte) (requestFields, error) {
 	f := requestFields{
 		keyStart: [...]int{-1, -1, -1}, keyEnd: [...]int{-1, -1, -1},
@@ -105,11 +118,15 @@ func scanRequestFields(body []byte) (requestFields, error) {
 		return f, errNotObject
 	}
 	i++
+	badStream := false
 	for {
 		i = skipJSONSpace(body, i)
 		switch body[i] {
 		case '}':
 			f.closeBrace = i
+			if badStream {
+				return f, errStreamNotBoolean
+			}
 			return f, nil
 		case ',':
 			i = skipJSONSpace(body, i+1)
@@ -133,7 +150,9 @@ func scanRequestFields(body []byte) (requestFields, error) {
 			case memberModel:
 				f.modelStart, f.modelEnd = valueStart, i
 			case memberStream:
-				f.streamTrue = bytes.Equal(body[valueStart:i], jsonTrue)
+				v := body[valueStart:i]
+				f.streamTrue = bytes.Equal(v, jsonTrue)
+				badStream = !f.streamTrue && !bytes.Equal(v, jsonFalse) && !bytes.Equal(v, jsonNull)
 			case memberStreamOptions:
 				f.optionsStart, f.optionsEnd = valueStart, i
 			}

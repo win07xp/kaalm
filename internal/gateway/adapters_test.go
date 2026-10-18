@@ -92,7 +92,6 @@ func TestOpenAIStreamOptions(t *testing.T) {
 			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
 		{"non-streaming with stream_options", `{"model":"m","stream":false,"stream_options":{"include_usage":false}}`,
 			`{"model":"m","stream":false,"stream_options":{"include_usage":false}}`},
-		{"stream as a string", `{"model":"m","stream":"true"}`, `{"model":"m","stream":"true"}`},
 	} {
 		if got := prepareBody(t, openaiAdapter{}, c.body); got != c.want {
 			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
