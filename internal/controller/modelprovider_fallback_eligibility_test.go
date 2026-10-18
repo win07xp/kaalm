@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -63,6 +65,7 @@ func edge(name string, modelMap map[string]string) kaalmv1beta1.FallbackReferenc
 // by each edge's modelMap on the way down).
 func TestFallbackIneligibility(t *testing.T) {
 	all := []string{"*"}
+	longA := strings.Repeat("a", 300)
 	cases := []struct {
 		name      string
 		primary   *kaalmv1beta1.ModelProvider
@@ -117,9 +120,20 @@ func TestFallbackIneligibility(t *testing.T) {
 		name:      "a missing provider is the structural check's to report",
 		primary:   eligProvider("p", []string{"m1"}, all, edge("gone", nil)),
 		providers: nil,
+	}, {
+		name:      "long model ids that share a quoted prefix stay two findings",
+		primary:   eligProvider("p", []string{longA + "1", longA + "2"}, all, edge("b", nil)),
+		providers: []*kaalmv1beta1.ModelProvider{eligProvider("b", []string{"m1"}, all)},
+		want: []string{
+			fmt.Sprintf("fallback %q does not offer model %s (primary model %s)", "b", quotedEntry(longA+"1"), quotedEntry(longA+"1")),
+			fmt.Sprintf("fallback %q does not offer model %s (primary model %s)", "b", quotedEntry(longA+"2"), quotedEntry(longA+"2")),
+		},
 	}}
 	for _, tc := range cases {
-		got := fallbackIneligibility(tc.primary, index(tc.providers...), tc.callers)
+		var got []string
+		for _, f := range fallbackIneligibility(tc.primary, index(tc.providers...), tc.callers) {
+			got = append(got, f.message)
+		}
 		if len(got) == 0 && len(tc.want) == 0 {
 			continue
 		}
@@ -238,8 +252,8 @@ func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 // The scan's findings grow when other people act (a new team's Agents use
 // the primary from a namespace the fallback does not admit), so the Warning
 // announces each added finding, naming only the new ones, and stays quiet
-// when the set is unchanged or shrinks. The condition message always
-// lists the full current set.
+// when the set is unchanged or shrinks. With this few findings the
+// condition message lists the full current set.
 func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
 	mp := eventsProvider("ev-mp-grow", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "ev-mp-grow-backup"}}
@@ -320,4 +334,441 @@ func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
 	if got := message(); got != teamC {
 		t.Errorf("condition message after the removal = %q, want %q", got, teamC)
 	}
+}
+
+// Through full reconciles, a new provider's first scan names every finding,
+// listed in the condition or not, and a pass that fixes one unlisted finding
+// and adds another names the new one. That pass leaves the condition
+// message as it was, so finish finds the status already stored and writes
+// nothing; the event must still go out.
+func TestModelProvider_FallbackIneligibleNamesUnlistedFindings(t *testing.T) {
+	const name = "ev-mp-swap"
+	mp := eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: name + "-backup"}}
+	})
+	backup := eventsProvider(name+"-backup", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.AllowedNamespaces = []string{"team-00"}
+	})
+	agentIn := func(ns string) *kaalmv1beta1.Agent {
+		return &kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: ns},
+			Spec: kaalmv1beta1.AgentSpec{Providers: []kaalmv1beta1.AgentProviderReference{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: name}},
+			}},
+		}
+	}
+	finding := func(ns string) string {
+		return fmt.Sprintf("fallback %q does not admit namespace %q", name+"-backup", ns)
+	}
+	objs := []client.Object{mp, backup, providerKey(name)}
+	for i := 1; i <= 12; i++ {
+		objs = append(objs, agentIn(fmt.Sprintf("team-%02d", i)))
+	}
+	conflicts := &statusConflicts{}
+	r, rec := eventsProviderReconciler(t, conflicts, nil, objs...)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	prefix := "Warning " + kaalmv1beta1.ReasonFallbackIneligible
+
+	// The first scan names all twelve findings, though the condition lists
+	// ten.
+	ev := expectEventOnceAcrossConflict(t, r, rec, conflicts, req, prefix)
+	for i := 1; i <= 12; i++ {
+		if f := finding(fmt.Sprintf("team-%02d", i)); !strings.Contains(ev, "new: ") || !strings.Contains(ev, f) {
+			t.Errorf("first event = %q, want it to name %s as new", ev, f)
+		}
+	}
+
+	// Fix the unlisted team-12 finding and add team-13: the listed ten and
+	// the total stay the same.
+	var gone kaalmv1beta1.Agent
+	if err := r.Get(ctxT(), types.NamespacedName{Namespace: "team-12", Name: "agent"}, &gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctxT(), &gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Create(ctxT(), agentIn("team-13")); err != nil {
+		t.Fatal(err)
+	}
+	pass := func() []string {
+		t.Helper()
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+		return withPrefix(drainEvents(rec), prefix)
+	}
+	if got, want := pass(), []string{prefix + " new: " + finding("team-13")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("events for the swap = %q, want %q", got, want)
+	}
+	if got := pass(); len(got) != 0 {
+		t.Errorf("a pass over the same findings emitted %q", got)
+	}
+}
+
+// A model id can hold the separator the condition message joins findings
+// with. The quoted value is one finding, so a second pass over the same
+// finding must not announce it again.
+func TestSetFallbackEligibility_SeparatorInModelIDNotReannounced(t *testing.T) {
+	findings := fallbackIneligibility(
+		eligProvider("p", []string{"a; b"}, nil, edge("b", nil)),
+		index(eligProvider("b", nil, nil)), nil)
+	pass := func(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider) []string {
+		r.setFallbackEligibility(mp, findings)
+		var notes []string
+		for _, ev := range r.events.take(mp) {
+			notes = append(notes, ev.message)
+		}
+		if note := r.fallbackSeen.settle(mp, true); note != "" {
+			notes = append(notes, note)
+		}
+		return notes
+	}
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	r := &ModelProviderReconciler{}
+	if n := len(pass(r, mp)); n != 1 {
+		t.Fatalf("first pass sent %d events, want 1", n)
+	}
+	if notes := pass(r, mp); len(notes) != 0 {
+		t.Fatalf("a pass over the same finding sent %q", notes)
+	}
+	// After a restart the pass compares against the stored message.
+	if notes := pass(&ModelProviderReconciler{}, mp); len(notes) != 0 {
+		t.Fatalf("a pass after a restart over the same finding sent %q", notes)
+	}
+}
+
+// nsFindings returns the scan's findings for callers in the given
+// namespaces, none of which the fallback admits: one finding per namespace,
+// sorted by namespace.
+func nsFindings(namespaces ...string) []fallbackFinding {
+	return fallbackIneligibility(
+		eligProvider("p", []string{"m"}, []string{"*"}, edge("b", nil)),
+		index(eligProvider("b", []string{"m"}, []string{"nobody"})), namespaces)
+}
+
+// nsFinding is the listed text of the finding for a caller namespace.
+func nsFinding(ns string) string {
+	return fmt.Sprintf("fallback %q does not admit namespace %q", "b", ns)
+}
+
+// nsRange returns the namespaces ns-<from> through ns-<to>, two digits each,
+// so they sort in number order.
+func nsRange(from, to int) []string {
+	var out []string
+	for i := from; i <= to; i++ {
+		out = append(out, fmt.Sprintf("ns-%02d", i))
+	}
+	return out
+}
+
+func fallbackIneligibleMessage(t *testing.T, mp *kaalmv1beta1.ModelProvider) string {
+	t.Helper()
+	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("FallbackIneligible = %+v, want True", c)
+	}
+	return c.Message
+}
+
+// The FallbackIneligible message lists the first ten findings in sorted
+// order and counts the rest, so it fits the condition schema however many
+// caller namespaces the fallback does not admit.
+func TestSetFallbackEligibility_BoundsTheMessage(t *testing.T) {
+	listed := func(namespaces []string) string {
+		var parts []string
+		for _, ns := range namespaces {
+			parts = append(parts, nsFinding(ns))
+		}
+		return strings.Join(parts, "; ")
+	}
+	cases := []struct {
+		name string
+		ns   []string
+		want string
+	}{
+		{"twelve", nsRange(1, 12), listed(nsRange(1, 10)) + "; fallback eligibility scan has 2 more findings, not listed"},
+		{"eleven", nsRange(1, 11), listed(nsRange(1, 10)) + "; fallback eligibility scan has 1 more finding, not listed"},
+		{"ten", nsRange(1, 10), listed(nsRange(1, 10))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+			r := &ModelProviderReconciler{}
+			r.setFallbackEligibility(mp, nsFindings(tc.ns...))
+			r.events.take(mp)
+			got := fallbackIneligibleMessage(t, mp)
+			if got != tc.want {
+				t.Errorf("message =\n %q\nwant\n %q", got, tc.want)
+			}
+			if len(got) > conditionMessageLimit {
+				t.Errorf("message is %d bytes", len(got))
+			}
+		})
+	}
+}
+
+// fallbackPass runs one scan pass over findings for callers in namespaces
+// and returns the notes of the FallbackIneligible events finish sends after
+// a successful status write; TestModelProvider_FallbackIneligibleNamesUnlistedFindings
+// runs the passes through finish.
+func fallbackPass(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider, namespaces ...string) []string {
+	r.setFallbackEligibility(mp, nsFindings(namespaces...))
+	var notes []string
+	for _, ev := range r.events.take(mp) {
+		notes = append(notes, ev.message)
+	}
+	if note := r.fallbackSeen.settle(mp, true); note != "" {
+		notes = append(notes, note)
+	}
+	return notes
+}
+
+// listedNs joins the listed text of the findings for the given namespaces.
+func listedNs(namespaces ...string) string {
+	var parts []string
+	for _, ns := range namespaces {
+		parts = append(parts, nsFinding(ns))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// With the last findings in memory, the FallbackIneligible Warning names
+// every new finding, listed in the condition or not, and starts with the new
+// total when the total grows. A steady or shrinking set sends nothing.
+func TestSetFallbackEligibility_Events(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "uid-p"}}
+	r := &ModelProviderReconciler{}
+	// A pass with no findings remembers an empty set.
+	fallbackPass(r, mp)
+	steps := []struct {
+		name string
+		ns   []string
+		want []string // the held event notes
+	}{{
+		name: "zero to twelve names all twelve after the total",
+		ns:   nsRange(1, 12),
+		want: []string{"12 findings in total; new: " + listedNs(nsRange(1, 12)...)},
+	}, {
+		name: "the same twelve send nothing",
+		ns:   nsRange(1, 12),
+	}, {
+		name: "a new finding past the listed ten is named after the total",
+		ns:   nsRange(1, 13),
+		want: []string{"13 findings in total; new: " + listedNs("ns-13")},
+	}, {
+		name: "a new finding among the listed ten is named after the total",
+		ns:   nsRange(0, 13),
+		want: []string{"14 findings in total; new: " + listedNs("ns-00")},
+	}, {
+		name: "a fixed listed finding sends nothing, though another moves into the list",
+		ns:   nsRange(1, 13),
+	}, {
+		name: "fixed unlisted findings send nothing",
+		ns:   nsRange(1, 11),
+	}, {
+		name: "all fixed sends nothing",
+	}, {
+		name: "a finding after all were fixed is new",
+		ns:   []string{"a"},
+		want: []string{"1 finding in total; new: " + listedNs("a")},
+	}}
+	for _, s := range steps {
+		if got := fallbackPass(r, mp, s.ns...); !reflect.DeepEqual(got, s.want) {
+			t.Errorf("%s:\n got %q\nwant %q", s.name, got, s.want)
+		}
+	}
+}
+
+// A fix and a new finding in the same pass leave the total unchanged. The
+// new finding is still named, even when neither finding is listed.
+func TestSetFallbackEligibility_FixPlusNewUnlistedFindingIsNamed(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "uid-p"}}
+	r := &ModelProviderReconciler{}
+	fallbackPass(r, mp, nsRange(1, 12)...)
+	got := fallbackPass(r, mp, append(nsRange(1, 11), "ns-13")...)
+	want := []string{"new: " + nsFinding("ns-13")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fix plus a new unlisted finding held\n %q\nwant\n %q", got, want)
+	}
+}
+
+// After a restart or a leader change the memory is empty. Over a stored
+// condition that lists findings, the first pass compares against the stored
+// message: it names the findings newly among the listed ones as "now
+// listed", since one may only have moved into the list, and reports a
+// growing total. A stored condition that is absent or False says the last
+// set was empty, so every finding is named as new. The pass seeds the
+// memory, so the next pass names new findings again.
+func TestSetFallbackEligibility_EventsAfterRestart(t *testing.T) {
+	cases := []struct {
+		name       string
+		before, ns []string
+		cleared    bool // a pass with no findings follows before
+		want       []string
+	}{{
+		name:   "the same set sends nothing",
+		before: nsRange(1, 12), ns: nsRange(1, 12),
+	}, {
+		name:   "a new finding past the listed ten gives only the total",
+		before: nsRange(1, 12), ns: nsRange(1, 13),
+		want: []string{"13 findings in total; the new findings are not among the 10 the condition lists"},
+	}, {
+		name:   "a new listed finding is named as now listed after the total",
+		before: nsRange(1, 12), ns: nsRange(0, 12),
+		want: []string{"13 findings in total; now listed: " + listedNs("ns-00")},
+	}, {
+		name:   "a fixed listed finding names the one that moved into the list",
+		before: nsRange(1, 12), ns: nsRange(2, 12),
+		want: []string{"now listed: " + listedNs("ns-11")},
+	}, {
+		name:   "a fix plus a new unlisted finding goes unreported",
+		before: nsRange(1, 12), ns: append(nsRange(1, 11), "ns-13"),
+	}, {
+		name: "no stored condition names every finding as new after the total",
+		ns:   nsRange(1, 11),
+		want: []string{"11 findings in total; new: " + listedNs(nsRange(1, 11)...)},
+	}, {
+		name:   "a stored False condition names every finding as new after the total",
+		before: nsRange(1, 3), cleared: true, ns: nsRange(1, 11),
+		want: []string{"11 findings in total; new: " + listedNs(nsRange(1, 11)...)},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "uid-p"}}
+			if tc.before != nil {
+				fallbackPass(&ModelProviderReconciler{}, mp, tc.before...)
+			}
+			if tc.cleared {
+				fallbackPass(&ModelProviderReconciler{}, mp)
+			}
+			r := &ModelProviderReconciler{} // the restarted controller
+			if got := fallbackPass(r, mp, tc.ns...); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("first pass held\n %q\nwant\n %q", got, tc.want)
+			}
+			// The memory is seeded: a swap among unlisted findings is named.
+			swapped := append(append([]string{}, tc.ns[:len(tc.ns)-1]...), "ns-99")
+			want := []string{"new: " + nsFinding("ns-99")}
+			if got := fallbackPass(r, mp, swapped...); !reflect.DeepEqual(got, want) {
+				t.Errorf("second pass held\n %q\nwant\n %q", got, want)
+			}
+		})
+	}
+}
+
+// The memory drops a staged set and its note when the status write failed,
+// so the next pass sends the event again, and returns the note once the
+// status is stored; it ignores a set recorded under another UID, so a
+// provider recreated under the same name starts with none; and forget drops
+// the provider's set.
+func TestFallbackFindingsMemory(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "uid-1"}}
+	var m fallbackFindingsMemory
+	findings := nsFindings("a")
+
+	m.stage(mp, findings, "new: a")
+	if note := m.settle(mp, false); note != "" {
+		t.Errorf("a failed status write returned the note %q", note)
+	}
+	if _, ok := m.lookup(mp); ok {
+		t.Fatal("a failed status write remembered its findings")
+	}
+	m.stage(mp, findings, "new: a")
+	if note := m.settle(mp, true); note != "new: a" {
+		t.Errorf("a stored pass returned the note %q, want %q", note, "new: a")
+	}
+	if keys, ok := m.lookup(mp); !ok || len(keys) != 1 {
+		t.Fatalf("lookup after a stored pass = %v, %v; want one key", keys, ok)
+	}
+
+	recreated := mp.DeepCopy()
+	recreated.UID = "uid-2"
+	if _, ok := m.lookup(recreated); ok {
+		t.Error("a provider recreated under the same name saw the old findings")
+	}
+
+	m.forget("p")
+	if _, ok := m.lookup(mp); ok {
+		t.Error("forget left the findings")
+	}
+	if len(m.known) != 0 || len(m.pending) != 0 {
+		t.Errorf("forget left entries: known %v, pending %v", m.known, m.pending)
+	}
+}
+
+// Deleting a provider drops its remembered findings, on the finalizer pass
+// and on the NotFound pass of a provider whose finalizer was removed by
+// hand, so the memory cannot grow with deleted providers.
+func TestModelProvider_DeleteForgetsFallbackFindings(t *testing.T) {
+	remember := func(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider) {
+		t.Helper()
+		r.fallbackSeen.stage(mp, nsFindings("a"), "")
+		r.fallbackSeen.settle(mp, true)
+		if _, ok := r.fallbackSeen.lookup(mp); !ok {
+			t.Fatal("findings not remembered")
+		}
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "gone"}}
+
+	t.Run("finalizer", func(t *testing.T) {
+		mp := deletingProvider("gone")
+		r := deleteReconciler(t, interceptor.Funcs{}, mp)
+		remember(r, mp)
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := r.fallbackSeen.lookup(mp); ok {
+			t.Error("the finalizer pass left the findings")
+		}
+	})
+	t.Run("not found", func(t *testing.T) {
+		mp := deletingProvider("gone")
+		r := deleteReconciler(t, interceptor.Funcs{})
+		remember(r, mp)
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := r.fallbackSeen.lookup(mp); ok {
+			t.Error("the NotFound pass left the findings")
+		}
+	})
+}
+
+// Many long model ids that a fallback does not offer still let the status
+// write through: FallbackIneligible lists the first ten findings and counts
+// the rest, and Ready is recorded at the current generation.
+func TestModelProvider_LongFallbackFindingsFitStatus(t *testing.T) {
+	const name = "mp-long-findings"
+	const child = name + "-fb"
+	mkSecret(t, name+"-key")
+	mkSecret(t, child+"-key")
+	mkProvider(t, child, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "m"}}
+	})
+	mkProvider(t, name, func(mp *kaalmv1beta1.ModelProvider) {
+		for _, id := range longEntries("model-", "a") {
+			mp.Spec.Models = append(mp.Spec.Models, kaalmv1beta1.ModelProviderModel{ID: id})
+		}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: child}}
+	})
+	eventually(t, func() error {
+		var mp kaalmv1beta1.ModelProvider
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &mp); err != nil {
+			return err
+		}
+		ready := condition(mp.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if ready == nil || ready.Status != metav1.ConditionTrue || mp.Status.ObservedGeneration != mp.Generation {
+			return fmt.Errorf("Ready = %+v, want True at generation %d", ready, mp.Generation)
+		}
+		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
+		if c == nil || c.Status != metav1.ConditionTrue {
+			return fmt.Errorf("FallbackIneligible = %+v, want True", c)
+		}
+		if len(c.Message) > conditionMessageLimit {
+			return fmt.Errorf("FallbackIneligible message is %d bytes", len(c.Message))
+		}
+		if !strings.HasSuffix(c.Message, "fallback eligibility scan has 2 more findings, not listed") {
+			return fmt.Errorf("FallbackIneligible message does not end in the count")
+		}
+		return nil
+	})
 }

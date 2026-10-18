@@ -88,7 +88,9 @@ func readOnlyRoot(sc *corev1.SecurityContext) bool {
 
 // securityBaselineDeviations lists every declared field that falls below the
 // restricted baseline. An unset field is not a deviation: it takes the
-// baseline value.
+// baseline value. capabilities.add names its first maxListedEntries distinct
+// capabilities other than NET_BIND_SERVICE, quoted, and counts the rest, so
+// the joined list fits a condition message.
 func securityBaselineDeviations(sec kaalmv1beta1.AgentClassSecurity) []string {
 	var out []string
 	if p := sec.PodSecurityContext; p != nil {
@@ -122,11 +124,15 @@ func securityBaselineDeviations(sec kaalmv1beta1.AgentClassSecurity) []string {
 			out = append(out, "containerSecurityContext.seccompProfile.type is Unconfined")
 		}
 		if c.Capabilities != nil {
+			var l entryList
 			for _, add := range c.Capabilities.Add {
 				if add != "NET_BIND_SERVICE" {
-					out = append(out, fmt.Sprintf("containerSecurityContext.capabilities.add includes %s", add))
+					l.add(string(add), fmt.Sprintf("containerSecurityContext.capabilities.add includes %s", quotedEntry(string(add))))
 				}
 			}
+			out = append(out, l.messages(
+				"containerSecurityContext.capabilities.add has 1 more capability, not listed",
+				"containerSecurityContext.capabilities.add has %d more capabilities, not listed")...)
 		}
 	}
 	return out

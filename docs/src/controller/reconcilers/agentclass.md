@@ -18,7 +18,7 @@ Hostname egress is supported on Cilium only. Every other CNI, Calico Enterprise 
 
 ## What it checks
 
-The checks don't stop at the first failure, and the `Ready` message lists the problems, with any long list cut ([How a Ready message lists problems](../../resources/validation-and-defaulting.md#how-a-ready-message-lists-problems)). The reason is the first that applies: `InvalidCIDR` when any `allowedCIDRs` entry is malformed, then `InvalidNamespacePattern` when any `allowedNamespaces` entry is malformed, then `InvalidImagePattern` when any `image.allowedImages` entry is malformed, and `InvalidReference` otherwise.
+The checks don't stop at the first failure, and the `Ready` message lists the problems, with any long list cut ([How a condition message lists problems](../../resources/validation-and-defaulting.md#how-a-condition-message-lists-problems)). The reason is the first that applies: `InvalidCIDR` when any `allowedCIDRs` entry is malformed, then `InvalidNamespacePattern` when any `allowedNamespaces` entry is malformed, then `InvalidImagePattern` when any `image.allowedImages` entry is malformed, and `InvalidReference` otherwise.
 
 | Check | Reason when it fails | Rule |
 |---|---|---|

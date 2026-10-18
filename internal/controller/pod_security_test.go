@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,12 +107,33 @@ func TestSecurityBaselineDeviations(t *testing.T) {
 	}
 	d := securityBaselineDeviations(sec)
 	joined := strings.Join(d, "; ")
-	for _, want := range []string{"runAsNonRoot is false", "allowPrivilegeEscalation is true", "add includes SYS_ADMIN"} {
+	for _, want := range []string{"runAsNonRoot is false", "allowPrivilegeEscalation is true", `add includes "SYS_ADMIN"`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("deviations %q lack %q", joined, want)
 		}
 	}
 	if strings.Contains(joined, "NET_BIND_SERVICE") || len(d) != 3 {
 		t.Errorf("NET_BIND_SERVICE is allowed under restricted; got %v", d)
+	}
+}
+
+// capabilities.add names its first ten deviations, quoted, and counts the
+// rest; NET_BIND_SERVICE is allowed and never counted.
+func TestSecurityBaselineDeviationsIsBounded(t *testing.T) {
+	add := []corev1.Capability{"NET_BIND_SERVICE"}
+	for i := range 12 {
+		add = append(add, corev1.Capability(fmt.Sprintf("CAP_%02d", i)))
+	}
+	add = append(add, "CAP_01")
+	sec := kaalmv1beta1.AgentClassSecurity{
+		ContainerSecurityContext: &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: add}},
+	}
+	var want []string
+	for i := range 10 {
+		want = append(want, fmt.Sprintf("containerSecurityContext.capabilities.add includes \"CAP_%02d\"", i))
+	}
+	want = append(want, "containerSecurityContext.capabilities.add has 2 more capabilities, not listed")
+	if got := securityBaselineDeviations(sec); !slices.Equal(got, want) {
+		t.Errorf("deviations =\n %q\nwant\n %q", got, want)
 	}
 }

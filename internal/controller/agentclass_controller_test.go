@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -576,4 +577,36 @@ func TestInvalidHosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Many long capabilities.add entries still let the status write through:
+// SecurityBaseline lists the first ten, quoted, and counts the rest.
+func TestAgentClass_LongCapabilityListFitsStatus(t *testing.T) {
+	const name = "ac-long-capabilities"
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	var add []corev1.Capability
+	for _, c := range longEntries("", "A") {
+		add = append(add, corev1.Capability(c))
+	}
+	ac.Spec.Security.ContainerSecurityContext = &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: add}}
+	if err := testClient.Create(ctxT(), ac); err != nil {
+		t.Fatalf("create class %s: %v", name, err)
+	}
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentClass
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+			return err
+		}
+		c := condition(got.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline)
+		if c == nil || c.Status != metav1.ConditionFalse || got.Status.ObservedGeneration != got.Generation {
+			return fmt.Errorf("SecurityBaseline = %+v, want False at generation %d", c, got.Generation)
+		}
+		if len(c.Message) > conditionMessageLimit {
+			return fmt.Errorf("SecurityBaseline message is %d bytes", len(c.Message))
+		}
+		if want := "containerSecurityContext.capabilities.add has 2 more capabilities, not listed"; !strings.HasSuffix(c.Message, want) {
+			return fmt.Errorf("SecurityBaseline message does not end in %q", want)
+		}
+		return nil
+	})
 }

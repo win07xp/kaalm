@@ -159,7 +159,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if deviations := securityBaselineDeviations(ac.Spec.Security); len(deviations) > 0 {
 		baseline.Status = metav1.ConditionFalse
 		baseline.Reason = kaalmv1beta1.ReasonBelowRestrictedBaseline
-		baseline.Message = strings.Join(deviations, "; ")
+		baseline.Message = cutConditionMessage(strings.Join(deviations, "; "))
 		if !apimeta.IsStatusConditionFalse(ac.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline) {
 			warnings = append(warnings, heldEvent{eventType: corev1.EventTypeWarning, reason: kaalmv1beta1.ReasonBelowRestrictedBaseline, action: kaalmv1beta1.ActionValidate, message: "security block is below the restricted Pod Security Standard: " + baseline.Message})
 		}

@@ -79,6 +79,9 @@ type ModelProviderReconciler struct {
 	// ownWrites lets the For() watch skip the event of the reconciler's own
 	// status write.
 	ownWrites ownWrites
+	// fallbackSeen remembers each provider's last FallbackIneligible
+	// findings, so the event can name a finding the condition does not list.
+	fallbackSeen fallbackFindingsMemory
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders,verbs=get;list;watch;update;patch
@@ -107,6 +110,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			dropBudgetCanonical(req.Name)
 			r.probes.forget(req.Name)
 			r.ownWrites.forget(req.Name)
+			r.fallbackSeen.forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -115,9 +119,13 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// through (see ownWrites).
 	r.ownWrites.readStale(&mp)
 
-	// Events held for a status write that never happened (an error before
-	// finish) are dropped: the next pass derives them again.
-	defer r.events.take(&mp)
+	// Events and fallback findings held for a status write that never
+	// happened (an error before finish) are dropped: the next pass derives
+	// them again.
+	defer func() {
+		r.events.take(&mp)
+		r.fallbackSeen.settle(&mp, false)
+	}()
 	if !mp.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &mp)
 	}
@@ -257,6 +265,7 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	// series again before the finalizer goes.
 	dropBudgetCanonical(mp.Name)
 	r.probes.forget(mp.Name)
+	r.fallbackSeen.forget(mp.Name)
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
 }
@@ -470,10 +479,12 @@ func (r *ModelProviderReconciler) validateFallback(
 
 // setMaxOutputTokensUnset records the anthropic models a crossing reaches
 // without a declared maxOutputTokens in the advisory MaxOutputTokensUnset
-// condition, and holds a Warning event for finish to send when the condition
-// turns True. A steady finding, even with a changed list, does not warn
-// again; clearing it sets the condition False without an event, and a
-// provider that never had a finding gets no condition. Ready is not touched.
+// condition, whose message names the first maxListedEntries provider/model
+// pairs of the sorted names, quoted, and counts the rest. It holds a Warning
+// event for finish to send when the condition turns True. A steady finding,
+// even with a changed list, does not warn again; clearing it sets the
+// condition False without an event, and a provider that never had a finding
+// gets no condition. Ready is not touched.
 func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.ModelProvider, names []string) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
 	if len(names) == 0 {
@@ -486,8 +497,12 @@ func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.Model
 		}
 		return
 	}
-	msg := "a request without max_tokens cannot cross into these anthropic models until they declare " +
-		"maxOutputTokens: " + strings.Join(names, ", ")
+	var l entryList
+	for _, n := range names {
+		l.add(n, quotedEntry(n))
+	}
+	msg := cutConditionMessage("a request without max_tokens cannot cross into these anthropic models until they declare " +
+		"maxOutputTokens: " + strings.Join(l.messages("1 more model, not listed", "%d more models, not listed"), ", "))
 	apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 		Type:    kaalmv1beta1.ConditionMaxOutputTokensUnset,
 		Status:  metav1.ConditionTrue,
@@ -602,16 +617,17 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 }
 
 // costSanity records the degrade targets that cost more than some priced
-// model in the advisory DegradeTargetNotCheapest condition, one finding per
-// distinct target joined into its message, and holds one Warning event with
-// that message for finish to send when the condition turns True. A target
+// model in the advisory DegradeTargetNotCheapest condition, whose message
+// names the first maxListedEntries distinct targets in policy order and
+// counts the rest, and holds one Warning event with that message for finish
+// to send when the condition turns True. A target
 // tied for the lowest cost is not a finding, and neither is a target without
 // both prices, whose cost the check cannot judge (rule 33 covers pricing where
 // budgets need it). A steady finding, even with a changed list, does not warn
 // again, the same as setMaxOutputTokensUnset. It never blocks readiness.
 func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
-	var findings []string
+	var findings entryList
 	if cheapest, cheapestAvg, ok := cheapestModel(mp); ok {
 		seen := map[string]bool{}
 		for _, p := range mp.Spec.Budget.Policies {
@@ -623,12 +639,14 @@ func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 			if !priced || avg.Cmp(cheapestAvg) <= 0 {
 				continue
 			}
-			findings = append(findings, fmt.Sprintf("degradeTo %q ($%s average) costs more than %q ($%s)",
-				*p.DegradeTo, formatUSD(avg), cheapest, formatUSD(cheapestAvg)))
+			findings.add(*p.DegradeTo, fmt.Sprintf("degradeTo %s ($%s average) costs more than %s ($%s)",
+				quotedEntry(*p.DegradeTo), formatUSD(avg), quotedEntry(cheapest), formatUSD(cheapestAvg)))
 		}
 	}
-	if len(findings) > 0 {
-		msg := strings.Join(findings, "; ")
+	if len(findings.listed) > 0 {
+		msg := cutConditionMessage(strings.Join(findings.messages(
+			"degradeTo has 1 more target that costs more than the cheapest model, not listed",
+			"degradeTo has %d more targets that cost more than the cheapest model, not listed"), "; "))
 		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionDegradeTargetNotCheapest,
 			Status:  metav1.ConditionTrue,
@@ -774,7 +792,9 @@ func (r *ModelProviderReconciler) setHealthy(mp *kaalmv1beta1.ModelProvider, ok 
 // event, and a status write per pass is an update event for every watcher
 // whether or not anything in it moved. The events the pass held go
 // out only when its write succeeds. A pass that finds its status already
-// stored drops them: the pass that stored it sent them.
+// stored drops them: the pass that stored it sent them. The
+// FallbackIneligible note derived from the remembered findings goes out in
+// both cases (see fallbackFindingsMemory).
 func (r *ModelProviderReconciler) finish(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
@@ -782,6 +802,7 @@ func (r *ModelProviderReconciler) finish(
 	if err := r.Get(ctx, client.ObjectKeyFromObject(mp), &current); err == nil &&
 		equality.Semantic.DeepEqual(current.Status, mp.Status) {
 		r.events.flush(r.Recorder, mp, false)
+		r.sendFallbackNote(mp, r.fallbackSeen.settle(mp, true))
 		return res, nil
 	}
 	err := r.Status().Update(ctx, mp)
@@ -789,6 +810,7 @@ func (r *ModelProviderReconciler) finish(
 		r.ownWrites.record(mp)
 	}
 	r.events.flush(r.Recorder, mp, err == nil)
+	r.sendFallbackNote(mp, r.fallbackSeen.settle(mp, err == nil))
 	if err != nil {
 		// controller-runtime drops a RequeueAfter sent with an error, and the
 		// error already requeues with backoff.
