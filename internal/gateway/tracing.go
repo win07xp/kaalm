@@ -54,10 +54,11 @@ type Tracing struct {
 // URL with a host, an optional port in 1-65535, and an optional path, with no
 // user info, query, or fragment. Any other value returns an error, because
 // the exporter would otherwise log the bad value and send to its own default,
-// localhost:4318, or the export path built below would break. An https endpoint verifies against pool when non-nil (the
-// gateway's upstream trust pool), else the system roots. sampleRatio drives
-// parent-based head sampling for traces this gateway starts; propagated
-// decisions are honored either way.
+// localhost:4318, or the export path built below would break. An https
+// endpoint verifies against pool when non-nil (the gateway's upstream trust
+// pool), else the system roots. sampleRatio drives parent-based head
+// sampling for traces this gateway starts; propagated decisions are honored
+// either way.
 func NewTracing(ctx context.Context, endpoint string, sampleRatio float64, pool *x509.CertPool, podName string) (*Tracing, error) {
 	u, err := parseOTLPEndpoint(endpoint)
 	if err != nil {
