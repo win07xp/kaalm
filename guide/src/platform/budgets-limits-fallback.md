@@ -218,8 +218,12 @@ the caller unchanged. The rules to know:
   your provider.
 - A candidate whose `allowedNamespaces` or `models` can never serve one of
   your callers is flagged before any request reaches it: the primary gets a
-  `FallbackIneligible` condition, with an event naming each new finding. The
-  provider stays `Ready`; the check is advisory.
+  `FallbackIneligible` condition that lists the first ten findings. The
+  event names each finding that newly joins those ten. With many findings it
+  can report only a higher total instead of naming a new finding ([Reconcile-time
+  fallback eligibility
+  scan](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan)).
+  The provider stays `Ready`; the check is advisory.
 - The gateway-level depth cap (`gateway.maxFallbackDepth`, default 3) bounds
   the *total providers attempted per request, including the primary*, not
   the nesting depth.

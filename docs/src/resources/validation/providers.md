@@ -4,7 +4,7 @@ This page states the ModelProvider rules for fallback and budgets (rules 11, 12,
 
 ## Providers: fallback and budgets
 
-These rules concern a single ModelProvider but run at reconcile time: rules 11, 12, and 41 must follow references to other providers, and rules 18 and 33 must match the gateway's model lookup and price parsing exactly ([ModelProviderReconciler](../../controller/reconcilers/modelprovider.md)). The problems of rules 11, 12, 18, 33, and 41 share the ModelProvider `Ready` message, which lists them as [How a Ready message lists problems](../validation-and-defaulting.md#how-a-ready-message-lists-problems) states.
+These rules concern a single ModelProvider but run at reconcile time: rules 11, 12, and 41 must follow references to other providers, and rules 18 and 33 must match the gateway's model lookup and price parsing exactly ([ModelProviderReconciler](../../controller/reconcilers/modelprovider.md)). The problems of rules 11, 12, 18, 33, and 41 share the ModelProvider `Ready` message, which lists them as [How a condition message lists problems](../validation-and-defaulting.md#how-a-condition-message-lists-problems) states.
 
 **Rule 11: Fallback chains must terminate.** `ModelProvider.spec.fallback` chains must not be circular. *Reconcile time; `Ready=False, reason=FallbackIneligible`.* A chain is circular when a provider appears among its own ancestors; a provider reached through two different branches is not circular ([Fallback trees](../modelprovider.md#fallback-trees)).
 

@@ -367,8 +367,8 @@ the probe. A ModelProvider reports all of these reasons:
   has no prices.
 - `InvalidNamespacePattern`: an `allowedNamespaces` entry is not a valid
   glob, such as `[`. The message names up to the first ten such entries and
-  counts the rest, so read the spec for the others ([How a Ready message lists
-  problems](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md#how-a-ready-message-lists-problems)).
+  counts the rest, so read the spec for the others ([How a condition message
+  lists problems](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md#how-a-condition-message-lists-problems)).
   Correct or remove them. Until you do, such an entry admits no namespace,
   and the other entries still work. The reason shows once the Secret checks pass.
 

@@ -88,21 +88,31 @@ Two families behave differently from the rest. The class-mismatch family (rules 
 
 Three reconcile-time outcomes carry no number. A per-channel Role or RoleBinding (the controller-only check Role or the gateway's credential Role) that the channel cannot write sets `Ready=False` on the AgentChannel: `reason=ChildConflict` when an object of that name exists that the channel does not control, and `reason=ChildWriteRejected` when the API server refuses the write. A transient API error sets no reason and is retried ([AgentChannel reconciler](../controller/reconcilers/agentchannel.md#per-channel-credential-roles)). The two ModelProvider advisory checks, `DegradeTargetNotCheapest` and `MaxOutputTokensUnset`, each set an advisory condition, emit a `Warning` event when it turns `True`, and leave `Ready` unaffected ([ModelProvider](modelprovider.md#degradeto-validation)).
 
-### How a Ready message lists problems
+### How a condition message lists problems
 
-A reconcile-time `Ready=False` message lists problems per list, and each list is bounded, so the message can be partial. The lists are:
+A reconcile-time `Ready=False` message lists problems per list, and so do the condition messages named below. Each list is bounded, so a message can be partial. The `Ready` lists are:
 
 - AgentClass: the missing `allowedProviders` references, the missing `allowedToolProviders` references, `allowedCIDRs` (rule 19), `allowedHosts` (rule 20), `allowedNamespaces` (rule 51), and `allowedImages` (rule 52).
 - ModelProvider: the fallback checks (rules 11 and 12, and a missing fallback provider) as one list, `modelMap` entries (rule 41), `degradeTo` targets (rule 18), unpriced models (rule 33), and `allowedNamespaces` (rule 51).
 - ToolProvider: `allowedNamespaces` (rule 51).
 
-Each list names at most the first ten distinct problems it finds, then counts the rest in one entry, such as `allowedCIDRs has 3 more invalid CIDRs, not listed`. The check reads entries in spec order and `modelMap` keys in sorted order, so each pass lists the same ten. The message does not name the others. To find them, read the spec; after you fix the listed ones, the next pass names the next ten.
+Five other conditions follow the same bound, one list each:
+
+- ModelProvider `FallbackIneligible`: the findings of the [eligibility scan](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan).
+- ModelProvider `DegradeTargetNotCheapest`: the `degradeTo` targets that cost more than the cheapest priced model.
+- ModelProvider `MaxOutputTokensUnset`: the `provider/model` pairs that declare no `maxOutputTokens`.
+- AgentClass `SecurityBaseline`: the `capabilities.add` entries other than `NET_BIND_SERVICE`. The other fields it names are single fields, so each is always named.
+- Agent `ProvidersReady`: the `spec.providers` entries with a problem.
+
+Each list names at most the first ten distinct problems it finds, then counts the rest in one entry, such as `allowedCIDRs has 3 more invalid CIDRs, not listed`. The check reads entries in spec order, except that `modelMap` keys, `MaxOutputTokensUnset` pairs, and `FallbackIneligible` findings are sorted. Findings sort by their text, so by fallback name first. For the same spec, each pass lists the same ten. `FallbackIneligible` is the exception: its findings also depend on which namespaces' workloads use the provider, so the listed ten can change as other teams' Agents and AgentTasks come and go.
+
+The message does not name the others. To find them, read the spec; after you fix the listed ones, the next pass names the next ten. For `FallbackIneligible` the spec is not enough, because the findings come from caller namespaces: [the eligibility scan](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan) states how it finds them.
 
 A value longer than 256 bytes is quoted as a prefix of at most 256 bytes, followed by its full length in bytes. The prefix can look valid, because the malformed part may lie past the cut, so the length tells you the quote is partial.
 
-The condition schema caps a message at 32,768 characters. A longer message fails the whole status write, and `Ready` and `observedGeneration` would keep their last values, possibly `Ready=True`. Without escaped characters, the bounded lists together stay under that cap. Values with characters the quote escapes, such as control characters, can still push them past it. The message is then cut and ends with `... (truncated)`, and the problems past the cut are not named. The reason is still picked from every problem by the usual precedence ([AgentClass](../controller/reconcilers/agentclass.md#what-it-checks), [ModelProvider](../controller/reconcilers/modelprovider.md#what-it-checks)), so a cut message keeps the right reason for alerting.
+The condition schema caps a message at 32,768 characters. A longer message fails the whole status write, and `Ready` and `observedGeneration` would keep their last values, possibly `Ready=True`. Without escaped characters, the bounded lists together stay under that cap. Values with characters the quote escapes, such as control characters, can still push them past it. The message is then cut and ends with `... (truncated)`, and the problems past the cut are not named. The reason is still picked from every problem by the usual precedence ([AgentClass](../controller/reconcilers/agentclass.md#what-it-checks), [ModelProvider](../controller/reconcilers/modelprovider.md#what-it-checks)), so a cut message keeps the right reason for alerting. `ProvidersReady` likewise takes the reason of the first problem in spec order, even one the message does not list.
 
-The `Warning` event carries the same text, cut further to the 1,024-byte limit on an Event note ([Event emission](../controller/operations.md#event-emission)).
+The `Warning` event carries the same text, cut further to the 1,024-byte limit on an Event note ([Event emission](../controller/operations.md#event-emission)). This holds for the `Ready` reasons and for the `DegradeTargetNotCheapest`, `MaxOutputTokensUnset`, and `BelowRestrictedBaseline` events. `ProvidersReady` sends no event. The `FallbackIneligible` event is built differently: [Findings and the condition](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan) states what it names.
 
 ### The rules
 
