@@ -100,7 +100,7 @@ func NewTracing(ctx context.Context, endpoint string, sampleRatio float64, pool 
 // dropped by the exporter, and a query or fragment (even a bare ? or #) would
 // swallow the appended path. No error echoes a password in the value: a
 // parse failure reports only the inner cause, and the shape errors print the
-// redacted URL.
+// URL with any user info replaced by a marker (see hideUserInfo).
 func parseOTLPEndpoint(endpoint string) (*url.URL, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -111,18 +111,30 @@ func parseOTLPEndpoint(endpoint string) (*url.URL, error) {
 		return nil, fmt.Errorf("otlp endpoint: %w", err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path]", u.Redacted())
+		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path]", hideUserInfo(u))
 	}
 	// u.Fragment is empty for a bare #, which still breaks the appended path.
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") {
-		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path] with no user info, query, or fragment", u.Redacted())
+		return nil, fmt.Errorf("otlp endpoint %q: need http(s)://host[:port][/path] with no user info, query, or fragment", hideUserInfo(u))
 	}
 	if p := u.Port(); p != "" {
 		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-			return nil, fmt.Errorf("otlp endpoint %q: port %s is outside 1-65535", u.Redacted(), p)
+			return nil, fmt.Errorf("otlp endpoint %q: port %s is outside 1-65535", hideUserInfo(u), p)
 		}
 	}
 	return u, nil
+}
+
+// hideUserInfo renders u with any user info replaced by "redacted".
+// url.URL.Redacted masks only a password, and a user name with no password
+// is often a bearer token.
+func hideUserInfo(u *url.URL) string {
+	if u.User == nil {
+		return u.String()
+	}
+	c := *u
+	c.User = url.User("redacted")
+	return c.String()
 }
 
 // Shutdown flushes buffered spans.

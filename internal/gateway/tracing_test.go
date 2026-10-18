@@ -440,18 +440,23 @@ func TestNewTracing_RejectsMalformedEndpoint(t *testing.T) {
 }
 
 func TestNewTracing_HidesThePassword(t *testing.T) {
-	for _, endpoint := range []string{
-		"http://user:secret@collector:43l8",
-		"http://user:secret@collector:4318",
+	for _, tc := range []struct{ endpoint, secret string }{
+		{"http://user:secret@collector:43l8", "secret"},
+		{"http://user:secret@collector:4318", "secret"},
+		// A user name with no password is often a bearer token, and
+		// url.URL.Redacted keeps it.
+		{"http://tok3n@collector:4318", "tok3n"},
+		{"http://tok3n@collector:43l8", "tok3n"},
+		{"ftp://tok3n@collector:4318", "tok3n"},
 	} {
-		t.Run(endpoint, func(t *testing.T) {
-			tr, err := NewTracing(context.Background(), endpoint, 1, nil, "gw-0")
+		t.Run(tc.endpoint, func(t *testing.T) {
+			tr, err := NewTracing(context.Background(), tc.endpoint, 1, nil, "gw-0")
 			if err == nil {
 				_ = tr.Shutdown(context.Background())
-				t.Fatalf("NewTracing(%q) returned no error", endpoint)
+				t.Fatalf("NewTracing(%q) returned no error", tc.endpoint)
 			}
-			if strings.Contains(err.Error(), "secret") {
-				t.Fatalf("error %q echoes the password", err)
+			if strings.Contains(err.Error(), tc.secret) {
+				t.Fatalf("error %q echoes the user info", err)
 			}
 		})
 	}
