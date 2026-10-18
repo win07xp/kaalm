@@ -64,6 +64,7 @@ func edge(name string, modelMap map[string]string) kaalmv1beta1.FallbackReferenc
 // by each edge's modelMap on the way down).
 func TestFallbackIneligibility(t *testing.T) {
 	all := []string{"*"}
+	longA := strings.Repeat("a", 300)
 	cases := []struct {
 		name      string
 		primary   *kaalmv1beta1.ModelProvider
@@ -118,9 +119,20 @@ func TestFallbackIneligibility(t *testing.T) {
 		name:      "a missing provider is the structural check's to report",
 		primary:   eligProvider("p", []string{"m1"}, all, edge("gone", nil)),
 		providers: nil,
+	}, {
+		name:      "long model ids that share a quoted prefix stay two findings",
+		primary:   eligProvider("p", []string{longA + "1", longA + "2"}, all, edge("b", nil)),
+		providers: []*kaalmv1beta1.ModelProvider{eligProvider("b", []string{"m1"}, all)},
+		want: []string{
+			fmt.Sprintf("fallback %q does not offer model %s (primary model %s)", "b", quotedEntry(longA+"1"), quotedEntry(longA+"1")),
+			fmt.Sprintf("fallback %q does not offer model %s (primary model %s)", "b", quotedEntry(longA+"2"), quotedEntry(longA+"2")),
+		},
 	}}
 	for _, tc := range cases {
-		got := fallbackIneligibility(tc.primary, index(tc.providers...), tc.callers)
+		var got []string
+		for _, f := range fallbackIneligibility(tc.primary, index(tc.providers...), tc.callers) {
+			got = append(got, f.message)
+		}
 		if len(got) == 0 && len(tc.want) == 0 {
 			continue
 		}
@@ -239,8 +251,8 @@ func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 // The scan's findings grow when other people act (a new team's Agents use
 // the primary from a namespace the fallback does not admit), so the Warning
 // announces each added finding, naming only the new ones, and stays quiet
-// when the set is unchanged or shrinks. The condition message always
-// lists the full current set.
+// when the set is unchanged or shrinks. With this few findings the
+// condition message lists the full current set.
 func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
 	mp := eventsProvider("ev-mp-grow", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "ev-mp-grow-backup"}}
@@ -345,7 +357,7 @@ func TestSetFallbackEligibility_SeparatorInModelIDNotReannounced(t *testing.T) {
 // nsFindings returns the scan's findings for callers in the given
 // namespaces, none of which the fallback admits: one finding per namespace,
 // sorted by namespace.
-func nsFindings(namespaces ...string) []string {
+func nsFindings(namespaces ...string) []fallbackFinding {
 	return fallbackIneligibility(
 		eligProvider("p", []string{"m"}, []string{"*"}, edge("b", nil)),
 		index(eligProvider("b", []string{"m"}, []string{"nobody"})), namespaces)

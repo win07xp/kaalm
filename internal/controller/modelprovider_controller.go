@@ -470,10 +470,12 @@ func (r *ModelProviderReconciler) validateFallback(
 
 // setMaxOutputTokensUnset records the anthropic models a crossing reaches
 // without a declared maxOutputTokens in the advisory MaxOutputTokensUnset
-// condition, and holds a Warning event for finish to send when the condition
-// turns True. A steady finding, even with a changed list, does not warn
-// again; clearing it sets the condition False without an event, and a
-// provider that never had a finding gets no condition. Ready is not touched.
+// condition, whose message names the first maxListedEntries provider/model
+// pairs of the sorted names, quoted, and counts the rest. It holds a Warning
+// event for finish to send when the condition turns True. A steady finding,
+// even with a changed list, does not warn again; clearing it sets the
+// condition False without an event, and a provider that never had a finding
+// gets no condition. Ready is not touched.
 func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.ModelProvider, names []string) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
 	if len(names) == 0 {
@@ -486,8 +488,12 @@ func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.Model
 		}
 		return
 	}
-	msg := "a request without max_tokens cannot cross into these anthropic models until they declare " +
-		"maxOutputTokens: " + strings.Join(names, ", ")
+	var l entryList
+	for _, n := range names {
+		l.add(n, quotedEntry(n))
+	}
+	msg := cutConditionMessage("a request without max_tokens cannot cross into these anthropic models until they declare " +
+		"maxOutputTokens: " + strings.Join(l.messages("1 more model, not listed", "%d more models, not listed"), ", "))
 	apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 		Type:    kaalmv1beta1.ConditionMaxOutputTokensUnset,
 		Status:  metav1.ConditionTrue,
@@ -602,16 +608,17 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 }
 
 // costSanity records the degrade targets that cost more than some priced
-// model in the advisory DegradeTargetNotCheapest condition, one finding per
-// distinct target joined into its message, and holds one Warning event with
-// that message for finish to send when the condition turns True. A target
+// model in the advisory DegradeTargetNotCheapest condition, whose message
+// names the first maxListedEntries distinct targets in policy order and
+// counts the rest, and holds one Warning event with that message for finish
+// to send when the condition turns True. A target
 // tied for the lowest cost is not a finding, and neither is a target without
 // both prices, whose cost the check cannot judge (rule 33 covers pricing where
 // budgets need it). A steady finding, even with a changed list, does not warn
 // again, the same as setMaxOutputTokensUnset. It never blocks readiness.
 func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
-	var findings []string
+	var findings entryList
 	if cheapest, cheapestAvg, ok := cheapestModel(mp); ok {
 		seen := map[string]bool{}
 		for _, p := range mp.Spec.Budget.Policies {
@@ -623,12 +630,14 @@ func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 			if !priced || avg.Cmp(cheapestAvg) <= 0 {
 				continue
 			}
-			findings = append(findings, fmt.Sprintf("degradeTo %q ($%s average) costs more than %q ($%s)",
-				*p.DegradeTo, formatUSD(avg), cheapest, formatUSD(cheapestAvg)))
+			findings.add(*p.DegradeTo, fmt.Sprintf("degradeTo %s ($%s average) costs more than %s ($%s)",
+				quotedEntry(*p.DegradeTo), formatUSD(avg), quotedEntry(cheapest), formatUSD(cheapestAvg)))
 		}
 	}
-	if len(findings) > 0 {
-		msg := strings.Join(findings, "; ")
+	if len(findings.listed) > 0 {
+		msg := cutConditionMessage(strings.Join(findings.messages(
+			"degradeTo has 1 more target that costs more than the cheapest model, not listed",
+			"degradeTo has %d more targets that cost more than the cheapest model, not listed"), "; "))
 		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionDegradeTargetNotCheapest,
 			Status:  metav1.ConditionTrue,

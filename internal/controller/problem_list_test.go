@@ -96,3 +96,16 @@ func TestJoinProblems(t *testing.T) {
 		t.Errorf("cut message is not valid UTF-8")
 	}
 }
+
+func TestCutConditionMessage(t *testing.T) {
+	if got := cutConditionMessage("b; a"); got != "b; a" {
+		t.Errorf("a short message was changed to %q", got)
+	}
+	got := cutConditionMessage(strings.Repeat("a", 40000))
+	if len(got) > conditionMessageLimit {
+		t.Errorf("cut message is %d bytes, want at most %d", len(got), conditionMessageLimit)
+	}
+	if !strings.HasSuffix(got, "... (truncated)") {
+		t.Errorf("cut message does not end in the cut marker")
+	}
+}

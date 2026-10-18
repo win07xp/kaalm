@@ -872,20 +872,22 @@ func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *k
 // reconcileProvidersCondition sets ProvidersReady. It is True with
 // AllProvidersHealthy when every provider in spec.providers is in the class
 // allowlist, exists, and reports Ready=True. Otherwise it is False with the
-// reason of the first problem in spec order: ClassConstraintViolation for a
-// provider outside the allowlist or missing (the reason Ready carries for the
-// same problem), ProviderUnhealthy for one that is not Ready. Provider Get
+// reason of the first problem in spec order, listed or not:
+// ClassConstraintViolation for a provider outside the allowlist or missing
+// (the reason Ready carries for the same problem), ProviderUnhealthy for one
+// that is not Ready. The message names the first maxListedEntries problems
+// in spec order, a repeated provider once, and counts the rest. Provider Get
 // errors other than NotFound are skipped, as in reconcileBudgetCondition.
 func (r *AgentReconciler) reconcileProvidersCondition(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass,
 ) {
 	var reason string
-	var problems []string
-	add := func(rsn, msg string) {
+	var problems entryList
+	add := func(rsn, key, msg string) {
 		if reason == "" {
 			reason = rsn
 		}
-		problems = append(problems, msg)
+		problems.add(key, msg)
 	}
 	for _, p := range agent.Spec.Providers {
 		name := p.ProviderRef.Name
@@ -897,24 +899,26 @@ func (r *AgentReconciler) reconcileProvidersCondition(
 			}
 		}
 		if !allowed {
-			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("provider %q is not in AgentClass %q allowedProviders", name, class.Name))
+			add(kaalmv1beta1.ReasonClassConstraintViolation, name,
+				fmt.Sprintf("provider %s is not in AgentClass %s allowedProviders", quotedEntry(name), quotedEntry(class.Name)))
 			continue
 		}
 		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: name}, &mp); err != nil {
 			if apierrors.IsNotFound(err) {
-				add(kaalmv1beta1.ReasonClassConstraintViolation, fmt.Sprintf("provider %q does not exist", name))
+				add(kaalmv1beta1.ReasonClassConstraintViolation, name,
+					fmt.Sprintf("provider %s does not exist", quotedEntry(name)))
 			}
 			continue
 		}
 		ready := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionReady)
 		switch {
 		case ready == nil:
-			add(kaalmv1beta1.ReasonProviderUnhealthy, fmt.Sprintf("provider %q reports no Ready condition yet", name))
+			add(kaalmv1beta1.ReasonProviderUnhealthy, name,
+				fmt.Sprintf("provider %s reports no Ready condition yet", quotedEntry(name)))
 		case ready.Status != metav1.ConditionTrue:
-			add(kaalmv1beta1.ReasonProviderUnhealthy,
-				fmt.Sprintf("provider %q is not Ready (%s)", name, ready.Reason))
+			add(kaalmv1beta1.ReasonProviderUnhealthy, name,
+				fmt.Sprintf("provider %s is not Ready (%s)", quotedEntry(name), ready.Reason))
 		}
 	}
 	cond := metav1.Condition{
@@ -927,7 +931,9 @@ func (r *AgentReconciler) reconcileProvidersCondition(
 	if reason != "" {
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = reason
-		cond.Message = strings.Join(problems, "; ")
+		cond.Message = cutConditionMessage(strings.Join(problems.messages(
+			"spec.providers has 1 more provider with a problem, not listed",
+			"spec.providers has %d more providers with a problem, not listed"), "; "))
 	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, cond)
 }
