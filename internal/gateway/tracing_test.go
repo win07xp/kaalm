@@ -399,3 +399,46 @@ func TestNewTracing_BuildsWithTheSDKDefaultResource(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = tr.tp.Shutdown(context.Background()) })
 }
+
+func TestNewTracing_RejectsMalformedEndpoint(t *testing.T) {
+	// The exporter only logs an endpoint it cannot parse and then sends to
+	// its own default, localhost:4318, so NewTracing has to refuse the value.
+	for _, endpoint := range []string{
+		"http://collector:43l8",
+		"collector:4318",
+		"otel-collector.observability:4318",
+		"//collector:4318",
+		"ftp://collector:4318",
+		"http://",
+		"http://:4318",
+		"",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			tr, err := NewTracing(context.Background(), endpoint, 1, nil, "gw-0")
+			if err == nil {
+				_ = tr.Shutdown(context.Background())
+				t.Fatalf("NewTracing(%q) returned no error", endpoint)
+			}
+			if tr != nil {
+				t.Fatalf("NewTracing(%q) returned a tracer with the error", endpoint)
+			}
+		})
+	}
+}
+
+func TestNewTracing_HidesThePassword(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://user:secret@collector:43l8",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			tr, err := NewTracing(context.Background(), endpoint, 1, nil, "gw-0")
+			if err == nil {
+				_ = tr.Shutdown(context.Background())
+				t.Fatalf("NewTracing(%q) returned no error", endpoint)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error %q echoes the password", err)
+			}
+		})
+	}
+}
