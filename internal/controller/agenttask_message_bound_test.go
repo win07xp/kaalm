@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
@@ -42,4 +44,36 @@ func TestTask_LongAgentMessageStillSettles(t *testing.T) {
 	if c == nil || len(c.Message) > maxAgentMessageBytes {
 		t.Errorf("Completed condition missing or its message is unbounded: %v", c != nil)
 	}
+}
+
+// expectTaskFailedBounded waits until the task is Failed and checks that its
+// Completed condition has reason and a message that holds want and fits the
+// condition schema's maxLength. A message past that limit fails the settle
+// write, so the task would never leave Pending.
+func expectTaskFailedBounded(t *testing.T, name, reason, want string) {
+	t.Helper()
+	expectTaskPhase(t, name, kaalmv1beta1.TaskFailed)
+	c := condition(getTask(t, name).Status.Conditions, kaalmv1beta1.ConditionCompleted)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != reason {
+		t.Fatalf("Completed = %+v, want False/%s", c, reason)
+	}
+	if len(c.Message) > conditionMessageLimit {
+		t.Fatalf("Completed message is %d bytes, want at most %d", len(c.Message), conditionMessageLimit)
+	}
+	if !strings.Contains(c.Message, want) {
+		t.Fatalf("Completed message does not hold %q", want)
+	}
+}
+
+// A provider name has no length limit in the schema. The failure message
+// quotes it bounded, so the task still settles Failed.
+func TestTask_LongProviderNameStillFails(t *testing.T) {
+	mkWorkloadClass(t, "tc-long-provname", nil) // empty allowedProviders => none allowed
+	mkTask(t, "t-long-provname", "tc-long-provname", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Providers = []kaalmv1beta1.AgentProviderReference{
+			{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: strings.Repeat("a", 40000)}},
+		}
+	})
+	expectTaskFailedBounded(t, "t-long-provname",
+		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
 }

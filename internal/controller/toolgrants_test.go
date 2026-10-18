@@ -182,6 +182,17 @@ func TestAgentToolGrant_CatalogDenialAndRecovery(t *testing.T) {
 	expectAgentNotDegraded(t, "r38-agent")
 }
 
+// A tool provider name has no length limit in the schema. The rule 37
+// message quotes it bounded, so the Ready write still fits.
+func TestAgentToolGrant_LongProviderNameFitsReady(t *testing.T) {
+	mkWorkloadClass(t, "wc-long-tpname", nil) // no allowedToolProviders: rule 37 denies
+	mkWorkloadAgent(t, "long-tpname-agent", "wc-long-tpname", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Tools = []kaalmv1beta1.AgentToolGrant{grantOf(strings.Repeat("a", 40000))}
+	})
+	expectAgentDegradedBounded(t, "long-tpname-agent",
+		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
+}
+
 func TestAgentToolGrant_NoCatalogAcceptsAnyNarrowing(t *testing.T) {
 	mkOpenTP(t, "tg-nocat", nil) // no declared catalog: rule 38 inapplicable
 	mkWorkloadClass(t, "wc-nocat", func(ac *kaalmv1beta1.AgentClass) {
