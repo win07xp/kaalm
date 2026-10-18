@@ -562,3 +562,79 @@ func TestReconcileDelete_LiveListErrorKeepsFinalizer(t *testing.T) {
 		}
 	})
 }
+
+// A hold that only the live read shows comes back on a short timer, since no
+// cache event may arrive to re-check it. A hold the cache shows waits for the
+// referrer's event, as before.
+func TestReconcileDelete_LiveOnlyHoldRequeuesSoon(t *testing.T) {
+	now := metav1.Now()
+	ctx := context.Background()
+	req := func(name string) ctrl.Request {
+		return ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	}
+	agentOn := func(class string) *kaalmv1beta1.Agent {
+		return &kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "on-" + class},
+			Spec:       kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: class}},
+		}
+	}
+	// check reconciles name with the referrer in the live reader only, then
+	// in both readers, and checks the requeue of each hold.
+	check := func(t *testing.T, name string, reconcile func(cached, live client.Client) (ctrl.Result, error),
+		obj func() client.Object, referrer client.Object) {
+		t.Helper()
+		res, err := reconcile(indexedReferrerClient(t, obj()), indexedReferrerClient(t, referrer))
+		if err != nil {
+			t.Fatalf("live-only hold: %v", err)
+		}
+		if res.RequeueAfter <= 0 || res.RequeueAfter >= time.Minute {
+			t.Errorf("live-only hold RequeueAfter = %v, want a few seconds", res.RequeueAfter)
+		}
+		res, err = reconcile(indexedReferrerClient(t, obj(), referrer.DeepCopyObject().(client.Object)),
+			indexedReferrerClient(t, referrer.DeepCopyObject().(client.Object)))
+		if err != nil {
+			t.Fatalf("cached hold: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Errorf("cached hold RequeueAfter = %v, want 0 (the referrer's event re-checks it)", res.RequeueAfter)
+		}
+	}
+
+	t.Run("ModelProvider", func(t *testing.T) {
+		name := "live-requeue-mp"
+		check(t, name, func(cached, live client.Client) (ctrl.Result, error) {
+			r := &ModelProviderReconciler{
+				Client: cached, APIReader: live, Recorder: events.NewFakeRecorder(8),
+				OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
+			}
+			return r.Reconcile(ctx, req(name))
+		}, func() client.Object { return deletingProvider(name) }, allowingClass("live-requeue-mp-class", name))
+	})
+
+	t.Run("ToolProvider", func(t *testing.T) {
+		name := "live-requeue-tp"
+		check(t, name, func(cached, live client.Client) (ctrl.Result, error) {
+			r := &ToolProviderReconciler{
+				Client: cached, APIReader: live, Recorder: events.NewFakeRecorder(8),
+				OperatorNamespace: testOperatorNamespace,
+			}
+			return r.Reconcile(ctx, req(name))
+		}, func() client.Object {
+			tp := eventsToolProvider(name)
+			tp.DeletionTimestamp = &now
+			return tp
+		}, allowingClass("live-requeue-tp-class", name))
+	})
+
+	t.Run("AgentClass", func(t *testing.T) {
+		name := "live-requeue-ac"
+		check(t, name, func(cached, live client.Client) (ctrl.Result, error) {
+			r := &AgentClassReconciler{Client: cached, APIReader: live, Recorder: events.NewFakeRecorder(8)}
+			return r.Reconcile(ctx, req(name))
+		}, func() client.Object {
+			return &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{
+				Name: name, DeletionTimestamp: &now, Finalizers: []string{kaalmv1beta1.ClassFinalizer},
+			}}
+		}, agentOn(name))
+	})
+}
