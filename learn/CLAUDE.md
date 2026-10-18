@@ -19,7 +19,7 @@ ones after the tag.
 The walk history (what each pass caught) is in issues #77, #99, #115,
 #130, and #143.
 
-The install is pinned to `--version 1.0.0` on purpose: the pin is what makes
+The install is pinned to `--version 2.0.0` on purpose: the pin is what makes
 the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 

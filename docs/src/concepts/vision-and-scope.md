@@ -35,7 +35,7 @@ The default mode is therefore spend visibility and soft guardrails. Providers wh
 
 Several projects overlap with parts of Kaalm's scope. Kaalm is additive to the ecosystem rather than a replacement for existing primitives. This section describes other people's software, so it ages faster than the rest of the book; it reflects the field as of August 2026, and the Agent Sandbox entry as of September 2026.
 
-**Agent Sandbox (kubernetes-sigs, SIG Apps)** is a lower-level primitive: a `Sandbox` CRD (with `SandboxTemplate`, `SandboxClaim`, and `SandboxWarmPool`) for a single, stateful, isolated pod, with suspend and resume, warm pools, snapshot-based restore, and gVisor or Kata isolation. The Kubernetes project has stated that model access and budget controls are out of its scope, which is exactly the ground Kaalm's ModelProvider and ToolProvider occupy. Agent Sandbox is the natural runtime backend for Kaalm agents that need strong isolation. v1 stays on raw Pods and covers gVisor, Kata, and Kata-fronted microVMs through RuntimeClass; the [roadmap](../ROADMAP.md#next) carries the Sandbox backend. Its roadmap items for identity association and per-claim NetworkPolicy would overlap Kaalm's pod-layer identity and egress mechanics; the policy on top of them (which provider, whose budget, which tools) is not on its roadmap.
+**Agent Sandbox (kubernetes-sigs, SIG Apps)** is a lower-level primitive: a `Sandbox` CRD (with `SandboxTemplate`, `SandboxClaim`, and `SandboxWarmPool`) for a single, stateful, isolated pod, with suspend and resume, warm pools, snapshot-based restore, and gVisor or Kata isolation. The Kubernetes project has stated that model access and budget controls are out of its scope, which is exactly the ground Kaalm's ModelProvider and ToolProvider occupy. Agent Sandbox is the natural runtime backend for Kaalm agents that need strong isolation. Kaalm runs agents as raw Pods and covers gVisor, Kata, and Kata-fronted microVMs through RuntimeClass; the [roadmap](../ROADMAP.md#next) carries the Sandbox backend. Its roadmap items for identity association and per-claim NetworkPolicy would overlap Kaalm's pod-layer identity and egress mechanics; the policy on top of them (which provider, whose budget, which tools) is not on its roadmap.
 
 **kagent (CNCF Sandbox)** is a more opinionated agent framework: agents are declared as prompts plus tool references in an `Agent` CRD and executed by a built-in ADK-based engine, with per-agent `ModelConfig` resources. Kaalm differs on both axes that matter here: any container satisfying a minimal [runtime contract](../runtime/contract.md) can be an Agent (no engine, no prompt schema), and model and tool access are cluster-scoped, budget-governed shared resources rather than per-agent configuration. kagent has no spend tracking, budget enforcement, hibernation, or task-completion semantics.
 
@@ -57,7 +57,7 @@ Kaalm's differentiator is the combination none of its neighbors has: dollar-deno
 6. **Kubernetes-native semantics.** Lifecycle mirrors familiar primitives: AgentClass is to Agent as StorageClass is to PVC; AgentTask is to Agent as Job is to Deployment.
 7. **Tradeoffs are stated.** Where the system makes a tradeoff (soft budget limits by default, serialized admission near the ceiling under hard enforcement), each mode's exact bound is documented.
 
-## Scope for v1
+## Scope
 
 **In scope:**
 
@@ -73,7 +73,7 @@ Kaalm's differentiator is the combination none of its neighbors has: dollar-deno
 - Grafana dashboards and OpenTelemetry tracing; see [Dashboards](../operations/observability.md#dashboards) and [Tracing](../operations/observability.md#tracing)
 - An optional operator console (default off): read-only fleet visibility plus one governed test-chat action; see [Console overview](../console/overview.md)
 
-**Not in v1.** These are design-level deferrals; the [roadmap](../ROADMAP.md) says which of them are scheduled:
+**Out of scope.** These are design-level deferrals; the [roadmap](../ROADMAP.md) says which of them are scheduled:
 
 - Agent-to-agent communication and multi-agent orchestration
 - Audit-log export
@@ -81,10 +81,10 @@ Kaalm's differentiator is the combination none of its neighbors has: dollar-deno
 - Multi-cluster federation
 - Advanced scheduling (GPU awareness, priority classes, preemption policies specific to agents)
 - Serving the `google-vertex` provider type (the enum is reserved, no inbound path is routed) and any cross-format fallback involving it
-- Agent Sandbox integration (an `agentSandbox` runtime backend); v1 covers gVisor and Kata through RuntimeClass
+- Agent Sandbox integration (an `agentSandbox` runtime backend); gVisor and Kata run through RuntimeClass
 - The Discord Gateway WebSocket adapter for free-text message bots (a persistent connection per bot); the Discord adapter covers slash commands over HTTP
 
-The v1 scope is narrow on purpose: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.
+The scope is narrow on purpose: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.
 
 ## Scoping summary
 

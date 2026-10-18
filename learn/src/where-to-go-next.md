@@ -43,7 +43,7 @@ organized by the symptom you see.
 **Understand the machine.** The design book, starting at its
 [Introduction](https://github.com/win07xp/kaalm/blob/main/docs/src/introduction.md), is the specification: how the
 controller reconciles, how the gateway routes and bills, how every workload
-gets its certificate, and the twenty-four acceptance scenarios the whole
+gets its certificate, and the twenty-five acceptance scenarios the whole
 system is tested against. Start with its System architecture chapter.
 
 **Write a bigger agent.** You already write handlers; that is the whole
