@@ -338,6 +338,34 @@ func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
 	}
 }
 
+// A Role write denied with a text longer than the Event note limit sets a
+// Ready message cut to that limit, which still names the Role, and the
+// Warning carries the same text.
+func TestChannel_RoleWriteRejectedCutsLongDenial(t *testing.T) {
+	const role = "kaalm-channel-scope-ch-creds"
+	ch := scopeFakeChannel("/channels/default/scope-ch")
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "scope-agent", Namespace: "default"}}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
+		WithObjects(append(preScopeObjects(t, ch)[:2], agent, ch)...).WithStatusSubresource(ch).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
+		WithInterceptorFuncs(roleWriteFailure("create", role, longDenial("roles", role))).Build()
+	rec := events.NewFakeRecorder(10)
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace, Recorder: rec}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ch)}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	expectFakeReady(t, c, ch, kaalmv1beta1.ReasonChildWriteRejected)
+	var got kaalmv1beta1.AgentChannel
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ch), &got); err != nil {
+		t.Fatal(err)
+	}
+	ready := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	expectCutRejection(t, ready.Message, `creating Role "`+role+`": `)
+	if evs := drainEvents(rec); len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonChildWriteRejected+" "+ready.Message {
+		t.Errorf("events = %d, want one ChildWriteRejected Warning with the Ready message", len(evs))
+	}
+}
+
 // A transient Role write failure is a reconcile error retried with backoff,
 // not a status reason.
 func TestChannel_RoleWriteTransientErrorRetries(t *testing.T) {
