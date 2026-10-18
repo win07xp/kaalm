@@ -202,9 +202,10 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		s.RateLimiter.DebitTokens(provider, c.Namespace, admittedModel, u.InputTokens+u.OutputTokens)
 	}
 
-	// Strip the provider prefix so the upstream sees the raw model ID, and
-	// add stream_options where the format needs it for stream usage. Every
-	// other byte goes out as the agent sent it.
+	// Strip the provider prefix so the upstream sees the raw model ID, write
+	// the routing member names exactly, and add stream_options where the
+	// format needs it for stream usage. Every other byte goes out as the
+	// agent sent it.
 	outBody := rewriteRequestBody(body, fields, modelID, needsStreamOptions(adapter, fields))
 
 	// Gateway traffic counts as activity for Agent callers (task Pods do not
