@@ -366,9 +366,11 @@ the probe. A ModelProvider reports all of these reasons:
 - `HardBudgetUnpriced`: hard enforcement is on and a model in the catalog
   has no prices.
 - `InvalidNamespacePattern`: an `allowedNamespaces` entry is not a valid
-  glob, such as `[`. The message names each such entry. Correct or remove it.
-  Until you do, that entry admits no namespace, and the other entries still
-  work. The reason shows once the Secret checks pass.
+  glob, such as `[`. The message names up to the first ten such entries and
+  counts the rest, so read the spec for the others ([How a Ready message lists
+  problems](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md#how-a-ready-message-lists-problems)).
+  Correct or remove them. Until you do, such an entry admits no namespace,
+  and the other entries still work. The reason shows once the Secret checks pass.
 
 Each of these reasons also fires a `Warning` event with the same reason the
 first time `Ready` turns `False` with it.
