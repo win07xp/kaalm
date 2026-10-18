@@ -5,7 +5,10 @@
 package main
 
 import (
+	"flag"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +89,125 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 		if err := validatePlatformBaseURL(bad); err == nil {
 			t.Errorf("validatePlatformBaseURL(%q) must error", bad)
 		}
+	}
+}
+
+type limitCase struct {
+	name      string
+	counts    map[string]int64
+	durations map[string]time.Duration
+	// wantFlags lists the flags the error must name; empty means no error.
+	wantFlags []string
+}
+
+func TestValidateLimits(t *testing.T) {
+	tests := []limitCase{
+		{
+			name:      "zero keeps the fallback",
+			counts:    map[string]int64{"mcp-max-body-bytes": 0},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": 0},
+		},
+		{
+			name:      "flag defaults",
+			counts:    map[string]int64{"mcp-max-body-bytes": 4 << 20},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": 120 * time.Second},
+		},
+		{
+			name:      "negative MCP body cap",
+			counts:    map[string]int64{"mcp-max-body-bytes": -1},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": 0},
+			wantFlags: []string{"--mcp-max-body-bytes"},
+		},
+		{
+			name:      "negative MCP timeout",
+			counts:    map[string]int64{"mcp-max-body-bytes": 0},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": -5 * time.Second},
+			wantFlags: []string{"--mcp-upstream-timeout"},
+		},
+		{
+			name:      "both negative in one error",
+			counts:    map[string]int64{"mcp-max-body-bytes": -1},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": -time.Second},
+			wantFlags: []string{"--mcp-max-body-bytes", "--mcp-upstream-timeout"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLimits(tt.counts, tt.durations)
+			if len(tt.wantFlags) == 0 {
+				if err != nil {
+					t.Fatalf("validateLimits: %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateLimits returned nil, want an error naming %v", tt.wantFlags)
+			}
+			for _, flagName := range tt.wantFlags {
+				if !strings.Contains(err.Error(), flagName) {
+					t.Errorf("error %q does not name %s", err, flagName)
+				}
+			}
+		})
+	}
+}
+
+// Every size, count, and timeout flag that main() checks, as a user passes
+// it. A row fails if limitFlags leaves its flag out or misspells its name.
+var limitFlagNames = []string{
+	"max-llm-body-bytes", "max-message-body-bytes", "max-response-body-bytes",
+	"max-fallback-depth", "mcp-max-body-bytes",
+	"upstream-timeout", "sync-delivery-deadline", "agent-read-timeout",
+	"callback-read-timeout", "agent-connect-timeout", "channel-health-window",
+	"mcp-upstream-timeout",
+}
+
+// parseLimitFlag parses --name=value into a fresh FlagSet, using a duration
+// value for a duration flag, and returns validateLimits' result.
+func parseLimitFlag(t *testing.T, name string, count int64) error {
+	t.Helper()
+	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
+	f := registerFlags(fs)
+	fl := fs.Lookup(name)
+	if fl == nil {
+		t.Fatalf("no --%s flag registered", name)
+	}
+	value := strconv.FormatInt(count, 10)
+	if _, ok := fl.Value.(flag.Getter).Get().(time.Duration); ok {
+		value += "s"
+	}
+	if err := fs.Parse([]string{"--" + name + "=" + value}); err != nil {
+		t.Fatalf("parsing --%s=%s: %v", name, value, err)
+	}
+	return validateLimits(limitFlags(f))
+}
+
+func TestLimitFlagsRejectNegativeFlag(t *testing.T) {
+	for _, name := range limitFlagNames {
+		t.Run(name, func(t *testing.T) {
+			err := parseLimitFlag(t, name, -1)
+			if err == nil {
+				t.Fatalf("--%s=-1 passed validateLimits, want an error", name)
+			}
+			if !strings.Contains(err.Error(), "--"+name+" ") {
+				t.Errorf("error %q does not name --%s", err, name)
+			}
+			if !strings.Contains(err.Error(), "-1") {
+				t.Errorf("error %q does not show the value", err)
+			}
+		})
+	}
+}
+
+func TestLimitFlagsAcceptZeroAndDefaults(t *testing.T) {
+	for _, name := range limitFlagNames {
+		if err := parseLimitFlag(t, name, 0); err != nil {
+			t.Errorf("--%s=0: %v, want nil (zero keeps the fallback)", name, err)
+		}
+	}
+	f := registerFlags(flag.NewFlagSet("gateway", flag.ContinueOnError))
+	if err := validateLimits(limitFlags(f)); err != nil {
+		t.Errorf("flag defaults: %v, want nil", err)
 	}
 }
 

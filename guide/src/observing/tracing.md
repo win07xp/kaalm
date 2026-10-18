@@ -24,6 +24,13 @@ endpoint sends in the clear.
 On a running install, `helm upgrade` with the new value restarts the
 gateway, which reads the endpoint at startup.
 
+Write the endpoint as `http://` or `https://`, the collector's host and port,
+and an optional path, as in the example. Any other form stops the new gateway
+Pods from becoming ready. Their log line `initializing tracing failed` gives
+the reason. Correct the value and upgrade again. The design book's
+[Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#configuration-reference)
+page gives the full accepted form.
+
 ## 2. Run a throwaway Jaeger
 
 For a first look, a throwaway Jaeger with in-memory storage is one manifest,
