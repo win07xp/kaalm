@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	toolscache "k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -223,6 +224,40 @@ func (w withoutGroup) ServerResourcesForGroupVersion(gv string) (*metav1.APIReso
 	return w.DiscoveryInterface.ServerResourcesForGroupVersion(gv)
 }
 
+// cacheLag holds, per "Kind/name" or "Kind/namespace/name" key, how long
+// the manager's cache waits before it takes in the first delivery of that
+// object. It lets a test delete a resource before the cache holds a referrer
+// the test just created, the window a live referrer check has to close.
+var cacheLag sync.Map
+
+// laggedTransform strips managedFields like the default transform, after
+// sleeping for the first delivery of an object whose key is in cacheLag. A
+// ByObject transform replaces DefaultTransform for its type, so it strips
+// itself.
+func laggedTransform(kind string) toolscache.TransformFunc {
+	strip := cache.TransformStripManagedFields()
+	return func(in any) (any, error) {
+		if obj, ok := in.(client.Object); ok {
+			key := kind + "/" + obj.GetName()
+			if ns := obj.GetNamespace(); ns != "" {
+				key = kind + "/" + ns + "/" + obj.GetName()
+			}
+			if d, ok := cacheLag.LoadAndDelete(key); ok {
+				time.Sleep(d.(time.Duration))
+			}
+		}
+		return strip(in)
+	}
+}
+
+// lagCacheFor makes the cache take in the object at key d late, the first
+// time it arrives.
+func lagCacheFor(t *testing.T, key string, d time.Duration) {
+	t.Helper()
+	cacheLag.Store(key, d)
+	t.Cleanup(func() { cacheLag.Delete(key) })
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(runSuite(m))
 }
@@ -268,7 +303,14 @@ func runSuite(m *testing.M) int {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		// The production manager strips managedFields from its cache; tests
 		// run on objects of the same shape.
-		Cache: cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
+		// The AgentClass and Agent transforms add the cacheLag hook.
+		Cache: cache.Options{
+			DefaultTransform: cache.TransformStripManagedFields(),
+			ByObject: map[client.Object]cache.ByObject{
+				&kaalmv1beta1.AgentClass{}: {Transform: laggedTransform("AgentClass")},
+				&kaalmv1beta1.Agent{}:      {Transform: laggedTransform("Agent")},
+			},
+		},
 	})
 	if err != nil {
 		return setupFailed("manager", err)

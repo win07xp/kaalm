@@ -189,6 +189,83 @@ func TestAgentClass_DeleteBlockedIsVisible(t *testing.T) {
 	expectGone(t, types.NamespacedName{Name: "db-ac"}, &kaalmv1beta1.AgentClass{})
 }
 
+// waitFinalizer waits until the stored obj at key carries a finalizer.
+func waitFinalizer(t *testing.T, key types.NamespacedName, obj client.Object) {
+	t.Helper()
+	eventually(t, func() error {
+		if err := testAPIReader.Get(ctxT(), key, obj); err != nil {
+			return err
+		}
+		if len(obj.GetFinalizers()) == 0 {
+			return errString("finalizer not added yet")
+		}
+		return nil
+	})
+}
+
+// cacheLagDelay is how long the cache takes in a lagged referrer: longer
+// than the release pass takes, so the delete reaches the reconciler before
+// the cache holds the referrer.
+const cacheLagDelay = 2 * time.Second
+
+// A ModelProvider deleted before the cache holds the AgentClass that
+// allows it stays held: the release confirms with a live read.
+func TestModelProvider_DeleteHeldBeforeCacheSeesReferrer(t *testing.T) {
+	mkSecret(t, "db-lag-mp-key")
+	mkProvider(t, "db-lag-mp", nil)
+	key := types.NamespacedName{Name: "db-lag-mp"}
+	waitFinalizer(t, key, &kaalmv1beta1.ModelProvider{})
+
+	lagCacheFor(t, "AgentClass/db-lag-mp-class", cacheLagDelay)
+	mkClass(t, "db-lag-mp-class", "db-lag-mp")
+	deleteObject(t, &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "db-lag-mp"}})
+	expectDeletionBlocked(t, "ModelProvider", "db-lag-mp", func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testAPIReader.Get(ctxT(), key, &mp)
+		return mp.Status.Conditions
+	}, "AgentClass db-lag-mp-class")
+
+	deleteObject(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "db-lag-mp-class"}})
+	expectGone(t, key, &kaalmv1beta1.ModelProvider{})
+}
+
+// A ToolProvider deleted before the cache holds the AgentClass that allows
+// it stays held.
+func TestToolProvider_DeleteHeldBeforeCacheSeesReferrer(t *testing.T) {
+	mkToolProvider(t, "db-lag-tp", nil)
+	key := types.NamespacedName{Name: "db-lag-tp"}
+	waitFinalizer(t, key, &kaalmv1beta1.ToolProvider{})
+
+	lagCacheFor(t, "AgentClass/db-lag-tp-class", cacheLagDelay)
+	mkWorkloadClass(t, "db-lag-tp-class", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "db-lag-tp"}}
+	})
+	deleteObject(t, &kaalmv1beta1.ToolProvider{ObjectMeta: metav1.ObjectMeta{Name: "db-lag-tp"}})
+	expectDeletionBlocked(t, "ToolProvider", "db-lag-tp", toolProviderConditions("db-lag-tp"), "AgentClass db-lag-tp-class")
+
+	deleteObject(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "db-lag-tp-class"}})
+	expectGone(t, key, &kaalmv1beta1.ToolProvider{})
+}
+
+// An AgentClass deleted before the cache holds the Agent on it stays held.
+func TestAgentClass_DeleteHeldBeforeCacheSeesReferrer(t *testing.T) {
+	mkClass(t, "db-lag-ac")
+	key := types.NamespacedName{Name: "db-lag-ac"}
+	waitFinalizer(t, key, &kaalmv1beta1.AgentClass{})
+
+	lagCacheFor(t, "Agent/default/db-lag-ac-a", cacheLagDelay)
+	mkAgent(t, "db-lag-ac-a", "db-lag-ac")
+	deleteObject(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "db-lag-ac"}})
+	expectDeletionBlocked(t, "AgentClass", "db-lag-ac", func() []metav1.Condition {
+		var ac kaalmv1beta1.AgentClass
+		_ = testAPIReader.Get(ctxT(), key, &ac)
+		return ac.Status.Conditions
+	}, "Agent default/db-lag-ac-a")
+
+	deleteObject(t, &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "db-lag-ac-a", Namespace: "default"}})
+	expectGone(t, key, &kaalmv1beta1.AgentClass{})
+}
+
 // heldDeleteClient is a fake client holding objs and an AgentClass that
 // lists the provider name in both allowed lists, with every referrer index
 // a provider delete reads.
