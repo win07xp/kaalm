@@ -47,129 +47,124 @@ import (
 	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
-func main() {
-	var (
-		listenAddr           string
-		healthAddr           string
-		certFile, keyFile    string
-		caFile               string
-		upstreamCAFile       string
-		callbackCAFile       string
-		callbackAllowlist    string
-		maxBodyBytes         int64
-		upstreamTimeout      time.Duration
-		mcpMaxBodyBytes      int64
-		mcpUpstreamTimeout   time.Duration
-		disableSourceIPCheck bool
-		userAddr             string
-		agentHostOverride    string
-		agentPortOverride    int
-		metricsAddr          string
-		pprofAddr            string
-		otlpEndpoint         string
-		otlpSampleRatio      float64
-		maxFallbackDepth     int
-		maxMessageBodyBytes  int64
-		maxResponseBodyBytes int64
-		syncDeliveryDeadline time.Duration
-		agentReadTimeout     time.Duration
-		callbackReadTimeout  time.Duration
-		agentConnectTimeout  time.Duration
-		channelHealthWindow  time.Duration
-		deliveryBackoff      string
-		callbackBackoff      string
-		discordAPIBaseURL    string
-		whatsAppAPIBaseURL   string
-		logLevel             slog.Level
-		clientQPS            float64
-		clientBurst          int
-		drainDelay           time.Duration
-		shutdownTimeout      time.Duration
-	)
-	flag.StringVar(&listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
-	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
-	flag.StringVar(&certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving certificate file")
-	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")
-	flag.StringVar(&caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for client verification")
-	flag.StringVar(&upstreamCAFile, "upstream-ca", "",
+// gatewayFlags holds the gateway's command-line flags. registerFlags fills
+// it from a FlagSet, so a test can parse flags into one and check what main
+// does with them.
+type gatewayFlags struct {
+	listenAddr           string
+	healthAddr           string
+	certFile, keyFile    string
+	caFile               string
+	upstreamCAFile       string
+	callbackCAFile       string
+	callbackAllowlist    string
+	maxBodyBytes         int64
+	upstreamTimeout      time.Duration
+	mcpMaxBodyBytes      int64
+	mcpUpstreamTimeout   time.Duration
+	disableSourceIPCheck bool
+	userAddr             string
+	agentHostOverride    string
+	agentPortOverride    int
+	metricsAddr          string
+	pprofAddr            string
+	otlpEndpoint         string
+	otlpSampleRatio      float64
+	maxFallbackDepth     int
+	maxMessageBodyBytes  int64
+	maxResponseBodyBytes int64
+	syncDeliveryDeadline time.Duration
+	agentReadTimeout     time.Duration
+	callbackReadTimeout  time.Duration
+	agentConnectTimeout  time.Duration
+	channelHealthWindow  time.Duration
+	deliveryBackoff      string
+	callbackBackoff      string
+	discordAPIBaseURL    string
+	whatsAppAPIBaseURL   string
+	logLevel             slog.Level
+	clientQPS            float64
+	clientBurst          int
+	drainDelay           time.Duration
+	shutdownTimeout      time.Duration
+}
+
+// registerFlags registers every gateway flag on fs and returns the struct
+// fs.Parse fills.
+func registerFlags(fs *flag.FlagSet) *gatewayFlags {
+	f := &gatewayFlags{}
+	fs.StringVar(&f.listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
+	fs.StringVar(&f.healthAddr, "health-addr", ":8081", "health listener address")
+	fs.StringVar(&f.certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving certificate file")
+	fs.StringVar(&f.keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")
+	fs.StringVar(&f.caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for client verification")
+	fs.StringVar(&f.upstreamCAFile, "upstream-ca", "",
 		"comma-separated CA bundle files to trust for upstream provider TLS, merged and added to the system roots")
-	flag.StringVar(&callbackCAFile, "callback-ca", "",
+	fs.StringVar(&f.callbackCAFile, "callback-ca", "",
 		"comma-separated CA bundle files to trust for channel callbackUrl TLS, merged and added to the system roots")
-	flag.StringVar(&callbackAllowlist, "callback-url-allowlist", "",
+	fs.StringVar(&f.callbackAllowlist, "callback-url-allowlist", "",
 		"comma-separated DNS-name suffixes and CIDR blocks whose callbackUrl targets are permitted despite the "+
 			"deny-internal default; loopback and cloud metadata stay blocked regardless")
-	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
-	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second,
+	fs.Int64Var(&f.maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
+	fs.DurationVar(&f.upstreamTimeout, "upstream-timeout", 120*time.Second,
 		"per-attempt upstream provider bound: the wait for the first response byte, then each gap between body reads")
-	flag.Int64Var(&mcpMaxBodyBytes, "mcp-max-body-bytes", 4<<20, "brokered MCP request and response body cap")
-	flag.DurationVar(&mcpUpstreamTimeout, "mcp-upstream-timeout", 120*time.Second, "brokered MCP whole-call timeout")
-	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
+	fs.Int64Var(&f.mcpMaxBodyBytes, "mcp-max-body-bytes", 4<<20, "brokered MCP request and response body cap")
+	fs.DurationVar(&f.mcpUpstreamTimeout, "mcp-upstream-timeout", 120*time.Second, "brokered MCP whole-call timeout")
+	fs.BoolVar(&f.disableSourceIPCheck, "disable-source-ip-check", false,
 		"skip the source-IP-to-Pod cross-check (dev only; the check is defense in depth and must stay on in-cluster)")
-	flag.StringVar(&userAddr, "user-addr", ":8080", "User Gateway listener address")
-	flag.StringVar(&agentHostOverride, "agent-host-override", "", "redirect agent delivery dials to this host (dev only)")
-	flag.IntVar(&agentPortOverride, "agent-port-override", 0, "redirect agent delivery dials to this port (dev only)")
-	flag.StringVar(&metricsAddr, "metrics-addr", ":9090", "Prometheus metrics listener address")
-	flag.StringVar(&pprofAddr, "pprof-addr", "",
+	fs.StringVar(&f.userAddr, "user-addr", ":8080", "User Gateway listener address")
+	fs.StringVar(&f.agentHostOverride, "agent-host-override", "", "redirect agent delivery dials to this host (dev only)")
+	fs.IntVar(&f.agentPortOverride, "agent-port-override", 0, "redirect agent delivery dials to this port (dev only)")
+	fs.StringVar(&f.metricsAddr, "metrics-addr", ":9090", "Prometheus metrics listener address")
+	fs.StringVar(&f.pprofAddr, "pprof-addr", "",
 		"net/http/pprof listener address (debug only; empty disables it)")
-	flag.StringVar(&otlpEndpoint, "otlp-endpoint", "",
+	fs.StringVar(&f.otlpEndpoint, "otlp-endpoint", "",
 		"OTLP/HTTP trace exporter base URL (for example http://collector:4318); empty disables tracing entirely")
-	flag.Float64Var(&otlpSampleRatio, "otlp-sample-ratio", 1.0,
+	fs.Float64Var(&f.otlpSampleRatio, "otlp-sample-ratio", 1.0,
 		"parent-based head sampling ratio for traces this gateway starts")
-	flag.IntVar(&maxFallbackDepth, "max-fallback-depth", 3, "total providers attempted per request, including the primary")
-	flag.Int64Var(&maxMessageBodyBytes, "max-message-body-bytes", 1<<20, "inbound webhook body cap")
-	flag.Int64Var(&maxResponseBodyBytes, "max-response-body-bytes", 900<<10, "agent reply body cap")
-	flag.DurationVar(&syncDeliveryDeadline, "sync-delivery-deadline", 30*time.Second, "sync-mode wall-clock budget")
-	flag.DurationVar(&agentReadTimeout, "agent-read-timeout", 10*time.Second, "per-attempt agent read timeout")
-	flag.DurationVar(&callbackReadTimeout, "callback-read-timeout", 10*time.Second, "per-attempt callback read timeout")
-	flag.DurationVar(&agentConnectTimeout, "agent-connect-timeout", time.Second, "agent-delivery connect timeout")
-	flag.DurationVar(&channelHealthWindow, "channel-health-window", 5*time.Minute, "rolling window for PlatformConnected")
-	flag.StringVar(&deliveryBackoff, "delivery-backoff", "1s,5s,25s", "agent-delivery retry backoff (comma-separated)")
-	flag.StringVar(&callbackBackoff, "callback-backoff", "1s,5s,25s", "callback retry backoff schedule (comma-separated)")
-	flag.StringVar(&discordAPIBaseURL, "platform-discord-api-base-url", gateway.DefaultDiscordAPIBaseURL,
+	fs.IntVar(&f.maxFallbackDepth, "max-fallback-depth", 3, "total providers attempted per request, including the primary")
+	fs.Int64Var(&f.maxMessageBodyBytes, "max-message-body-bytes", 1<<20, "inbound webhook body cap")
+	fs.Int64Var(&f.maxResponseBodyBytes, "max-response-body-bytes", 900<<10, "agent reply body cap")
+	fs.DurationVar(&f.syncDeliveryDeadline, "sync-delivery-deadline", 30*time.Second, "sync-mode wall-clock budget")
+	fs.DurationVar(&f.agentReadTimeout, "agent-read-timeout", 10*time.Second, "per-attempt agent read timeout")
+	fs.DurationVar(&f.callbackReadTimeout, "callback-read-timeout", 10*time.Second, "per-attempt callback read timeout")
+	fs.DurationVar(&f.agentConnectTimeout, "agent-connect-timeout", time.Second, "agent-delivery connect timeout")
+	fs.DurationVar(&f.channelHealthWindow, "channel-health-window", 5*time.Minute, "rolling window for PlatformConnected")
+	fs.StringVar(&f.deliveryBackoff, "delivery-backoff", "1s,5s,25s", "agent-delivery retry backoff (comma-separated)")
+	fs.StringVar(&f.callbackBackoff, "callback-backoff", "1s,5s,25s", "callback retry backoff schedule (comma-separated)")
+	fs.StringVar(&f.discordAPIBaseURL, "platform-discord-api-base-url", gateway.DefaultDiscordAPIBaseURL,
 		"base URL the Discord adapter replies through (gateway.platforms.discord.apiBaseUrl)")
-	flag.StringVar(&whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", gateway.DefaultWhatsAppAPIBaseURL,
+	fs.StringVar(&f.whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", gateway.DefaultWhatsAppAPIBaseURL,
 		"base URL the WhatsApp adapter replies through, including the Graph API version "+
 			"(gateway.platforms.whatsapp.apiBaseUrl)")
-	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
-	flag.Float64Var(&clientQPS, "client-qps", 100, "Kubernetes API client sustained requests per second")
-	flag.IntVar(&clientBurst, "client-burst", 200, "Kubernetes API client burst above --client-qps")
-	flag.DurationVar(&drainDelay, "drain-delay", 5*time.Second,
+	fs.TextVar(&f.logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
+	fs.Float64Var(&f.clientQPS, "client-qps", 100, "Kubernetes API client sustained requests per second")
+	fs.IntVar(&f.clientBurst, "client-burst", 200, "Kubernetes API client burst above --client-qps")
+	fs.DurationVar(&f.drainDelay, "drain-delay", 5*time.Second,
 		"after SIGTERM, how long to keep serving while Services and ingress controllers "+
 			"stop routing new connections to this Pod; 0 skips the wait")
-	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 30*time.Second,
+	fs.DurationVar(&f.shutdownTimeout, "shutdown-timeout", 30*time.Second,
 		"after the drain delay, how long to wait for in-flight requests and background deliveries "+
 			"before exiting; 0 waits for none of them")
+	return f
+}
+
+func main() {
+	f := registerFlags(flag.CommandLine)
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: f.logLevel}))
 	// Install it as the process default: the gateway packages log through
 	// package-level slog (including the broker's per-call audit record), and
 	// without this they would fall back to Go's plain text logger, breaking
 	// the JSON log convention (docs/src/operations/observability.md).
 	slog.SetDefault(logger)
 
-	if err := drain.Validate(drainDelay, shutdownTimeout); err != nil {
+	if err := drain.Validate(f.drainDelay, f.shutdownTimeout); err != nil {
 		logger.Error("invalid shutdown flags", "error", err)
 		os.Exit(1)
 	}
-	if err := validateLimits(
-		map[string]int64{
-			"max-llm-body-bytes":      maxBodyBytes,
-			"max-message-body-bytes":  maxMessageBodyBytes,
-			"max-response-body-bytes": maxResponseBodyBytes,
-			"max-fallback-depth":      int64(maxFallbackDepth),
-			"mcp-max-body-bytes":      mcpMaxBodyBytes,
-		},
-		map[string]time.Duration{
-			"upstream-timeout":       upstreamTimeout,
-			"sync-delivery-deadline": syncDeliveryDeadline,
-			"agent-read-timeout":     agentReadTimeout,
-			"callback-read-timeout":  callbackReadTimeout,
-			"agent-connect-timeout":  agentConnectTimeout,
-			"channel-health-window":  channelHealthWindow,
-			"mcp-upstream-timeout":   mcpUpstreamTimeout,
-		},
-	); err != nil {
+	if err := validateLimits(limitFlags(f)); err != nil {
 		logger.Error("invalid limit flags", "error", err)
 		os.Exit(1)
 	}
@@ -190,8 +185,8 @@ func main() {
 	// cross-checks, first-use Secret loads) must never queue behind a bucket
 	// that small: at 20 QPS a per-request GET capped every replica at 20
 	// requests per second. The defaults are 100 and 200.
-	restCfg.QPS = float32(clientQPS)
-	restCfg.Burst = clientBurst
+	restCfg.QPS = float32(f.clientQPS)
+	restCfg.Burst = f.clientBurst
 	cl, err := cluster.New(restCfg, clusterOptions(scheme, operatorNamespace))
 	if err != nil {
 		logger.Error("building cluster cache", "error", err)
@@ -226,14 +221,14 @@ func main() {
 	// verify public endpoints. The server re-reads them when their mtime
 	// changes, so a rotated bundle needs no restart; validate once here so a
 	// misconfigured path fails fast at startup rather than at first dial.
-	for _, file := range splitPaths(upstreamCAFile) {
+	for _, file := range splitPaths(f.upstreamCAFile) {
 		validateCABundle(file, "upstream", logger)
 	}
-	for _, file := range splitPaths(callbackCAFile) {
+	for _, file := range splitPaths(f.callbackCAFile) {
 		validateCABundle(file, "callback", logger)
 	}
 
-	callbackPolicy := parseStartupPolicy(callbackAllowlist, discordAPIBaseURL, whatsAppAPIBaseURL, logger)
+	callbackPolicy := parseStartupPolicy(f.callbackAllowlist, f.discordAPIBaseURL, f.whatsAppAPIBaseURL, logger)
 
 	// The MCP session key binds session ids to caller identities across
 	// replicas; the chart provides it. A missing key gets a per-process
@@ -263,37 +258,37 @@ func main() {
 	})
 	server := gateway.NewServer(gateway.Config{
 		OperatorNamespace:        operatorNamespace,
-		ListenAddr:               listenAddr,
-		HealthAddr:               healthAddr,
-		CertFile:                 certFile,
-		KeyFile:                  keyFile,
-		CAFile:                   caFile,
-		MaxBodyBytes:             maxBodyBytes,
-		UpstreamTimeout:          upstreamTimeout,
-		MCPMaxBodyBytes:          mcpMaxBodyBytes,
-		MCPUpstreamTimeout:       mcpUpstreamTimeout,
+		ListenAddr:               f.listenAddr,
+		HealthAddr:               f.healthAddr,
+		CertFile:                 f.certFile,
+		KeyFile:                  f.keyFile,
+		CAFile:                   f.caFile,
+		MaxBodyBytes:             f.maxBodyBytes,
+		UpstreamTimeout:          f.upstreamTimeout,
+		MCPMaxBodyBytes:          f.mcpMaxBodyBytes,
+		MCPUpstreamTimeout:       f.mcpUpstreamTimeout,
 		SessionKey:               sessionKey,
-		UpstreamCAFiles:          splitPaths(upstreamCAFile),
-		CallbackCAFiles:          splitPaths(callbackCAFile),
+		UpstreamCAFiles:          splitPaths(f.upstreamCAFile),
+		CallbackCAFiles:          splitPaths(f.callbackCAFile),
 		CallbackPolicy:           callbackPolicy,
-		DisableSourceIPCheck:     disableSourceIPCheck,
-		UserListenAddr:           userAddr,
-		AgentServiceHostOverride: agentHostOverride,
-		AgentServicePortOverride: int32(agentPortOverride),
-		MaxFallbackDepth:         maxFallbackDepth,
-		MaxMessageBodyBytes:      maxMessageBodyBytes,
-		MaxResponseBodyBytes:     maxResponseBodyBytes,
-		SyncDeliveryDeadline:     syncDeliveryDeadline,
-		AgentReadTimeout:         agentReadTimeout,
-		CallbackReadTimeout:      callbackReadTimeout,
-		AgentConnectTimeout:      agentConnectTimeout,
-		ChannelHealthWindow:      channelHealthWindow,
-		DeliveryBackoff:          mustParseBackoff(deliveryBackoff, "delivery-backoff", logger),
-		CallbackBackoff:          mustParseBackoff(callbackBackoff, "callback-backoff", logger),
-		DiscordAPIBaseURL:        discordAPIBaseURL,
-		WhatsAppAPIBaseURL:       whatsAppAPIBaseURL,
-		DrainDelay:               drainDelay,
-		ShutdownTimeout:          shutdownTimeout,
+		DisableSourceIPCheck:     f.disableSourceIPCheck,
+		UserListenAddr:           f.userAddr,
+		AgentServiceHostOverride: f.agentHostOverride,
+		AgentServicePortOverride: int32(f.agentPortOverride),
+		MaxFallbackDepth:         f.maxFallbackDepth,
+		MaxMessageBodyBytes:      f.maxMessageBodyBytes,
+		MaxResponseBodyBytes:     f.maxResponseBodyBytes,
+		SyncDeliveryDeadline:     f.syncDeliveryDeadline,
+		AgentReadTimeout:         f.agentReadTimeout,
+		CallbackReadTimeout:      f.callbackReadTimeout,
+		AgentConnectTimeout:      f.agentConnectTimeout,
+		ChannelHealthWindow:      f.channelHealthWindow,
+		DeliveryBackoff:          mustParseBackoff(f.deliveryBackoff, "delivery-backoff", logger),
+		CallbackBackoff:          mustParseBackoff(f.callbackBackoff, "callback-backoff", logger),
+		DiscordAPIBaseURL:        f.discordAPIBaseURL,
+		WhatsAppAPIBaseURL:       f.whatsAppAPIBaseURL,
+		DrainDelay:               f.drainDelay,
+		ShutdownTimeout:          f.shutdownTimeout,
 		// The rate limiter's share counts serving Pods and the hard
 		// budget's margin counts every gateway Pod (gatewayReplicas says
 		// why).
@@ -310,7 +305,7 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
-		srv := &http.Server{Addr: metricsAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: f.metricsAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("metrics listener failed", "error", err)
 		}
@@ -318,9 +313,9 @@ func main() {
 	// Profiling on its own port, only when asked for (debug only). The
 	// listener is unauthenticated and meant for a port-forward during a
 	// profiling session, never for a Service.
-	profiling.Start(pprofAddr, func(err error) { logger.Error("pprof listener failed", "error", err) })
+	profiling.Start(f.pprofAddr, func(err error) { logger.Error("pprof listener failed", "error", err) })
 	if activatorClient, err := gateway.NewControllerActivator(
-		operatorNamespace, certFile, keyFile, caFile); err == nil {
+		operatorNamespace, f.certFile, f.keyFile, f.caFile); err == nil {
 		server.Activator = activatorClient
 	} else {
 		logger.Info("activator client disabled", "reason", err.Error())
@@ -363,7 +358,7 @@ func main() {
 	if podName == "" {
 		podName, _ = os.Hostname()
 	}
-	defer setupTracing(runCtx, server, otlpEndpoint, otlpSampleRatio, upstreamCAFile, podName, logger)()
+	defer setupTracing(runCtx, server, f.otlpEndpoint, f.otlpSampleRatio, f.upstreamCAFile, podName, logger)()
 	publisher := &gateway.BudgetPublisher{
 		Client: clientset, Ledger: server.Budget,
 		OperatorNamespace: operatorNamespace, PodName: podName,
@@ -418,8 +413,8 @@ func main() {
 	}
 
 	logger.Info("kaalm gateway starting",
-		"listen", listenAddr, "health", healthAddr, "operator_namespace", operatorNamespace,
-		"source_ip_check_disabled", disableSourceIPCheck)
+		"listen", f.listenAddr, "health", f.healthAddr, "operator_namespace", operatorNamespace,
+		"source_ip_check_disabled", f.disableSourceIPCheck)
 	if err := server.Run(sigCtx); err != nil {
 		logger.Error("gateway listener failed", "error", err)
 		os.Exit(1)
@@ -515,7 +510,7 @@ func parseBackoff(raw string) ([]time.Duration, error) {
 
 // parseStartupPolicy applies the strict-parse contract to the callback
 // allowlist and the platform base URLs: a malformed value fails startup
-// instead of half-applying. The other Helm-derived flags get the same
+// instead of half-applying. These other Helm-derived flags get the same
 // treatment elsewhere: the CA bundle paths in validateCABundle, the backoff
 // schedules in mustParseBackoff, the size, count, and timeout flags in
 // validateLimits, and otlpEndpoint inside NewTracing, which setupTracing
@@ -560,6 +555,27 @@ func validateLimits(counts map[string]int64, durations map[string]time.Duration)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// limitFlags builds validateLimits' input from the parsed flags: every size,
+// count, and timeout flag where zero means the default or fallback, keyed by
+// flag name.
+func limitFlags(f *gatewayFlags) (map[string]int64, map[string]time.Duration) {
+	return map[string]int64{
+		"max-llm-body-bytes":      f.maxBodyBytes,
+		"max-message-body-bytes":  f.maxMessageBodyBytes,
+		"max-response-body-bytes": f.maxResponseBodyBytes,
+		"max-fallback-depth":      int64(f.maxFallbackDepth),
+		"mcp-max-body-bytes":      f.mcpMaxBodyBytes,
+	}, map[string]time.Duration{
+		"upstream-timeout":       f.upstreamTimeout,
+		"sync-delivery-deadline": f.syncDeliveryDeadline,
+		"agent-read-timeout":     f.agentReadTimeout,
+		"callback-read-timeout":  f.callbackReadTimeout,
+		"agent-connect-timeout":  f.agentConnectTimeout,
+		"channel-health-window":  f.channelHealthWindow,
+		"mcp-upstream-timeout":   f.mcpUpstreamTimeout,
+	}
 }
 
 // mustParseBackoff is parseBackoff with the startup-failure contract.

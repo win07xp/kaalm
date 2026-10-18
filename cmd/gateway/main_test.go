@@ -5,7 +5,9 @@
 package main
 
 import (
+	"flag"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -90,9 +92,6 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 	}
 }
 
-// The request-path kinds are served from the cache without a deep copy;
-// the options that keep Secrets out of the cache and scope ConfigMaps
-// stay as they were.
 type limitCase struct {
 	name      string
 	counts    map[string]int64
@@ -132,23 +131,6 @@ func TestValidateLimits(t *testing.T) {
 			wantFlags: []string{"--mcp-max-body-bytes", "--mcp-upstream-timeout"},
 		},
 	}
-	// The other size, count, and timeout flags main() checks: zero means
-	// the NewServer default, and a negative value fails.
-	for _, name := range []string{
-		"max-llm-body-bytes", "max-message-body-bytes", "max-response-body-bytes", "max-fallback-depth",
-	} {
-		tests = append(tests, limitCase{
-			name: "negative " + name, counts: map[string]int64{name: -1}, wantFlags: []string{"--" + name},
-		})
-	}
-	for _, name := range []string{
-		"upstream-timeout", "sync-delivery-deadline", "agent-read-timeout",
-		"callback-read-timeout", "agent-connect-timeout", "channel-health-window",
-	} {
-		tests = append(tests, limitCase{
-			name: "negative " + name, durations: map[string]time.Duration{name: -time.Second}, wantFlags: []string{"--" + name},
-		})
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateLimits(tt.counts, tt.durations)
@@ -170,6 +152,68 @@ func TestValidateLimits(t *testing.T) {
 	}
 }
 
+// Every size, count, and timeout flag that main() checks, as a user passes
+// it. A row fails if limitFlags leaves its flag out or misspells its name.
+var limitFlagNames = []string{
+	"max-llm-body-bytes", "max-message-body-bytes", "max-response-body-bytes",
+	"max-fallback-depth", "mcp-max-body-bytes",
+	"upstream-timeout", "sync-delivery-deadline", "agent-read-timeout",
+	"callback-read-timeout", "agent-connect-timeout", "channel-health-window",
+	"mcp-upstream-timeout",
+}
+
+// parseLimitFlag parses --name=value into a fresh FlagSet, using a duration
+// value for a duration flag, and returns validateLimits' result.
+func parseLimitFlag(t *testing.T, name string, count int64) error {
+	t.Helper()
+	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
+	f := registerFlags(fs)
+	fl := fs.Lookup(name)
+	if fl == nil {
+		t.Fatalf("no --%s flag registered", name)
+	}
+	value := strconv.FormatInt(count, 10)
+	if _, ok := fl.Value.(flag.Getter).Get().(time.Duration); ok {
+		value += "s"
+	}
+	if err := fs.Parse([]string{"--" + name + "=" + value}); err != nil {
+		t.Fatalf("parsing --%s=%s: %v", name, value, err)
+	}
+	return validateLimits(limitFlags(f))
+}
+
+func TestLimitFlagsRejectNegativeFlag(t *testing.T) {
+	for _, name := range limitFlagNames {
+		t.Run(name, func(t *testing.T) {
+			err := parseLimitFlag(t, name, -1)
+			if err == nil {
+				t.Fatalf("--%s=-1 passed validateLimits, want an error", name)
+			}
+			if !strings.Contains(err.Error(), "--"+name+" ") {
+				t.Errorf("error %q does not name --%s", err, name)
+			}
+			if !strings.Contains(err.Error(), "-1") {
+				t.Errorf("error %q does not show the value", err)
+			}
+		})
+	}
+}
+
+func TestLimitFlagsAcceptZeroAndDefaults(t *testing.T) {
+	for _, name := range limitFlagNames {
+		if err := parseLimitFlag(t, name, 0); err != nil {
+			t.Errorf("--%s=0: %v, want nil (zero keeps the fallback)", name, err)
+		}
+	}
+	f := registerFlags(flag.NewFlagSet("gateway", flag.ContinueOnError))
+	if err := validateLimits(limitFlags(f)); err != nil {
+		t.Errorf("flag defaults: %v, want nil", err)
+	}
+}
+
+// The request-path kinds are served from the cache without a deep copy;
+// the options that keep Secrets out of the cache and scope ConfigMaps
+// stay as they were.
 func TestClusterOptionsShareRequestPathObjects(t *testing.T) {
 	scheme := runtime.NewScheme()
 	var o cluster.Options
