@@ -82,6 +82,9 @@ func TestHandleLLMProxy_PassesTheBodyThroughExactly(t *testing.T) {
 		{"openai stream", "openai", "/v1/chat/completions", sseUpstream,
 			`{"seed":12345678901234567891,"model":"prov/m1","stream":true,"messages":[]}`,
 			`{"seed":12345678901234567891,"model":"m1","stream":true,"messages":[],"stream_options":{"include_usage":true}}`},
+		{"openai stream with its own stream_options", "openai", "/v1/chat/completions", sseUpstream,
+			`{"seed":12345678901234567891,"model":"prov/m1","stream":true,"stream_options":{"include_usage":false,"x":"<b>"},"messages":[]}`,
+			`{"seed":12345678901234567891,"model":"m1","stream":true,"stream_options":{"x":"<b>","include_usage":true},"messages":[]}`},
 		{"anthropic stream", "anthropic", "/v1/messages", sseUpstream,
 			`{"model":"prov/m1","stream":true,"max_tokens":16,"metadata":{"user_id":"<u>"},"messages":[]}`,
 			`{"model":"m1","stream":true,"max_tokens":16,"metadata":{"user_id":"<u>"},"messages":[]}`},
@@ -206,8 +209,8 @@ func TestHandleLLMProxy_BodyShapeErrors(t *testing.T) {
 	}
 }
 
-// A same-type fallback with a modelMap receives the primary's body with
-// only the model changed.
+// A same-type fallback with a modelMap receives the primary's body, forced
+// include_usage included, with only the model changed.
 func TestCandidateRequest_ModelMapRewritesOnlyTheModel(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
 	h.seedRoute()
@@ -228,7 +231,7 @@ func TestCandidateRequest_ModelMapRewritesOnlyTheModel(t *testing.T) {
 		kaalmv1beta1.LocalObjectReference{Name: "backup"})
 	cert := agentCert(t, h.ca)
 
-	body := `{"seed":12345678901234567891, "model":"prov/m1","stream":true,"messages":[{"role":"user","content":"<hi>"}]}`
+	body := `{"seed":12345678901234567891, "model":"prov/m1","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"<hi>"}]}`
 	resp := postRaw(t, h.client(&cert), h.url("/v1/chat/completions"), []byte(body))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
@@ -236,6 +239,9 @@ func TestCandidateRequest_ModelMapRewritesOnlyTheModel(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	primary := string((<-h.upreqs).raw)
+	if !strings.Contains(primary, `"stream_options":{"include_usage":true}`) {
+		t.Errorf("primary body %s does not force include_usage", primary)
+	}
 	got := string(<-backup)
 	if want := strings.Replace(primary, `"m1"`, `"m2"`, 1); got != want {
 		t.Errorf("backup body:\n got %s\nwant %s", got, want)
@@ -289,10 +295,14 @@ func TestScanRequestFields(t *testing.T) {
 			continue
 		}
 		if got := f.model([]byte(c.body)); got != c.model || f.streamTrue != c.streamTrue ||
-			f.hasStreamOptions != c.opts || f.members != c.members {
+			(f.optionsStart >= 0) != c.opts || f.members != c.members {
 			t.Errorf("%s: model %q stream %v options %v members %d, want %q %v %v %d",
-				c.body, got, f.streamTrue, f.hasStreamOptions, f.members, c.model, c.streamTrue, c.opts, c.members)
+				c.body, got, f.streamTrue, f.optionsStart >= 0, f.members, c.model, c.streamTrue, c.opts, c.members)
 		}
+	}
+	body := []byte(`{"model":"p/m","stream_options" : {"a":1}}`)
+	if f, err := scanRequestFields(body); err != nil || string(body[f.optionsStart:f.optionsEnd]) != `{"a":1}` {
+		t.Errorf("stream_options value span %d:%d (%v)", f.optionsStart, f.optionsEnd, err)
 	}
 }
 
@@ -308,13 +318,12 @@ func TestRewriteRequestBody_WritesRoutingNamesExactly(t *testing.T) {
 	if got, want := string(rewriteRequestBody(body, f, "n", false)), `{"x":1,"stream" : false,"model":"n"}`; got != want {
 		t.Errorf("rewrite:\n got %s\nwant %s", got, want)
 	}
-	all := []byte(`{"Stream_Options":null,"Model":"p/m","STREAM":true}`)
+	all := []byte(`{"Model":"p/m","STREAM":true}`)
 	if f, err = scanRequestFields(all); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"stream_options":null,"model":"n","stream":true,"stream_options":{"include_usage":true}}`
-	if got := string(rewriteRequestBody(all, f, "n", true)); got != want {
-		t.Errorf("every edit:\n got %s\nwant %s", got, want)
+	if got, want := string(rewriteRequestBody(all, f, "n", true)), `{"model":"n","stream":true,"stream_options":{"include_usage":true}}`; got != want {
+		t.Errorf("names and the appended member:\n got %s\nwant %s", got, want)
 	}
 	exact := []byte(`{"stream":false, "model":"n","stream_options":null}`)
 	if f, err = scanRequestFields(exact); err != nil {
@@ -322,6 +331,29 @@ func TestRewriteRequestBody_WritesRoutingNamesExactly(t *testing.T) {
 	}
 	if got := rewriteRequestBody(exact, f, "n", false); !bytes.Equal(got, exact) {
 		t.Errorf("exact names: got %s, want the body unchanged", got)
+	}
+}
+
+// With forceUsage, the stream_options member is rewritten in place, wherever
+// it sits, under its exact name.
+func TestRewriteRequestBodyForcesIncludeUsage(t *testing.T) {
+	for _, c := range []struct{ body, want string }{
+		{`{"stream_options":null,"model":"p/m","stream":true}`,
+			`{"stream_options":{"include_usage":true},"model":"new","stream":true}`},
+		{`{"model":"p/m","stream_options":{"a":1},"stream":true}`,
+			`{"model":"new","stream_options":{"a":1,"include_usage":true},"stream":true}`},
+		{`{"model":"p/m","stream":true,"Stream_Options" : {"include_usage":false,"a":1}}`,
+			`{"model":"new","stream":true,"stream_options":{"a":1,"include_usage":true}}`},
+		{`{"Stream_Options":null,"Model":"p/m","STREAM":true}`,
+			`{"stream_options":{"include_usage":true},"model":"new","stream":true}`},
+	} {
+		f, err := scanRequestFields([]byte(c.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(rewriteRequestBody([]byte(c.body), f, "new", true)); got != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.body, got, c.want)
+		}
 	}
 }
 
@@ -377,7 +409,8 @@ type routingMembers struct {
 
 // checkRewrite checks that the rewrite of a valid object decodes to the
 // object with each routing member under its exact name, the model replaced,
-// and, with add, the gateway's stream_options.
+// and, with add, stream_options holding the agent's members other than
+// include_usage, and include_usage true.
 func checkRewrite(t *testing.T, body []byte, fields requestFields, add bool) {
 	t.Helper()
 	out := rewriteRequestBody(body, fields, "new/model<&>", add)
@@ -400,7 +433,17 @@ func checkRewrite(t *testing.T, body []byte, fields requestFields, add bool) {
 		wm["model"] = "new/model<&>"
 	}
 	if add {
-		wm["stream_options"] = map[string]any{"include_usage": true}
+		opts, ok := wm["stream_options"].(map[string]any)
+		if !ok {
+			opts = map[string]any{}
+		}
+		for k := range opts {
+			if jsonNameMatches(k, "include_usage") {
+				delete(opts, k)
+			}
+		}
+		opts["include_usage"] = true
+		wm["stream_options"] = opts
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q add=%v: rewrite decodes to %v, want %v", body, add, got, want)
@@ -408,8 +451,8 @@ func checkRewrite(t *testing.T, body []byte, fields requestFields, add bool) {
 }
 
 // For any valid object, the scan reads what encoding/json reads, and the
-// rewrite changes only the routing names, the model value, and the added
-// member.
+// rewrite changes only the routing names, the model value, and the
+// stream_options member.
 func FuzzScanRequestFields(f *testing.F) {
 	for _, s := range []string{
 		`{}`, `{"model":"p/m","stream":true}`, `{"model":"p\/m","stream":true,"stream_options":null}`,
@@ -419,6 +462,8 @@ func FuzzScanRequestFields(f *testing.F) {
 		"{\"mod\xffel\":1,\"model\":\"\xff\"}", `{"stream":true}`, `{"Stream":true,"STREAM_OPTIONS":1}`,
 		`{"Model":"a","model":"b"}`, `{"\u017ftream":true}`, `{"MODEL":"x","Stream_Options":null}`,
 		"{\"\u017ftream\":true,\"model\":\"m\"}",
+		`{"stream":true,"stream_options":{"include_usage":false,"a":1}}`, `{"stream_options":[1],"model":"m"}`,
+		`{"stream_options":{"Include_Usage":1,"include_usage":2,"b":{"include_usage":0}}}`,
 	} {
 		f.Add([]byte(s))
 	}
@@ -467,8 +512,9 @@ func FuzzScanRequestFields(f *testing.F) {
 		if fields.streamTrue != (string(rm.Stream) == "true") {
 			t.Fatalf("%q: streamTrue %v", body, fields.streamTrue)
 		}
-		if ok := len(rm.StreamOptions) > 0; ok != fields.hasStreamOptions {
-			t.Fatalf("%q: hasStreamOptions %v", body, fields.hasStreamOptions)
+		if ok := len(rm.StreamOptions) > 0; ok != (fields.optionsStart >= 0) ||
+			(ok && string(body[fields.optionsStart:fields.optionsEnd]) != string(rm.StreamOptions)) {
+			t.Fatalf("%q: stream_options span %d:%d, want %s", body, fields.optionsStart, fields.optionsEnd, rm.StreamOptions)
 		}
 		if body[fields.closeBrace] != '}' || len(bytes.TrimSpace(body[fields.closeBrace+1:])) != 0 {
 			t.Fatalf("%q: closeBrace %d", body, fields.closeBrace)

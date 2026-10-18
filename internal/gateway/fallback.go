@@ -145,7 +145,7 @@ type walkState struct {
 
 	// Crossing formats. body is the prepared request: the
 	// caller's bytes with the model rewritten, the routing member names
-	// written exactly, and any stream_options added.
+	// written exactly, and stream_options set where the format needs it.
 	// request decodes it, once, when a crossing candidate needs it.
 	// inboundFormat is its format, or "" when it cannot cross (the legacy
 	// completions shape, Vertex). modelFor carries each candidate's model

@@ -26,7 +26,8 @@ import (
 
 // The LLM proxy forwards the agent's request body as sent, apart from the
 // model value, the names of the members it routes by, and the
-// stream_options member a streaming OpenAI request gets. Providers act on
+// stream_options member a streaming OpenAI request gets, which the gateway
+// rewrites or adds so the stream carries usage. Providers act on
 // fields the gateway never reads, so it must not change them: a decode into
 // map[string]any and a re-encode would turn an integer above 2^53 into a
 // float, reorder the members, and escape HTML characters. The gateway
@@ -45,9 +46,9 @@ type requestFields struct {
 	modelStart, modelEnd int
 	// streamTrue is set when stream is the literal true.
 	streamTrue bool
-	// hasStreamOptions is set when a stream_options member is present,
-	// whatever its value.
-	hasStreamOptions bool
+	// optionsStart and optionsEnd span the stream_options member's value;
+	// -1 when the body has no stream_options member.
+	optionsStart, optionsEnd int
 	// members counts the top-level members; closeBrace is the offset of
 	// the object's closing brace.
 	members, closeBrace int
@@ -94,7 +95,7 @@ var errNotObject = errors.New("request body is not a JSON object")
 func scanRequestFields(body []byte) (requestFields, error) {
 	f := requestFields{
 		keyStart: [...]int{-1, -1, -1}, keyEnd: [...]int{-1, -1, -1},
-		modelStart: -1, modelEnd: -1, closeBrace: -1,
+		modelStart: -1, modelEnd: -1, optionsStart: -1, optionsEnd: -1, closeBrace: -1,
 	}
 	i := skipJSONSpace(body, 0)
 	if body[i] == 'n' {
@@ -134,7 +135,7 @@ func scanRequestFields(body []byte) (requestFields, error) {
 			case memberStream:
 				f.streamTrue = bytes.Equal(body[valueStart:i], jsonTrue)
 			case memberStreamOptions:
-				f.hasStreamOptions = true
+				f.optionsStart, f.optionsEnd = valueStart, i
 			}
 			break // the routing names do not match one another
 		}
@@ -149,9 +150,50 @@ func (f requestFields) model(body []byte) string {
 	return jsonStringValue(body[f.modelStart:f.modelEnd])
 }
 
-// streamOptionsMember is the member a streaming OpenAI request gets when it
-// has no stream_options: without it the stream carries no usage.
+// streamOptionsMember is the member a streaming OpenAI request without
+// stream_options gets: without it the stream carries no usage.
 const streamOptionsMember = `"stream_options":{"include_usage":true}`
+
+// streamOptionsWithUsage returns the stream_options member, name included,
+// that replaces the body's own: the agent's object with every include_usage
+// member dropped and "include_usage":true last, or streamOptionsMember when
+// the value is not an object. Names are matched with jsonNameMatches: a
+// provider that matches names ignoring case and keeps the last match, as
+// encoding/json does, could otherwise read the agent's false in place of the
+// gateway's true. Every kept member keeps its bytes and its place.
+func streamOptionsWithUsage(body []byte, f requestFields) []byte {
+	if body[f.optionsStart] != '{' {
+		return []byte(streamOptionsMember)
+	}
+	out := make([]byte, 0, len(`"stream_options":`)+f.optionsEnd-f.optionsStart+len(`,"include_usage":true`))
+	out = append(out, `"stream_options":{`...)
+	kept := false
+	for i := f.optionsStart + 1; ; {
+		i = skipJSONSpace(body, i)
+		switch body[i] {
+		case '}':
+			if kept {
+				out = append(out, ',')
+			}
+			return append(out, `"include_usage":true}`...)
+		case ',':
+			i = skipJSONSpace(body, i+1)
+		}
+		nameStart := i
+		keyEnd := skipJSONString(body, i)
+		name := jsonStringValue(body[i:keyEnd])
+		i = skipJSONSpace(body, keyEnd) + 1 // the colon
+		i = skipJSONValue(body, skipJSONSpace(body, i))
+		if jsonNameMatches(name, "include_usage") {
+			continue
+		}
+		if kept {
+			out = append(out, ',')
+		}
+		out = append(out, body[nameStart:i]...)
+		kept = true
+	}
+}
 
 // bodyEdit replaces body[start:end] with text; start == end inserts.
 type bodyEdit struct {
@@ -159,14 +201,19 @@ type bodyEdit struct {
 	text       []byte
 }
 
-// rewriteRequestBody returns body with the model value replaced by model,
-// each routing member's name written exactly, and, when addStreamOptions is
-// set, the stream_options member appended. Every other byte is kept. A body
-// without a model member gets no model edit.
-func rewriteRequestBody(body []byte, f requestFields, model string, addStreamOptions bool) []byte {
+// rewriteRequestBody returns body with the model value replaced by model
+// and each routing member's name written exactly. With forceUsage, the
+// stream_options member is rewritten so include_usage is true, or appended
+// when the body has none. Every other byte is kept. A body without a model
+// member gets no model edit.
+func rewriteRequestBody(body []byte, f requestFields, model string, forceUsage bool) []byte {
 	var edits [len(routingNames) + 2]bodyEdit
 	n := 0
 	for idx, key := range routingKeys {
+		if idx == memberStreamOptions && forceUsage && f.optionsStart >= 0 {
+			// The member edit below writes the name too.
+			continue
+		}
 		if f.keyStart[idx] >= 0 && !bytes.Equal(body[f.keyStart[idx]:f.keyEnd[idx]], key) {
 			edits[n] = bodyEdit{f.keyStart[idx], f.keyEnd[idx], key}
 			n++
@@ -177,7 +224,11 @@ func rewriteRequestBody(body []byte, f requestFields, model string, addStreamOpt
 		edits[n] = bodyEdit{f.modelStart, f.modelEnd, encoded}
 		n++
 	}
-	if addStreamOptions {
+	switch {
+	case forceUsage && f.optionsStart >= 0:
+		edits[n] = bodyEdit{f.keyStart[memberStreamOptions], f.optionsEnd, streamOptionsWithUsage(body, f)}
+		n++
+	case forceUsage:
 		member := []byte("," + streamOptionsMember)
 		if f.members == 0 {
 			member = member[1:]
@@ -208,11 +259,13 @@ func rewriteRequestBody(body []byte, f requestFields, model string, addStreamOpt
 	return append(out, body[at:]...)
 }
 
-// needsStreamOptions reports whether a request sent through a adds the
-// stream_options member: the adapter's format needs it for stream usage,
-// the request streams, and the agent set no stream_options of its own.
+// needsStreamOptions reports whether a request sent through a gets
+// stream_options.include_usage set to true: the adapter's format needs it
+// for stream usage, and the request streams. Whatever stream_options the
+// agent sent is rewritten, because a stream without usage settles at zero
+// spend, and an agent must not be able to opt out of metering.
 func needsStreamOptions(a providerAdapter, f requestFields) bool {
-	return a.streamUsageOption() && f.streamTrue && !f.hasStreamOptions
+	return a.streamUsageOption() && f.streamTrue
 }
 
 // skipJSONSpace returns the offset of the first non-space byte at or after i.

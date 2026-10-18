@@ -68,3 +68,38 @@ func TestUsageMissing_WarnsOncePerProviderPerInterval(t *testing.T) {
 		t.Errorf("warnings a minute later = %d, want 3", n)
 	}
 }
+
+// Whatever stream_options a streaming agent sends, the provider is asked for
+// usage, so the call settles at its real spend.
+func TestHandleLLMProxy_AgentCannotTurnOffStreamUsage(t *testing.T) {
+	for _, opts := range []string{`{"include_usage":false}`, `null`, `{}`} {
+		t.Run(opts, func(t *testing.T) {
+			var h *harness
+			h = newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				cr := <-h.upreqs
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+				if so, _ := cr.body["stream_options"].(map[string]any); so["include_usage"] == true {
+					_, _ = io.WriteString(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n")
+				}
+				_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			})
+			h.seedRoute()
+			cert := agentCert(t, h.ca)
+			body := `{"model":"prov/m1","stream":true,"stream_options":` + opts + `,"messages":[]}`
+			resp := postRaw(t, h.client(&cert), h.url("/v1/chat/completions"), []byte(body))
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d", resp.StatusCode)
+			}
+			waitForSpend(t, h, "prov", "m1", 12)
+			if u := h.spend.Total("team-a", "prov", "m1"); u.OutputTokens != 3 {
+				t.Errorf("output tokens %d, want 3", u.OutputTokens)
+			}
+			if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != 0 {
+				t.Errorf("kaalm_llm_usage_missing_total = %v, want 0", got)
+			}
+		})
+	}
+}

@@ -91,10 +91,10 @@ func TestOpenAIStreamUsageAndFixup(t *testing.T) {
 	if got := prepareBody(t, o, `{}`); got != `{}` {
 		t.Errorf("stream_options must not be added to a non-streaming request: %s", got)
 	}
-	// Caller-provided stream_options preserved.
+	// The agent cannot turn stream usage off.
 	body := `{"stream":true,"stream_options":{"include_usage":false}}`
-	if got := prepareBody(t, o, body); got != body {
-		t.Errorf("caller-provided stream_options must be preserved: %s", got)
+	if got := prepareBody(t, o, body); got != `{"stream":true,"stream_options":{"include_usage":true}}` {
+		t.Errorf("the agent must not turn stream usage off: %s", got)
 	}
 }
 
