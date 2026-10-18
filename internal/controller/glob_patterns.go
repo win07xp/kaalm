@@ -19,28 +19,73 @@ package controller
 import (
 	"fmt"
 	"path"
+	"unicode/utf8"
 )
 
 // The helpers here find malformed path.Match patterns in the glob lists the
 // reconcilers report on Ready: allowedNamespaces (rule 51) and allowedImages
 // (rule 52). Matching itself is unchanged for both fields: a malformed entry
 // still matches nothing, and the valid entries still admit their namespaces or
-// images.
+// images. The report lists up to maxListedPatterns entries, each quoted up to
+// maxQuotedPatternBytes, and counts the rest.
 
-// invalidGlobPatterns returns one message for each distinct malformed entry
-// of the named field, in spec order. path.Match reports ErrBadPattern for a
-// malformed pattern whatever the name, so matching against "" finds them all.
+// The report goes into a Ready condition message, which the condition schema
+// caps at 32768 characters. A longer message fails the whole status write and
+// leaves Ready at its last value. In the worst case (%q writes a control byte
+// as four bytes) one field's report is about 11 KiB, so an AgentClass's two
+// fields stay near 22 KiB and leave room for the class's other problems.
+const (
+	maxQuotedPatternBytes = 256
+	maxListedPatterns     = 10
+)
+
+// quotedPattern quotes p, or only its first maxQuotedPatternBytes bytes and
+// its full length when it is longer. The cut steps back to a rune start so
+// the quote never ends in a split rune.
+func quotedPattern(p string) string {
+	if len(p) <= maxQuotedPatternBytes {
+		return fmt.Sprintf("%q", p)
+	}
+	cut := maxQuotedPatternBytes
+	for back := 0; back < utf8.UTFMax-1 && !utf8.RuneStart(p[cut]); back++ {
+		cut--
+	}
+	if !utf8.RuneStart(p[cut]) {
+		// Not valid UTF-8 here: %q escapes the bytes, so any cut reads right.
+		cut = maxQuotedPatternBytes
+	}
+	return fmt.Sprintf("%q (first %d of %d bytes)", p[:cut], cut, len(p))
+}
+
+// invalidGlobPatterns returns one message for each of the first
+// maxListedPatterns distinct malformed entries of the named field, in spec
+// order, and one more message counting the rest. path.Match reports
+// ErrBadPattern for a malformed pattern whatever the name, so matching
+// against "" finds them all. The count message reads "<field> has", which
+// sorts after the field's "<field> entry" messages.
 func invalidGlobPatterns(field string, patterns []string) []string {
 	var bad []string
+	more := 0
 	seen := make(map[string]bool, len(patterns))
 	for _, p := range patterns {
 		if seen[p] {
 			continue
 		}
 		seen[p] = true
-		if _, err := path.Match(p, ""); err != nil {
-			bad = append(bad, fmt.Sprintf("%s entry %q is not a valid glob pattern", field, p))
+		if _, err := path.Match(p, ""); err == nil {
+			continue
 		}
+		if len(bad) < maxListedPatterns {
+			bad = append(bad, fmt.Sprintf("%s entry %s is not a valid glob pattern", field, quotedPattern(p)))
+		} else {
+			more++
+		}
+	}
+	switch {
+	case more == 1:
+		bad = append(bad, fmt.Sprintf("%s has 1 more malformed entry, not listed", field))
+	case more > 1:
+		bad = append(bad, fmt.Sprintf("%s has %d more malformed entries, not listed", field, more))
 	}
 	return bad
 }

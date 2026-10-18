@@ -17,7 +17,11 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"slices"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +44,20 @@ func TestInvalidNamespacePatterns(t *testing.T) {
 		{"open range", []string{"[a-]"}, []string{msg("[a-]")}},
 		{"repeat reported once, valid entry skipped", []string{"team-a", "[", "["}, []string{msg("[")}},
 		{"spec order kept", []string{"team-[", "ok", "["}, []string{msg("team-["), msg("[")}},
+		{"long entry quoted as its first 256 bytes", []string{"[" + strings.Repeat("a", 40<<10)},
+			[]string{`allowedNamespaces entry "[` + strings.Repeat("a", 255) +
+				`" (first 256 of 40961 bytes) is not a valid glob pattern`}},
+		{"entry of exactly 256 bytes quoted whole", []string{"[" + strings.Repeat("a", 255)},
+			[]string{msg("[" + strings.Repeat("a", 255))}},
+		{"cut steps back to a rune start", []string{"[" + strings.Repeat("a", 254) + "\u20ac" + strings.Repeat("b", 10)},
+			[]string{`allowedNamespaces entry "[` + strings.Repeat("a", 254) +
+				`" (first 255 of 268 bytes) is not a valid glob pattern`}},
+		{"ten entries listed, no count", numbered(10), firstTenMsgs("allowedNamespaces")},
+		{"eleventh entry counted", numbered(11),
+			append(firstTenMsgs("allowedNamespaces"), "allowedNamespaces has 1 more malformed entry, not listed")},
+		{"repeats and valid entries not counted",
+			append([]string{"ok", "bad0["}, append(numbered(12), "bad0[", "team-*", "bad11[")...),
+			append(firstTenMsgs("allowedNamespaces"), "allowedNamespaces has 2 more malformed entries, not listed")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,6 +85,11 @@ func TestInvalidImagePatterns(t *testing.T) {
 		{"trailing escape", []string{`a\`}, []string{`allowedImages entry "a\\" is not a valid glob pattern`}},
 		{"repeat reported once, valid entry skipped", []string{"ok/*", "[", "["}, []string{msg("[")}},
 		{"spec order kept", []string{"registry.test/[", "ok", "["}, []string{msg("registry.test/["), msg("[")}},
+		{"long entry quoted as its first 256 bytes", []string{"[" + strings.Repeat("a", 40<<10)},
+			[]string{`allowedImages entry "[` + strings.Repeat("a", 255) +
+				`" (first 256 of 40961 bytes) is not a valid glob pattern`}},
+		{"eleventh entry counted", numbered(11),
+			append(firstTenMsgs("allowedImages"), "allowedImages has 1 more malformed entry, not listed")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,5 +97,52 @@ func TestInvalidImagePatterns(t *testing.T) {
 				t.Errorf("invalidImagePatterns(%q) = %q, want %q", tc.patterns, got, tc.want)
 			}
 		})
+	}
+}
+
+// numbered returns n distinct malformed patterns, bad0[ to bad<n-1>[.
+func numbered(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "bad" + strconv.Itoa(i) + "["
+	}
+	return out
+}
+
+// firstTenMsgs is the message invalidGlobPatterns gives for each of the
+// first ten entries of numbered.
+func firstTenMsgs(field string) []string {
+	out := make([]string, 10)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s entry %q is not a valid glob pattern", field, "bad"+strconv.Itoa(i)+"[")
+	}
+	return out
+}
+
+// conditionMessageLimit is the condition schema's maxLength for
+// status.conditions[].message. A longer message fails the whole status write.
+const conditionMessageLimit = 32768
+
+// The worst case for the AgentClass Ready message: both fields hold many long
+// malformed entries made of control bytes, which %q writes as four bytes
+// each. Joined as the reconciler joins them, the list stays under the limit.
+func TestInvalidGlobPatternsWorstCaseFitsConditionMessage(t *testing.T) {
+	var patterns []string
+	for i := range 50 {
+		patterns = append(patterns, "["+strings.Repeat("\x00", 1000)+strconv.Itoa(i))
+	}
+	problems := append(invalidNamespacePatterns(patterns), invalidImagePatterns(patterns)...)
+	sort.Strings(problems)
+	msg := strings.Join(problems, "; ")
+	if len(msg) >= conditionMessageLimit {
+		t.Fatalf("worst-case message is %d bytes, want under %d", len(msg), conditionMessageLimit)
+	}
+	for _, want := range []string{
+		"allowedNamespaces has 40 more malformed entries, not listed",
+		"allowedImages has 40 more malformed entries, not listed",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("worst-case message does not hold %q", want)
+		}
 	}
 }
