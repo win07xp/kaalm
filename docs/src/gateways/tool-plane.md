@@ -95,11 +95,13 @@ The checks in step 3, in the order the broker runs them. The workload grant, cla
 | Class allowlist | the AgentClass `allowedToolProviders` |
 | Rate limit | the token bucket for the (namespace, ToolProvider) pair |
 | Body cap | the request body against the broker's cap |
-| Single message | the body is one JSON-RPC message, not a batch array |
+| Single message | the body is one JSON-RPC message, not a batch array, and names `method`, `params`, and `params.name` once each; names that differ only in letter case count as the same member |
 | Method allowlist | the JSON-RPC `method` (see [Transport](#transport)) |
 | Modern headers | `Mcp-Method` and `Mcp-Name` against the body on 2026-07-28 requests |
 | Tool | on `tools/call`, `params.name` against the grant narrowed by the catalog |
 | Session owner | a presented `Mcp-Session-Id` against the caller identity, on legacy requests |
+
+The broker checks the values it decodes but forwards the caller's bytes unchanged. A tool server whose JSON parser keeps a different copy of a repeated member (the first instead of the last, or only the exact-case name) would run a method or tool the broker never checked. Go's `encoding/json` matches member names case-insensitively, so a case variant is a second copy.
 
 Every denial fires before the credential is read, so a rejected call never touches the Secret and never dials the tool server. After the checks the broker reads the credential, forwards, and relays. Step 7 narrows a `tools/list` answer to what the caller may call, and step 8 wraps a legacy session id so that only its owner can resume it.
 
@@ -169,6 +171,8 @@ Every brokered call emits one `info`-level structured log line. Bodies are never
 | `detail` | the denial reason, for example which check refused or that a session id belongs to another caller. For a `503 tool_unavailable` when the tool server is unreachable or its response could not be read, and for a stream the broker ended because reading it failed, it also carries the transport error, which the caller's message leaves out because it names the tool server's address |
 | `duration_seconds`, `request_bytes`, `response_bytes` | timing and sizes |
 
+A message refused for a repeated member logs an empty `method` and `tool`, because the decoded values are the ambiguous ones. `detail` names the member. To look for attempts to get past a grant by tool name, search `detail` for the member name, not `tool`.
+
 | Metric | Labels | Notes |
 |---|---|---|
 | `kaalm_tool_calls_total` | `provider`, `namespace`, `tool`, `status` | `status` is `ok` for a relayed 2xx, the wire error type for every failure the broker produces (`access_denied`, `tool_denied`, `rate_limited`, `header_mismatch`, and the rest of the [error vocabulary](api/errors.md)), `client_closed` when the caller disconnected while the call was forwarded, while the response was read, or while a stream was relayed, and `upstream_error` for a relayed non-2xx. `client_closed` is not a wire error type: no caller receives it, so it is not in the error vocabulary |
@@ -189,7 +193,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Namespace, grant, or class check fails | `403 access_denied`, the type the LLM tenancy chain uses |
 | Tool outside the grant or catalog | `403 tool_denied` |
 | JSON-RPC method outside the allowlist | `403 tool_denied` |
-| Batch array, or not a JSON-RPC message | `400 invalid_request` |
+| Batch array, not a JSON-RPC message, or a message that names `method`, `params`, or `params.name` more than once | `400 invalid_request` |
 | Modern header missing or mismatched | `400` with JSON-RPC error `-32020` |
 | Rate limit exceeded | `429 rate_limited`, computed [`Retry-After`](llm/budgets-and-rate-limits.md#retry-after) |
 | Oversized request, buffered response, or `tools/list` response | `413 request_too_large` or `413 response_too_large` |

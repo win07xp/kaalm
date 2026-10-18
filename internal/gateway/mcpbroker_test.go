@@ -506,7 +506,7 @@ func allowAllToolsList(t *testing.T, mode, upstream string) []byte {
 }
 
 // A caller allowed every tool gets the upstream answer as it came, unless
-// its result carries a cacheScope, which still becomes private.
+// its bytes may carry a cacheScope, which still becomes private.
 func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
 	list := `{ "jsonrpc": "2.0", "id": 3, "result": { "tools": [ {"name":"web_search","description":"<b>"}, ` +
 		`{"name":"admin_reset"} ] }, "x-extra": 1 }`
@@ -515,7 +515,7 @@ func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
 			if got := string(allowAllToolsList(t, mode, list)); got != list {
 				t.Errorf("reply:\n got %s\nwant %s", got, list)
 			}
-			for _, key := range []string{`"cacheScope"`, `"\u0063acheScope"`} {
+			for _, key := range []string{`"cacheScope"`, `"\u0063acheScope"`, `"CacheScope"`, `"cache` + "\u017f" + `cope"`} {
 				upstream := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"a"}],` + key + `:"public"}}`
 				var got struct {
 					Result struct {
@@ -526,6 +526,58 @@ func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
 				if err := json.Unmarshal(raw, &got); err != nil || got.Result.CacheScope != "private" {
 					t.Errorf("key %s: cacheScope = %q (%v), want private: %s", key, got.Result.CacheScope, err, raw)
 				}
+			}
+		})
+	}
+}
+
+// A decoy member that encoding/json reads as result cannot hide a
+// cacheScope from the rewrite: the bytes are checked, not the decoded
+// result, and the re-encoded answer carries one result member.
+func TestMCPBroker_ToolsListAllAllowedDecoyResult(t *testing.T) {
+	upstream := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"a"}],"cacheScope":"public"},"RESULT":{"tools":[]}}`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := allowAllToolsList(t, mode, upstream)
+			if bytes.Contains(raw, []byte("public")) {
+				t.Errorf("reply carries the upstream cacheScope: %s", raw)
+			}
+			var members map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &members); err != nil {
+				t.Fatalf("decode %s: %v", raw, err)
+			}
+			results := 0
+			for k := range members {
+				if strings.EqualFold(k, "result") {
+					results++
+				}
+			}
+			if results != 1 {
+				t.Errorf("reply has %d result members, want 1: %s", results, raw)
+			}
+		})
+	}
+}
+
+// Every member encoding/json reads as cacheScope becomes private on a
+// filtered list, so a client that keeps the last case-insensitive match
+// never reads the upstream value.
+func TestMCPBroker_ToolsListFilteredRewritesFoldedCacheScope(t *testing.T) {
+	upstream := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search"}],` +
+		`"cacheScope":"public","cache` + "\u017f" + `cope":"public"}}`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := relayToolsList(t, mode, upstream)
+			var got struct {
+				Result struct {
+					CacheScope string `json:"cacheScope"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil || got.Result.CacheScope != "private" {
+				t.Errorf("cacheScope = %q (%v), want private: %s", got.Result.CacheScope, err, raw)
+			}
+			if bytes.Contains(raw, []byte("public")) {
+				t.Errorf("reply carries the upstream cacheScope: %s", raw)
 			}
 		})
 	}
@@ -551,8 +603,10 @@ func referenceNarrow(result json.RawMessage, filter *toolFilter) json.RawMessage
 	}
 	keptRaw, _ := json.Marshal(kept)
 	m["tools"] = keptRaw
-	if _, ok := m["cacheScope"]; ok {
-		m["cacheScope"] = json.RawMessage(`"private"`)
+	for k := range m {
+		if strings.EqualFold(k, "cacheScope") {
+			m[k] = json.RawMessage(`"private"`)
+		}
 	}
 	out, _ := json.Marshal(m)
 	return out
@@ -569,6 +623,7 @@ func TestNarrowToolsResultMatchesReEncode(t *testing.T) {
 		`{"tools":[]}`,
 		`{}`,
 		`{"cacheScope":"public","ttlMs":5,"tools":[{"name":"web_search"}]}`,
+		`{"CacheScope":"public","cache` + "\u017f" + `cope":"public","cacheScope":"public","tools":[]}`,
 		` { "tools" : [ { "name" : "web_search" , "inputSchema" : { "type" : "object" } } ] } `,
 	} {
 		for _, f := range filters {

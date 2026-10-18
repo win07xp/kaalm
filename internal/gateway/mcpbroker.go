@@ -52,6 +52,70 @@ var errNoRedirects = errors.New("outbound redirects are refused")
 // methodToolsCall is the one method whose params carry a governed tool name.
 const methodToolsCall = "tools/call"
 
+// decodeMCPMessage decodes body as one JSON-RPC message, or returns why
+// the broker refuses it with 400 invalid_request. The refusal names no
+// method or tool: for a message with a repeated member, the decoded values
+// are the ambiguous ones.
+func decodeMCPMessage(body []byte) (mcpRequest, string) {
+	var msg mcpRequest
+	if isJSONBatch(body) {
+		return msg, "JSON-RPC batch requests are not supported"
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return msg, "request body is not a JSON-RPC message"
+	}
+	if err := repeatedMCPMember(body); err != nil {
+		return msg, err.Error()
+	}
+	return msg, ""
+}
+
+// repeatedMCPMember returns a *duplicateFieldError for the first of method,
+// params, or params.name that body names more than once, counting names
+// encoding/json matches to the same field as one member. encoding/json
+// keeps the last match, but the broker forwards the body as sent, and a
+// tool server that reads another copy (the first, or only the exact-case
+// name) would act on a method or tool the broker never checked. body must
+// already pass json.Unmarshal into mcpRequest, so it is valid JSON and an
+// object or null.
+func repeatedMCPMember(body []byte) error {
+	i := skipJSONSpace(body, 0)
+	if body[i] != '{' {
+		return nil
+	}
+	var err error
+	var methods, params int
+	paramsStart := -1
+	forEachJSONMember(body, i, func(name string, valueStart, _ int) bool {
+		switch {
+		case jsonNameMatches(name, "method"):
+			if methods++; methods > 1 {
+				err = &duplicateFieldError{name: "method"}
+			}
+		case jsonNameMatches(name, "params"):
+			if params++; params > 1 {
+				err = &duplicateFieldError{name: "params"}
+			} else if body[valueStart] == '{' {
+				paramsStart = valueStart
+			}
+		}
+		return err == nil
+	})
+	if err != nil || paramsStart < 0 {
+		return err
+	}
+	var names int
+	forEachJSONMember(body, paramsStart, func(name string, _, _ int) bool {
+		if jsonNameMatches(name, "name") {
+			if names++; names > 1 {
+				err = &duplicateFieldError{name: "params.name"}
+			}
+		}
+		return err == nil
+	})
+	return err
+}
+
 // isJSONBatch reports whether the body is a JSON-RPC batch array.
 func isJSONBatch(body []byte) bool {
 	trimmed := bytes.TrimLeft(body, " \t\r\n")
@@ -411,13 +475,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	reqBytes = int64(len(body))
 	bodyLog("mcp request", body)
-	if isJSONBatch(body) {
-		deny(http.StatusBadRequest, errInvalidRequest, "JSON-RPC batch requests are not supported", false, 0, "", "")
-		return
-	}
-	var msg mcpRequest
-	if err := json.Unmarshal(body, &msg); err != nil {
-		deny(http.StatusBadRequest, errInvalidRequest, "request body is not a JSON-RPC message", false, 0, "", "")
+	msg, refusal := decodeMCPMessage(body)
+	if refusal != "" {
+		deny(http.StatusBadRequest, errInvalidRequest, refusal, false, 0, "", "")
 		return
 	}
 
@@ -672,11 +732,14 @@ func (s *Server) relayFilteredToolsList(
 		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	// A caller allowed every tool gets the upstream answer as it came, unless
-	// its result may carry a cacheScope to rewrite. Any other result is
-	// filtered, even one that arrives beside an error member: the error is
-	// relayed too, and the tools must not leak through it.
+	// the bytes it would pass on may carry a cacheScope to rewrite. The bytes
+	// are checked, not the decoded result: a second member that
+	// encoding/json also reads as result would hide the one a client reads.
+	// Any other result is filtered, even one that arrives beside an error
+	// member: the error is relayed too, and the tools must not leak through
+	// it.
 	encoded := raw
-	if filter.allow != nil || mayCarryCacheScope(parsed.Result) {
+	if filter.allow != nil || mayCarryCacheScope(raw) {
 		if parsed.Result != nil {
 			// A result that is not an object (null included) holds no
 			// tools, so it is relayed unfiltered.
@@ -698,16 +761,18 @@ func (s *Server) relayFilteredToolsList(
 	return int64(n), http.StatusOK, "", ""
 }
 
-// mayCarryCacheScope reports whether a tools/list result can hold a
-// cacheScope member: the name as written, or a \u escape that could spell
-// it. A result without one needs no rewrite for a caller allowed every tool.
-func mayCarryCacheScope(result json.RawMessage) bool {
-	return bytes.Contains(result, []byte("cacheScope")) || bytes.Contains(result, []byte(`\u`))
+// mayCarryCacheScope reports whether a tools/list answer can hold a member
+// that encoding/json reads as cacheScope: any letter case, a long s, or a
+// \u escape that could spell it. An answer without one needs no rewrite
+// for a caller allowed every tool.
+func mayCarryCacheScope(data []byte) bool {
+	return mayHoldFoldedName(data, "cachescope")
 }
 
 // narrowToolsResult keeps the tools in a tools/list result that filter
-// permits, and marks a cacheScope private: the answer is per caller, so a
-// shared cache must never serve it as the server's list. It
+// permits, and marks every member encoding/json reads as cacheScope
+// private: the answer is per caller, so a shared cache must never serve it
+// as the server's list, whichever copy the client's parser keeps. It
 // returns false for a result that is not an object. Kept entries are
 // joined from the upstream bytes; the result is re-encoded, which compacts
 // it as encoding/json does.
@@ -741,8 +806,10 @@ func narrowToolsResult(result json.RawMessage, filter *toolFilter) (json.RawMess
 		}
 	}
 	m["tools"] = append(kept, ']')
-	if _, ok := m["cacheScope"]; ok {
-		m["cacheScope"] = json.RawMessage(`"private"`)
+	for k := range m {
+		if jsonNameMatches(k, "cacheScope") {
+			m[k] = json.RawMessage(`"private"`)
+		}
 	}
 	narrowed, err := json.Marshal(m)
 	if err != nil {
