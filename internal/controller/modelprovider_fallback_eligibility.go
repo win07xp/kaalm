@@ -189,7 +189,9 @@ func fallbackIneligibility(
 // the part that must survive. Both messages are read the same way, by
 // listedFindings, so a steady set of findings never sends an event. With no
 // status field to hold the full set, a fix and a new unlisted finding in the
-// same pass leave the total unchanged and send nothing.
+// same pass leave the total unchanged, so no event reports the new finding.
+// When the fixed finding was a listed one, the event names only the finding
+// that moved into the list.
 func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelProvider, findings []fallbackFinding) {
 	prev := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
 	if len(findings) == 0 {
