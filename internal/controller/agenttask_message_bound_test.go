@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -76,4 +77,16 @@ func TestTask_LongProviderNameStillFails(t *testing.T) {
 	})
 	expectTaskFailedBounded(t, "t-long-provname",
 		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
+}
+
+// spec.image has no length limit in the schema. The rule 2 message quotes it
+// bounded, so the task still settles Failed.
+func TestTask_LongImageStillFails(t *testing.T) {
+	image := "other.test/" + strings.Repeat("a", 40000) // outside registry.test/agents/*
+	mkWorkloadClass(t, "tc-long-image", nil)
+	mkTask(t, "t-long-image", "tc-long-image", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Image = image
+	})
+	expectTaskFailedBounded(t, "t-long-image", kaalmv1beta1.ReasonClassConstraintViolation,
+		fmt.Sprintf("(first 256 of %d bytes) does not match", len(image)))
 }

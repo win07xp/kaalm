@@ -1710,6 +1710,18 @@ func TestAgent_LongProviderNameFitsReady(t *testing.T) {
 		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
 }
 
+// spec.image has no length limit in the schema. The rule 2 message quotes
+// it bounded, so the Ready write still fits.
+func TestAgent_LongImageFitsReady(t *testing.T) {
+	image := "other.test/" + strings.Repeat("a", 40000) // outside registry.test/agents/*
+	mkWorkloadClass(t, "wc-long-image", nil)
+	mkWorkloadAgent(t, "long-image-agent", "wc-long-image", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Image = image
+	})
+	expectAgentDegradedBounded(t, "long-image-agent", kaalmv1beta1.ReasonClassConstraintViolation,
+		fmt.Sprintf("(first 256 of %d bytes) does not match", len(image)))
+}
+
 // The class allows the long name but no such ModelProvider exists: the
 // "does not exist" message quotes it bounded too.
 func TestAgent_LongMissingProviderNameFitsReady(t *testing.T) {
