@@ -52,6 +52,70 @@ var errNoRedirects = errors.New("outbound redirects are refused")
 // methodToolsCall is the one method whose params carry a governed tool name.
 const methodToolsCall = "tools/call"
 
+// decodeMCPMessage decodes body as one JSON-RPC message, or returns why
+// the broker refuses it with 400 invalid_request. The refusal names no
+// method or tool: for a message with a repeated member, the decoded values
+// are the ambiguous ones.
+func decodeMCPMessage(body []byte) (mcpRequest, string) {
+	var msg mcpRequest
+	if isJSONBatch(body) {
+		return msg, "JSON-RPC batch requests are not supported"
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return msg, "request body is not a JSON-RPC message"
+	}
+	if err := repeatedMCPMember(body); err != nil {
+		return msg, err.Error()
+	}
+	return msg, ""
+}
+
+// repeatedMCPMember returns a *duplicateFieldError for the first of method,
+// params, or params.name that body names more than once, counting names
+// encoding/json matches to the same field as one member. encoding/json
+// keeps the last match, but the broker forwards the body as sent, and a
+// tool server that reads another copy (the first, or only the exact-case
+// name) would act on a method or tool the broker never checked. body must
+// already pass json.Unmarshal into mcpRequest, so it is valid JSON and an
+// object or null.
+func repeatedMCPMember(body []byte) error {
+	i := skipJSONSpace(body, 0)
+	if body[i] != '{' {
+		return nil
+	}
+	var err error
+	var methods, params int
+	paramsStart := -1
+	forEachJSONMember(body, i, func(name string, valueStart, _ int) bool {
+		switch {
+		case jsonNameMatches(name, "method"):
+			if methods++; methods > 1 {
+				err = &duplicateFieldError{name: "method"}
+			}
+		case jsonNameMatches(name, "params"):
+			if params++; params > 1 {
+				err = &duplicateFieldError{name: "params"}
+			} else if body[valueStart] == '{' {
+				paramsStart = valueStart
+			}
+		}
+		return err == nil
+	})
+	if err != nil || paramsStart < 0 {
+		return err
+	}
+	var names int
+	forEachJSONMember(body, paramsStart, func(name string, _, _ int) bool {
+		if jsonNameMatches(name, "name") {
+			if names++; names > 1 {
+				err = &duplicateFieldError{name: "params.name"}
+			}
+		}
+		return err == nil
+	})
+	return err
+}
+
 // isJSONBatch reports whether the body is a JSON-RPC batch array.
 func isJSONBatch(body []byte) bool {
 	trimmed := bytes.TrimLeft(body, " \t\r\n")
@@ -411,13 +475,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	reqBytes = int64(len(body))
 	bodyLog("mcp request", body)
-	if isJSONBatch(body) {
-		deny(http.StatusBadRequest, errInvalidRequest, "JSON-RPC batch requests are not supported", false, 0, "", "")
-		return
-	}
-	var msg mcpRequest
-	if err := json.Unmarshal(body, &msg); err != nil {
-		deny(http.StatusBadRequest, errInvalidRequest, "request body is not a JSON-RPC message", false, 0, "", "")
+	msg, refusal := decodeMCPMessage(body)
+	if refusal != "" {
+		deny(http.StatusBadRequest, errInvalidRequest, refusal, false, 0, "", "")
 		return
 	}
 

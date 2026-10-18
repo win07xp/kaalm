@@ -577,3 +577,52 @@ func FuzzScanRequestFields(f *testing.F) {
 		}
 	})
 }
+
+// jsonNameMatches agrees with encoding/json on which member names fill a
+// field.
+func TestJSONNameMatchesEncodingJSON(t *testing.T) {
+	for _, tc := range []struct{ spelling, field string }{
+		{"params", "params"}, {"PARAMS", "params"}, {"pArAmS", "params"},
+		{"paramſ", "params"}, {"param", "params"}, {"params ", "params"},
+		{"paramss", "params"}, {"kind", "Kind"}, {"Kind", "kind"},
+		{"name", "Name"}, {"nаme", "name"}, // Cyrillic a does not fold
+	} {
+		raw, _ := json.Marshal(map[string]string{tc.spelling: "x"})
+		// A struct with one field tagged with tc.field, built per case.
+		v := reflect.New(reflect.StructOf([]reflect.StructField{{
+			Name: "F", Type: reflect.TypeOf(""), Tag: reflect.StructTag(`json:"` + tc.field + `"`),
+		}}))
+		if err := json.Unmarshal(raw, v.Interface()); err != nil {
+			t.Fatalf("%q: %v", tc.spelling, err)
+		}
+		filled := v.Elem().Field(0).String() == "x"
+		if m := jsonNameMatches(tc.spelling, tc.field); m != filled {
+			t.Errorf("jsonNameMatches(%q, %q) = %v, encoding/json fills the field: %v", tc.spelling, tc.field, m, filled)
+		}
+	}
+}
+
+func TestForEachJSONMember(t *testing.T) {
+	body := []byte(` { "a" : 1 , "b" : { "x" : [ "}" , "\"" ] } ,"c":"q\"}","d":[{},[]], "e" : true } `)
+	type member struct{ name, value string }
+	var got []member
+	forEachJSONMember(body, 1, func(name string, start, end int) bool {
+		got = append(got, member{name, string(body[start:end])})
+		return true
+	})
+	want := []member{{"a", "1"}, {"b", `{ "x" : [ "}" , "\"" ] }`}, {"c", `"q\"}"`}, {"d", `[{},[]]`}, {"e", "true"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("members:\n got %q\nwant %q", got, want)
+	}
+
+	var seen int
+	forEachJSONMember(body, 1, func(string, int, int) bool { seen++; return seen < 2 })
+	if seen != 2 {
+		t.Errorf("walk visited %d members after fn returned false at the second, want 2", seen)
+	}
+
+	forEachJSONMember([]byte(`{ }`), 0, func(name string, _, _ int) bool {
+		t.Errorf("empty object yielded member %q", name)
+		return true
+	})
+}

@@ -361,3 +361,28 @@ func jsonStringValue(token []byte) string {
 func jsonNameMatches(name, field string) bool {
 	return strings.EqualFold(name, field)
 }
+
+// forEachJSONMember calls fn with the unescaped name and the value span of
+// each member of the object that opens at b[open], in order, and stops when
+// fn returns false. b must already pass json.Valid; the walk relies on that
+// and checks nothing else.
+func forEachJSONMember(b []byte, open int, fn func(name string, valueStart, valueEnd int) bool) {
+	i := open + 1
+	for {
+		i = skipJSONSpace(b, i)
+		switch b[i] {
+		case '}':
+			return
+		case ',':
+			i = skipJSONSpace(b, i+1)
+		}
+		keyEnd := skipJSONString(b, i)
+		name := jsonStringValue(b[i:keyEnd])
+		i = skipJSONSpace(b, keyEnd) + 1 // the colon
+		valueStart := skipJSONSpace(b, i)
+		i = skipJSONValue(b, valueStart)
+		if !fn(name, valueStart, i) {
+			return
+		}
+	}
+}
