@@ -586,6 +586,7 @@ func TestJSONNameMatchesEncodingJSON(t *testing.T) {
 		{"paramſ", "params"}, {"param", "params"}, {"params ", "params"},
 		{"paramss", "params"}, {"kind", "Kind"}, {"Kind", "kind"},
 		{"name", "Name"}, {"nаme", "name"}, // Cyrillic a does not fold
+		{"\u212aind", "kind"}, {"\u212ain", "kind"}, // Kelvin sign folds to k
 	} {
 		raw, _ := json.Marshal(map[string]string{tc.spelling: "x"})
 		// A struct with one field tagged with tc.field, built per case.
@@ -637,6 +638,8 @@ func TestMayHoldFoldedName(t *testing.T) {
 		{`{"cache` + "\u017f" + `cope":1}`, "cachescope", true},
 		{`{"x":"\u0041"}`, "cachescope", true},
 		{`{"\u212aind":1}`, "kind", true},
+		{"{\"\u212aind\":1}", "kind", true},
+		{"{\"\u212ain\":1}", "kind", false},
 		{`cacheScope`, "cachescope", true},
 		{`{"cache_scope":1}`, "cachescope", false},
 		{`{"cacheScop":1}`, "cachescope", false},

@@ -61,8 +61,11 @@ func TestMCPBroker_RefusesRepeatedMembers(t *testing.T) {
 			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fetch_page","name":"web_search"}}`,
 			"params.name", nil},
 		{"escaped params.name",
-			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fetch_page","name":"web_search"}}`,
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fetch_page","\u006eame":"web_search"}}`,
 			"params.name", nil},
+		{"escaped params",
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search"},"\u0070arams":{"name":"fetch_page"}}`,
+			"params", nil},
 		{"long s in params",
 			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search"},"param` + "ſ" + `":{"name":"fetch_page"}}`,
 			"params", nil},
@@ -107,6 +110,9 @@ func TestRepeatedMCPMember(t *testing.T) {
 		{`{"method":"tools/call","params":{"name":"a"},"params":5}`, "params"},
 		{`{"method":"tools/call","params":{"arguments":{},"name":"a","NAME":"b"}}`, "params.name"},
 		{`{"method":"tools/call","params":{"name":"a"},"Params":{"name":"b","name":"c"}}`, "params"},
+		{`{"method":"tools/call","params":{"name":"fetch_page","\u006eame":"web_search"}}`, "params.name"},
+		{`{"method":"tools/call","params":{"name":"a"},"\u0070arams":{"name":"b"}}`, "params"},
+		{`{"\u006dethod":"tools/call","method":"tools/list"}`, "method"},
 	} {
 		err := repeatedMCPMember([]byte(tc.body))
 		var got string
