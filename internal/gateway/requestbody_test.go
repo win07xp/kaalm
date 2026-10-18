@@ -59,7 +59,7 @@ func errorMessage(t *testing.T, resp *http.Response) (string, string) {
 }
 
 // Apart from the model value, the routing member names, and the
-// stream_options member the OpenAI adapter adds, the provider receives the
+// stream_options member the OpenAI adapter sets, the provider receives the
 // agent's bytes: member order, whitespace, number text (an integer above
 // 2^53 included), and HTML characters are kept.
 func TestHandleLLMProxy_PassesTheBodyThroughExactly(t *testing.T) {
