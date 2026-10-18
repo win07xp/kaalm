@@ -638,3 +638,58 @@ func TestReconcileDelete_LiveOnlyHoldRequeuesSoon(t *testing.T) {
 		}, agentOn(name))
 	})
 }
+
+// A live-only hold whose DeletionBlocked status write fails returns the error
+// with an empty result: controller-runtime ignores a RequeueAfter sent with an
+// error and logs a warning, and the error already requeues with backoff.
+func TestReconcileDelete_HoldWriteErrorReturnsEmptyResult(t *testing.T) {
+	now := metav1.Now()
+	ctx := context.Background()
+	req := func(name string) ctrl.Request {
+		return ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	}
+	failStatus := func(t *testing.T, obj client.Object) client.Client {
+		t.Helper()
+		return interceptor.NewClient(indexedReferrerClient(t, obj).(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
+				return apierrors.NewConflict(kaalmv1beta1.GroupVersion.WithResource("status").GroupResource(), obj.GetName(), nil)
+			},
+		})
+	}
+	check := func(t *testing.T, res ctrl.Result, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("reconcile returned nil; want the status write error")
+		}
+		if res != (ctrl.Result{}) {
+			t.Errorf("result = %+v with an error, want an empty result", res)
+		}
+	}
+
+	t.Run("ModelProvider", func(t *testing.T) {
+		name := "hold-err-mp"
+		r := &ModelProviderReconciler{
+			Client: failStatus(t, deletingProvider(name)), Recorder: events.NewFakeRecorder(8),
+			APIReader:         indexedReferrerClient(t, allowingClass("hold-err-mp-class", name)),
+			OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
+		}
+		res, err := r.Reconcile(ctx, req(name))
+		check(t, res, err)
+	})
+
+	t.Run("AgentClass", func(t *testing.T) {
+		name := "hold-err-ac"
+		r := &AgentClassReconciler{
+			Client: failStatus(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{
+				Name: name, DeletionTimestamp: &now, Finalizers: []string{kaalmv1beta1.ClassFinalizer},
+			}}),
+			APIReader: indexedReferrerClient(t, &kaalmv1beta1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "on-" + name},
+				Spec:       kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: name}},
+			}),
+			Recorder: events.NewFakeRecorder(8),
+		}
+		res, err := r.Reconcile(ctx, req(name))
+		check(t, res, err)
+	})
+}
