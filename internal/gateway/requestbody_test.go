@@ -58,10 +58,10 @@ func errorMessage(t *testing.T, resp *http.Response) (string, string) {
 	return envelope.Error.Type, envelope.Error.Message
 }
 
-// Apart from the model value and the stream_options member the OpenAI
-// adapter adds, the provider receives the agent's bytes: member order,
-// whitespace, number text (an integer above 2^53 included), and HTML
-// characters are kept.
+// Apart from the model value, the routing member names, and the
+// stream_options member the OpenAI adapter sets, the provider receives the
+// agent's bytes: member order, whitespace, number text (an integer above
+// 2^53 included), and HTML characters are kept.
 func TestHandleLLMProxy_PassesTheBodyThroughExactly(t *testing.T) {
 	sseUpstream := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -82,6 +82,12 @@ func TestHandleLLMProxy_PassesTheBodyThroughExactly(t *testing.T) {
 		{"openai stream", "openai", "/v1/chat/completions", sseUpstream,
 			`{"seed":12345678901234567891,"model":"prov/m1","stream":true,"messages":[]}`,
 			`{"seed":12345678901234567891,"model":"m1","stream":true,"messages":[],"stream_options":{"include_usage":true}}`},
+		{"openai stream with its own stream_options", "openai", "/v1/chat/completions", sseUpstream,
+			`{"seed":12345678901234567891,"model":"prov/m1","stream":true,"stream_options":{"include_usage":false,"x":"<b>"},"messages":[]}`,
+			`{"seed":12345678901234567891,"model":"m1","stream":true,"stream_options":{"x":"<b>","include_usage":true},"messages":[]}`},
+		{"stream null", "openai", "/v1/chat/completions", jsonUpstream,
+			`{"model":"prov/m1","stream":null,"stream_options":{"include_usage":false},"messages":[]}`,
+			`{"model":"m1","stream":null,"stream_options":{"include_usage":false},"messages":[]}`},
 		{"anthropic stream", "anthropic", "/v1/messages", sseUpstream,
 			`{"model":"prov/m1","stream":true,"max_tokens":16,"metadata":{"user_id":"<u>"},"messages":[]}`,
 			`{"model":"m1","stream":true,"max_tokens":16,"metadata":{"user_id":"<u>"},"messages":[]}`},
@@ -121,6 +127,11 @@ func TestHandleLLMProxy_RejectsDuplicateRoutingFields(t *testing.T) {
 		{`{"model":"prov/m1","\u0073tream":true,"stream":false}`, "stream"},
 		{`{"model":"prov/m1","stream":true,"stream":false,"messages":[]}`, "stream"},
 		{`{"model":"prov/m1","stream":true,"stream_options":null,"stream_options":{"include_usage":false}}`, "stream_options"},
+		{`{"model":"prov/m1","Model":"other/m9","messages":[]}`, "model"},
+		{`{"MODEL":"other/m9","model":"prov/m1"}`, "model"},
+		{`{"model":"prov/m1","stream":false,"Stream":true}`, "stream"},
+		{`{"model":"prov/m1","\u017ftream":true,"stream":false}`, "stream"},
+		{`{"model":"prov/m1","stream":true,"stream_options":{},"STREAM_OPTIONS":{"include_usage":false}}`, "stream_options"},
 	} {
 		resp := postRaw(t, client, h.url("/v1/chat/completions"), []byte(c.body))
 		if resp.StatusCode != http.StatusBadRequest {
@@ -129,6 +140,57 @@ func TestHandleLLMProxy_RejectsDuplicateRoutingFields(t *testing.T) {
 		typ, msg := errorMessage(t, resp)
 		if want := `request body has more than one "` + c.field + `" field`; typ != errInvalidRequest || msg != want {
 			t.Errorf("%s: error (%s, %q), want (invalid_request, %q)", c.body, typ, msg, want)
+		}
+	}
+}
+
+// A routing member written in another letter case is that member: the
+// gateway routes by it and forwards it under its exact name, so an upstream
+// that matches names exactly reads the member the gateway admitted.
+func TestHandleLLMProxy_ForwardsRoutingNamesExactly(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	})
+	h.seedRoute()
+	cert := agentCert(t, h.ca)
+	body := `{ "MODEL" : "prov/m1", "Stream":true,"seed":12345678901234567891,"messages":[]}`
+	resp := postRaw(t, h.client(&cert), h.url("/v1/chat/completions"), []byte(body))
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	want := `{ "model" : "m1", "stream":true,"seed":12345678901234567891,"messages":[],"stream_options":{"include_usage":true}}`
+	if got := string((<-h.upreqs).raw); got != want {
+		t.Errorf("upstream body:\n got %s\nwant %s", got, want)
+	}
+}
+
+// A stream member that is not true, false, or null is refused on every LLM
+// path: the gateway reads it to decide whether the request needs the usage
+// option, and a provider that read a string or a number as true would stream
+// with no usage.
+func TestHandleLLMProxy_RejectsNonBooleanStream(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a refused body must not reach the provider")
+	})
+	h.seedRoute()
+	cert := agentCert(t, h.ca)
+	client := h.client(&cert)
+	for _, c := range []struct{ path, body string }{
+		{"/v1/chat/completions", `{"model":"prov/m1","stream":"true","messages":[]}`},
+		{"/v1/chat/completions", `{"model":"prov/m1","stream":1,"messages":[]}`},
+		{"/v1/chat/completions", `{"model":"prov/m1","stream":{},"messages":[]}`},
+		{"/v1/completions", `{"model":"prov/m1","stream":"true","prompt":"x"}`},
+		{"/v1/messages", `{"model":"prov/m1","max_tokens":8,"stream":"true","messages":[]}`},
+	} {
+		resp := postRaw(t, client, h.url(c.path), []byte(c.body))
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s %s: status %d, want 400", c.path, c.body, resp.StatusCode)
+		}
+		if typ, msg := errorMessage(t, resp); typ != errInvalidRequest || msg != "stream must be a boolean" {
+			t.Errorf("%s %s: error (%s, %q), want (invalid_request, %q)", c.path, c.body, typ, msg, "stream must be a boolean")
 		}
 	}
 }
@@ -156,7 +218,7 @@ func TestHandleLLMProxy_BodyShapeErrors(t *testing.T) {
 		{`{"model":"prov/m1"`, notJSON},
 		{`{"model":7}`, noModel},
 		{`{"model":null}`, noModel},
-		{`{"Model":"prov/m1"}`, noModel},
+		{`{"Model":7}`, noModel},
 		{`{}`, noModel},
 	} {
 		resp := postRaw(t, client, h.url("/v1/chat/completions"), []byte(c.body))
@@ -178,8 +240,8 @@ func TestHandleLLMProxy_BodyShapeErrors(t *testing.T) {
 	}
 }
 
-// A same-type fallback with a modelMap receives the primary's body with
-// only the model changed.
+// A same-type fallback with a modelMap receives the primary's body, forced
+// include_usage included, with only the model changed.
 func TestCandidateRequest_ModelMapRewritesOnlyTheModel(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
 	h.seedRoute()
@@ -200,7 +262,7 @@ func TestCandidateRequest_ModelMapRewritesOnlyTheModel(t *testing.T) {
 		kaalmv1beta1.LocalObjectReference{Name: "backup"})
 	cert := agentCert(t, h.ca)
 
-	body := `{"seed":12345678901234567891, "model":"prov/m1","stream":true,"messages":[{"role":"user","content":"<hi>"}]}`
+	body := `{"seed":12345678901234567891, "model":"prov/m1","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"<hi>"}]}`
 	resp := postRaw(t, h.client(&cert), h.url("/v1/chat/completions"), []byte(body))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
@@ -208,6 +270,9 @@ func TestCandidateRequest_ModelMapRewritesOnlyTheModel(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	primary := string((<-h.upreqs).raw)
+	if !strings.Contains(primary, `"stream_options":{"include_usage":true}`) {
+		t.Errorf("primary body %s does not force include_usage", primary)
+	}
 	got := string(<-backup)
 	if want := strings.Replace(primary, `"m1"`, `"m2"`, 1); got != want {
 		t.Errorf("backup body:\n got %s\nwant %s", got, want)
@@ -228,8 +293,16 @@ func TestScanRequestFields(t *testing.T) {
 		{body: `{"model":"p/m"}`, model: "p/m", members: 1},
 		{body: `{ "model" : "p\/m" , "stream" : true }`, model: "p/m", streamTrue: true, members: 2},
 		{body: `{"a":{"model":"x","stream":true},"b":["}",{"]":1}],"model":"p/m"}`, model: "p/m", members: 3},
-		{body: `{"model":7,"stream":1,"stream_options":null}`, opts: true, members: 3},
-		{body: `{"stream":"true","Model":"p/m"}`, members: 2},
+		{body: `{"model":7,"stream":1,"stream_options":null}`, err: `stream must be a boolean`},
+		{body: `{"stream":"true","Model":"p/m"}`, err: `stream must be a boolean`},
+		{body: `{"stream":0}`, err: `stream must be a boolean`},
+		{body: `{"stream":[]}`, err: `stream must be a boolean`},
+		{body: `{"stream":{}}`, err: `stream must be a boolean`},
+		{body: `{"Stream":"true"}`, err: `stream must be a boolean`},
+		{body: `{"stream":"x","stream":true}`, err: `request body has more than one "stream" field`},
+		{body: `{"model":7,"stream":null,"stream_options":null}`, opts: true, members: 3},
+		{body: `{ "stream" : null }`, members: 1},
+		{body: `{"stream":false}`, members: 1},
 		{body: `{"model":"p/m","s\"q":"\\\""}`, model: "p/m", members: 2},
 		{body: `{"model":"p/m","model":"p/m"}`, err: `request body has more than one "model" field`},
 		{body: `{"model":"p/m","\u006dodel":"q/n"}`, err: `request body has more than one "model" field`},
@@ -237,6 +310,15 @@ func TestScanRequestFields(t *testing.T) {
 		{body: `{"\u006dodel":"p/m","stream":true}`, model: "p/m", streamTrue: true, members: 2},
 		{body: `{"stream":false,"stream":true}`, err: `request body has more than one "stream" field`},
 		{body: `{"stream_options":{},"stream_options":{}}`, err: `request body has more than one "stream_options" field`},
+		{body: `{"model":"p/m","Model":"q/n"}`, err: `request body has more than one "model" field`},
+		{body: `{"MODEL":"p/m","model":"p/m"}`, err: `request body has more than one "model" field`},
+		{body: `{"Stream":true,"stream":false}`, err: `request body has more than one "stream" field`},
+		{body: `{"\u017ftream":true,"stream":false}`, err: `request body has more than one "stream" field`},
+		{body: `{"ſtream":true,"stream":false}`, err: `request body has more than one "stream" field`},
+		{body: `{"stream_options":{},"Stream_Options":null}`, err: `request body has more than one "stream_options" field`},
+		{body: `{"Model":"p/m","STREAM":true,"Stream_Options":null}`, model: "p/m", streamTrue: true, opts: true, members: 3},
+		{body: `{"\u017ftream":true}`, streamTrue: true, members: 1},
+		{body: `{"mode":"x","models":"y","streams":true}`, members: 3},
 		{body: `[]`, err: errNotObject.Error()},
 		{body: `"s"`, err: errNotObject.Error()},
 	} {
@@ -252,9 +334,64 @@ func TestScanRequestFields(t *testing.T) {
 			continue
 		}
 		if got := f.model([]byte(c.body)); got != c.model || f.streamTrue != c.streamTrue ||
-			f.hasStreamOptions != c.opts || f.members != c.members {
+			(f.optionsStart >= 0) != c.opts || f.members != c.members {
 			t.Errorf("%s: model %q stream %v options %v members %d, want %q %v %v %d",
-				c.body, got, f.streamTrue, f.hasStreamOptions, f.members, c.model, c.streamTrue, c.opts, c.members)
+				c.body, got, f.streamTrue, f.optionsStart >= 0, f.members, c.model, c.streamTrue, c.opts, c.members)
+		}
+	}
+	body := []byte(`{"model":"p/m","stream_options" : {"a":1}}`)
+	if f, err := scanRequestFields(body); err != nil || string(body[f.optionsStart:f.optionsEnd]) != `{"a":1}` {
+		t.Errorf("stream_options value span %d:%d (%v)", f.optionsStart, f.optionsEnd, err)
+	}
+}
+
+// The rewrite writes each routing member's name exactly and keeps every
+// other byte; a body that already uses the exact names and the same model
+// comes back unchanged.
+func TestRewriteRequestBody_WritesRoutingNamesExactly(t *testing.T) {
+	body := []byte(`{"x":1,"\u0073tream" : false,"Model":"p/m"}`)
+	f, err := scanRequestFields(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(rewriteRequestBody(body, f, "n", false)), `{"x":1,"stream" : false,"model":"n"}`; got != want {
+		t.Errorf("rewrite:\n got %s\nwant %s", got, want)
+	}
+	all := []byte(`{"Model":"p/m","STREAM":true}`)
+	if f, err = scanRequestFields(all); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(rewriteRequestBody(all, f, "n", true)), `{"model":"n","stream":true,"stream_options":{"include_usage":true}}`; got != want {
+		t.Errorf("names and the appended member:\n got %s\nwant %s", got, want)
+	}
+	exact := []byte(`{"stream":false, "model":"n","stream_options":null}`)
+	if f, err = scanRequestFields(exact); err != nil {
+		t.Fatal(err)
+	}
+	if got := rewriteRequestBody(exact, f, "n", false); !bytes.Equal(got, exact) {
+		t.Errorf("exact names: got %s, want the body unchanged", got)
+	}
+}
+
+// With forceUsage, the stream_options member is rewritten in place, wherever
+// it sits, under its exact name.
+func TestRewriteRequestBodyForcesIncludeUsage(t *testing.T) {
+	for _, c := range []struct{ body, want string }{
+		{`{"stream_options":null,"model":"p/m","stream":true}`,
+			`{"stream_options":{"include_usage":true},"model":"new","stream":true}`},
+		{`{"model":"p/m","stream_options":{"a":1},"stream":true}`,
+			`{"model":"new","stream_options":{"a":1,"include_usage":true},"stream":true}`},
+		{`{"model":"p/m","stream":true,"Stream_Options" : {"include_usage":false,"a":1}}`,
+			`{"model":"new","stream":true,"stream_options":{"a":1,"include_usage":true}}`},
+		{`{"Stream_Options":null,"Model":"p/m","STREAM":true}`,
+			`{"stream_options":{"include_usage":true},"model":"new","stream":true}`},
+	} {
+		f, err := scanRequestFields([]byte(c.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(rewriteRequestBody([]byte(c.body), f, "new", true)); got != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.body, got, c.want)
 		}
 	}
 }
@@ -268,7 +405,9 @@ func decodeNumbers(b []byte) (any, error) {
 	return v, err
 }
 
-// topLevelKeyCounts counts each top-level member name of a valid object.
+// topLevelKeyCounts counts each top-level member name of a valid object. A
+// name that matches a routing name the way encoding/json matches struct
+// fields counts under the routing name.
 func topLevelKeyCounts(t *testing.T, b []byte) map[string]int {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	counts := map[string]int{}
@@ -280,7 +419,7 @@ func topLevelKeyCounts(t *testing.T, b []byte) map[string]int {
 		if err != nil {
 			t.Fatal(err)
 		}
-		counts[tok.(string)]++
+		counts[canonicalRoutingName(tok.(string))]++
 		var skip json.RawMessage
 		if err := dec.Decode(&skip); err != nil {
 			t.Fatal(err)
@@ -289,8 +428,94 @@ func topLevelKeyCounts(t *testing.T, b []byte) map[string]int {
 	return counts
 }
 
+// canonicalRoutingName returns the routing name that name matches, or name.
+func canonicalRoutingName(name string) string {
+	for _, r := range routingNames {
+		if jsonNameMatches(name, r) {
+			return r
+		}
+	}
+	return name
+}
+
+// routingMembers is what encoding/json reads into a struct with the routing
+// fields; a member that is present holds at least "null".
+type routingMembers struct {
+	Model         json.RawMessage `json:"model"`
+	Stream        json.RawMessage `json:"stream"`
+	StreamOptions json.RawMessage `json:"stream_options"`
+}
+
+// checkRoutingMembers checks that the scan found the routing members
+// encoding/json reads into rm.
+func checkRoutingMembers(t *testing.T, body []byte, fields requestFields, rm routingMembers) {
+	t.Helper()
+	if ok := len(rm.Model) > 0; ok != (fields.modelStart >= 0) ||
+		(ok && string(body[fields.modelStart:fields.modelEnd]) != string(rm.Model)) {
+		t.Fatalf("%q: model span %d:%d, want %s", body, fields.modelStart, fields.modelEnd, rm.Model)
+	}
+	var wantModel string
+	if len(rm.Model) > 0 && rm.Model[0] == '"' {
+		_ = json.Unmarshal(rm.Model, &wantModel)
+	}
+	if got := fields.model(body); got != wantModel {
+		t.Fatalf("%q: model %q, want %q", body, got, wantModel)
+	}
+	if fields.streamTrue != (string(rm.Stream) == "true") {
+		t.Fatalf("%q: streamTrue %v", body, fields.streamTrue)
+	}
+	if ok := len(rm.StreamOptions) > 0; ok != (fields.optionsStart >= 0) ||
+		(ok && string(body[fields.optionsStart:fields.optionsEnd]) != string(rm.StreamOptions)) {
+		t.Fatalf("%q: stream_options span %d:%d, want %s", body, fields.optionsStart, fields.optionsEnd, rm.StreamOptions)
+	}
+}
+
+// checkRewrite checks that the rewrite of a valid object decodes to the
+// object with each routing member under its exact name, the model replaced,
+// and, with add, stream_options holding the agent's members other than
+// include_usage, and include_usage true.
+func checkRewrite(t *testing.T, body []byte, fields requestFields, add bool) {
+	t.Helper()
+	out := rewriteRequestBody(body, fields, "new/model<&>", add)
+	if !json.Valid(out) {
+		t.Fatalf("%q add=%v: invalid output %q", body, add, out)
+	}
+	got, err := decodeNumbers(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := decodeNumbers(body)
+	wm := want.(map[string]any)
+	for k, v := range wm {
+		if r := canonicalRoutingName(k); r != k {
+			delete(wm, k)
+			wm[r] = v
+		}
+	}
+	if _, ok := wm["model"]; ok {
+		wm["model"] = "new/model<&>"
+	}
+	if add {
+		opts, ok := wm["stream_options"].(map[string]any)
+		if !ok {
+			opts = map[string]any{}
+		}
+		for k := range opts {
+			if jsonNameMatches(k, "include_usage") {
+				delete(opts, k)
+			}
+		}
+		opts["include_usage"] = true
+		wm["stream_options"] = opts
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%q add=%v: rewrite decodes to %v, want %v", body, add, got, want)
+	}
+}
+
 // For any valid object, the scan reads what encoding/json reads, and the
-// rewrite changes only the model value and the added member.
+// rewrite changes only the routing names, the model value, and the
+// stream_options member.
 func FuzzScanRequestFields(f *testing.F) {
 	for _, s := range []string{
 		`{}`, `{"model":"p/m","stream":true}`, `{"model":"p\/m","stream":true,"stream_options":null}`,
@@ -298,6 +523,11 @@ func FuzzScanRequestFields(f *testing.F) {
 		`{"model":"a","\u006dodel":"b"}`, `{"\u006dodel":"a","\u0073tream":true}`,
 		`{"seed":12345678901234567891,"model":"m","messages":[{"content":"<b>\"x\"</b>"}]}`,
 		"{\"mod\xffel\":1,\"model\":\"\xff\"}", `{"stream":true}`, `{"Stream":true,"STREAM_OPTIONS":1}`,
+		`{"Model":"a","model":"b"}`, `{"\u017ftream":true}`, `{"MODEL":"x","Stream_Options":null}`,
+		"{\"\u017ftream\":true,\"model\":\"m\"}",
+		`{"stream":true,"stream_options":{"include_usage":false,"a":1}}`, `{"stream_options":[1],"model":"m"}`,
+		`{"stream_options":{"Include_Usage":1,"include_usage":2,"b":{"include_usage":0}}}`,
+		`{"stream":"true"}`, `{"stream":1,"stream":true}`,
 	} {
 		f.Add([]byte(s))
 	}
@@ -318,12 +548,18 @@ func FuzzScanRequestFields(f *testing.F) {
 			}
 			return
 		}
+		var rm routingMembers
+		if err := json.Unmarshal(body, &rm); err != nil {
+			t.Fatal(err)
+		}
+		if s := string(rm.Stream); s != "" && s != "true" && s != "false" && s != "null" {
+			if !errors.Is(err, errStreamNotBoolean) {
+				t.Fatalf("%q: err = %v, want %v", body, err, errStreamNotBoolean)
+			}
+			return
+		}
 		if err != nil {
 			t.Fatalf("%q: %v", body, err)
-		}
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal(body, &m); err != nil {
-			t.Fatal(err)
 		}
 		total := 0
 		for _, n := range counts {
@@ -332,45 +568,12 @@ func FuzzScanRequestFields(f *testing.F) {
 		if fields.members != total {
 			t.Fatalf("%q: members %d, want %d", body, fields.members, total)
 		}
-		if raw, ok := m["model"]; ok != (fields.modelStart >= 0) ||
-			(ok && string(body[fields.modelStart:fields.modelEnd]) != string(raw)) {
-			t.Fatalf("%q: model span %d:%d, want %s", body, fields.modelStart, fields.modelEnd, raw)
-		}
-		var asAny map[string]any
-		_ = json.Unmarshal(body, &asAny)
-		wantModel, _ := asAny["model"].(string)
-		if got := fields.model(body); got != wantModel {
-			t.Fatalf("%q: model %q, want %q", body, got, wantModel)
-		}
-		if fields.streamTrue != (string(m["stream"]) == "true") {
-			t.Fatalf("%q: streamTrue %v", body, fields.streamTrue)
-		}
-		if _, ok := m["stream_options"]; ok != fields.hasStreamOptions {
-			t.Fatalf("%q: hasStreamOptions %v", body, fields.hasStreamOptions)
-		}
+		checkRoutingMembers(t, body, fields, rm)
 		if body[fields.closeBrace] != '}' || len(bytes.TrimSpace(body[fields.closeBrace+1:])) != 0 {
 			t.Fatalf("%q: closeBrace %d", body, fields.closeBrace)
 		}
 		for _, add := range []bool{false, true} {
-			out := rewriteRequestBody(body, fields, "new/model<&>", add)
-			if !json.Valid(out) {
-				t.Fatalf("%q add=%v: invalid output %q", body, add, out)
-			}
-			got, err := decodeNumbers(out)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want, _ := decodeNumbers(body)
-			wm := want.(map[string]any)
-			if _, ok := wm["model"]; ok {
-				wm["model"] = "new/model<&>"
-			}
-			if add {
-				wm["stream_options"] = map[string]any{"include_usage": true}
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("%q add=%v: rewrite decodes to %v, want %v", body, add, got, want)
-			}
+			checkRewrite(t, body, fields, add)
 		}
 	})
 }

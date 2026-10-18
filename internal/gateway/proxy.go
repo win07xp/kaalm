@@ -133,6 +133,10 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 			badRequest(w, dup.Error())
 			return
 		}
+		if errors.Is(err, errStreamNotBoolean) {
+			badRequest(w, err.Error())
+			return
+		}
 		badRequest(w, "request body is not valid JSON")
 		return
 	}
@@ -202,9 +206,10 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		s.RateLimiter.DebitTokens(provider, c.Namespace, admittedModel, u.InputTokens+u.OutputTokens)
 	}
 
-	// Strip the provider prefix so the upstream sees the raw model ID, and
-	// add stream_options where the format needs it for stream usage. Every
-	// other byte goes out as the agent sent it.
+	// Strip the provider prefix so the upstream sees the raw model ID, write
+	// the routing member names exactly, and set stream_options.include_usage
+	// where the format needs it for stream usage. Every other byte goes out
+	// as the agent sent it.
 	outBody := rewriteRequestBody(body, fields, modelID, needsStreamOptions(adapter, fields))
 
 	// Gateway traffic counts as activity for Agent callers (task Pods do not
@@ -426,7 +431,7 @@ func (s *Server) writeWalkResult(
 // body for a same-format candidate with the same model; the same bytes with
 // only the model value replaced when the model differs (a same-type edge
 // with a modelMap); and, for a crossing, the body the eligibility check
-// translated, encoded, with stream_options added where the candidate's
+// translated, encoded, with stream_options set where the candidate's
 // format needs it, on the candidate format's canonical path.
 func (s *Server) candidateRequest(
 	st *walkState, cand *kaalmv1beta1.ModelProvider, outBody []byte, inboundPath string,
@@ -449,6 +454,8 @@ func (s *Server) candidateRequest(
 	}
 	if model != st.modelID && len(st.body) > 0 {
 		if f, err := scanRequestFields(st.body); err == nil {
+			// st.body already carries the primary's include_usage, so this
+			// rewrite changes only the model.
 			return rewriteRequestBody(st.body, f, model, false), inboundPath, adapter, candAdapter, model
 		}
 	}

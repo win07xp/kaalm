@@ -56,6 +56,13 @@ func TestAnthropicAddsNoStreamOptions(t *testing.T) {
 	if got := prepareBody(t, vertexAdapter{}, body); got != body {
 		t.Errorf("vertex must not change the body: %s", got)
 	}
+	// Neither format uses stream_options, so the agent's goes out as sent.
+	withOptions := `{"model":"m","stream":true,"stream_options":{"include_usage":false}}`
+	for _, a := range []providerAdapter{anthropicAdapter{}, vertexAdapter{}} {
+		if got := prepareBody(t, a, withOptions); got != withOptions {
+			t.Errorf("%T must not change stream_options: %s", a, got)
+		}
+	}
 }
 
 func TestOpenAIStreamOptions(t *testing.T) {
@@ -64,10 +71,27 @@ func TestOpenAIStreamOptions(t *testing.T) {
 		{"streaming without stream_options", `{"model":"m","stream":true}`,
 			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
 		{"existing stream_options", `{"model":"m","stream":true,"stream_options":{"foo":"bar"}}`,
-			`{"model":"m","stream":true,"stream_options":{"foo":"bar"}}`},
+			`{"model":"m","stream":true,"stream_options":{"foo":"bar","include_usage":true}}`},
 		{"null stream_options", `{"model":"m","stream":true,"stream_options":null}`,
-			`{"model":"m","stream":true,"stream_options":null}`},
-		{"stream as a string", `{"model":"m","stream":"true"}`, `{"model":"m","stream":"true"}`},
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"include_usage false", `{"model":"m","stream":true,"stream_options":{"include_usage":false}}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"array stream_options", `{"model":"m","stream":true,"stream_options":[]}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"string stream_options", `{"model":"m","stream":true,"stream_options":"x"}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"number stream_options", `{"model":"m","stream":true,"stream_options":1}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"boolean stream_options", `{"model":"m","stream":true,"stream_options":true}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"empty stream_options", `{"model":"m","stream":true,"stream_options":{ }}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"include_usage variants", `{"model":"m","stream":true,"stream_options":{"Include_Usage":false,"include_u\u017fage":false,"include_usage":false,"x":{"include_usage":false}}}`,
+			`{"model":"m","stream":true,"stream_options":{"x":{"include_usage":false},"include_usage":true}}`},
+		{"include_usage already true", `{"model":"m","stream":true,"stream_options":{"include_usage":true}}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"non-streaming with stream_options", `{"model":"m","stream":false,"stream_options":{"include_usage":false}}`,
+			`{"model":"m","stream":false,"stream_options":{"include_usage":false}}`},
 	} {
 		if got := prepareBody(t, openaiAdapter{}, c.body); got != c.want {
 			t.Errorf("%s: got %s, want %s", c.name, got, c.want)

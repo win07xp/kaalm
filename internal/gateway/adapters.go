@@ -236,7 +236,7 @@ func (openaiAdapter) extractUsage(body []byte) (Usage, bool) {
 
 // accumulateStreamUsage: a usage object appears in the final chunk preceding
 // [DONE], present only when stream_options.include_usage was set (which
-// the proxy adds to a streaming request without stream_options).
+// the proxy sets on every streaming request).
 func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return
@@ -287,9 +287,8 @@ func mayCarryOpenAIUsage(data []byte) bool {
 }
 
 // streamUsageOption: without stream_options.include_usage, OpenAI-format
-// streams emit no usage at all, so a streaming request without its own
-// stream_options gets it (see needsStreamOptions). The extra terminal usage
-// chunk is backward-compatible.
+// streams emit no usage at all, so every streaming request gets it (see
+// needsStreamOptions). The extra terminal usage chunk is backward-compatible.
 func (openaiAdapter) streamUsageOption() bool { return true }
 
 func (openaiAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
