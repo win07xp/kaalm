@@ -200,7 +200,7 @@ TIME_ALLOWLIST = {
 }
 # Sections allowed to name future work, by (page, heading prefix).
 TIME_ALLOW_SECTIONS = {
-    ("docs/src/concepts/vision-and-scope.md", "Scope for v1"),
+    ("docs/src/concepts/vision-and-scope.md", "Scope"),
 }
 
 

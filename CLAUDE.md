@@ -3,7 +3,7 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. Latest release v1.0.0 (2026-09-27); next milestone v1.1.0. Status
+type. Latest release v2.0.0; next milestone v2.1.0. Status
 lives in `docs/src/ROADMAP.md` and the GitHub milestone, not here.
 
 - API group: `kaalm.io` | Versions: `v1beta1` (the storage version, the only served version, and the contract)
@@ -22,7 +22,7 @@ Prose rules for every book, README, and release note:
 - No em dashes or en dashes anywhere.
 - Product pages describe the present: no release history ("since v0.4.0")
   and no future promises outside `docs/src/ROADMAP.md` and the vision
-  page's Scope for v1 section.
+  page's Scope section.
 - Numbered validation rules, runtime-contract items, and scenario IDs are
   cited by number; numbering never changes.
 
