@@ -49,7 +49,9 @@ completes (`wakeTimeout` 120 seconds). Give hibernation-backed channels
 `responseMode: async`: the caller gets its `202` at once and the reply
 arrives by callback or polling after the agent is up. If the wake itself
 exceeds `wakeTimeout`, async callers receive a `wake_timeout` error payload
-instead of silence.
+instead of silence. The gateway waits at most `gateway.maxWakeTimeout` (15
+minutes by default) whatever `wakeTimeout` you set, so an agent that needs
+longer to start needs the platform team to raise that value.
 
 If the Agent is `Hibernated` or `Hibernating`, you can wake it by hand, the
 same way the gateway does:

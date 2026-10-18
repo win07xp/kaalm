@@ -15,8 +15,9 @@ metadata:
   name: anthropic-shared
 spec:
   # Required. "anthropic" | "openai" | "google-vertex" | "openai-compatible".
-  # The gateway routes no inbound path for google-vertex (see The
-  # google-vertex type is reserved on Request handling); only the
+  # The gateway routes no inbound path for google-vertex and refuses a
+  # request that names a google-vertex provider (see The google-vertex
+  # type is reserved on Request handling); only the
   # controller's liveness probe mints Vertex tokens (see The google-vertex
   # probe on ModelProviderReconciler).
   type: anthropic
