@@ -29,15 +29,16 @@ import (
 // after that write, the event carries nothing it would read differently:
 // the pass that wrote the status already acted on the spec, metadata, and
 // status it wrote from, and it returned its own requeue for the next probe
-// or budget fold. Without the filter, every
-// status change runs a second full pass (the gateway Pod list, the spend
-// folds, the credential read, validation).
+// or budget fold. Without the filter, every status change runs a second full
+// pass (the gateway Pod list, the spend folds, the credential read,
+// validation).
 //
 // Only that one event is dropped. A spec, label, annotation, finalizer, or
 // deletion change, a status write by any other client, a resync, and every
 // create and delete are still admitted. The record is matched by the
 // resourceVersion the write returned and used once. When the event arrives
 // before the write returns, the pass runs as it would without the filter.
+// The zero value is ready to use.
 //
 // A pass that reads the provider at any resourceVersion other than the
 // recorded write drops the record (readStale), so the write's event runs one
@@ -46,7 +47,6 @@ import (
 // the status the copy already holds and skip its write, and dropping the
 // write's event would then leave the status from before the change until the
 // next requeue. A read newer than the write costs at most one extra pass.
-// The zero value is ready to use.
 type ownWrites struct {
 	mu sync.Mutex
 	rv map[client.ObjectKey]string
