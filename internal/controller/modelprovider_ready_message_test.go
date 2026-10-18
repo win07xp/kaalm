@@ -241,7 +241,10 @@ func TestValidateFallbackModelMapIsDeterministic(t *testing.T) {
 // the order it found them.
 func validateFallbackMessages(t *testing.T, r *ModelProviderReconciler, primary *kaalmv1beta1.ModelProvider) []string {
 	t.Helper()
-	problems := r.validateFallback(ctxT(), primary.DeepCopy())
+	problems, err := r.validateFallback(ctxT(), primary.DeepCopy())
+	if err != nil {
+		t.Fatal(err)
+	}
 	msgs := make([]string, len(problems))
 	for i, p := range problems {
 		msgs[i] = p.message

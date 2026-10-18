@@ -153,8 +153,10 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Config validation: fallback tree, degrade targets, hard pricing, and
 	// allowedNamespaces patterns.
-	var problems []validationProblem
-	problems = append(problems, r.validateFallback(ctx, &mp)...)
+	problems, err := r.validateFallback(ctx, &mp)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	problems = append(problems, validateDegradeTargets(&mp)...)
 	problems = append(problems, validateHardPricing(&mp)...)
 	problems = append(problems, validateNamespacePatterns(&mp)...)
@@ -351,10 +353,13 @@ func readyFalseFromProblems(problems []validationProblem) (reason, message strin
 // the advisory MaxOutputTokensUnset condition on the primary: it stays valid,
 // but a request without max_tokens cannot cross it. Each list of problems is
 // bounded as entryList bounds every per-entry list; the modelMap keys are
-// checked in sorted order, so the same entries are listed on every pass.
+// checked in sorted order, so the same entries are listed on every pass. A
+// fallback read that fails with anything but NotFound is returned, so the
+// pass fails and retries with backoff instead of reporting the edge as
+// checked.
 func (r *ModelProviderReconciler) validateFallback(
 	ctx context.Context, primary *kaalmv1beta1.ModelProvider,
-) []validationProblem {
+) ([]validationProblem, error) {
 	// The keys join the raw values that make up each message, so two
 	// different problems never merge.
 	var ineligible, badMap entryList
@@ -363,8 +368,8 @@ func (r *ModelProviderReconciler) validateFallback(
 	fetched := map[string]*kaalmv1beta1.ModelProvider{}
 	onPath := map[string]bool{primary.Name: true}
 	walked := map[string]bool{primary.Name: true}
-	var walk func(parent *kaalmv1beta1.ModelProvider)
-	walk = func(parent *kaalmv1beta1.ModelProvider) {
+	var walk func(parent *kaalmv1beta1.ModelProvider) error
+	walk = func(parent *kaalmv1beta1.ModelProvider) error {
 		for _, ref := range parent.Spec.Fallback {
 			if onPath[ref.Name] {
 				ineligible.add("circular\x00"+ref.Name,
@@ -374,11 +379,12 @@ func (r *ModelProviderReconciler) validateFallback(
 			if _, seen := fetched[ref.Name]; !seen {
 				var got kaalmv1beta1.ModelProvider
 				if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &got); err != nil {
-					if apierrors.IsNotFound(err) {
-						ineligible.add("missing\x00"+ref.Name,
-							fmt.Sprintf("fallback provider %s does not exist", quotedEntry(ref.Name)))
-						fetched[ref.Name] = nil
+					if !apierrors.IsNotFound(err) {
+						return fmt.Errorf("get ModelProvider %q: %w", ref.Name, err)
 					}
+					ineligible.add("missing\x00"+ref.Name,
+						fmt.Sprintf("fallback provider %s does not exist", quotedEntry(ref.Name)))
+					fetched[ref.Name] = nil
 					continue
 				}
 				fetched[ref.Name] = &got
@@ -424,11 +430,16 @@ func (r *ModelProviderReconciler) validateFallback(
 			}
 			walked[ref.Name] = true
 			onPath[ref.Name] = true
-			walk(child)
+			if err := walk(child); err != nil {
+				return err
+			}
 			delete(onPath, ref.Name)
 		}
+		return nil
 	}
-	walk(primary)
+	if err := walk(primary); err != nil {
+		return nil, err
+	}
 	names := make([]string, 0, len(unsetMax))
 	for n := range unsetMax {
 		names = append(names, n)
@@ -446,7 +457,7 @@ func (r *ModelProviderReconciler) validateFallback(
 		"modelMaps have %d more invalid entries, not listed") {
 		problems = append(problems, validationProblem{reason: kaalmv1beta1.ReasonInvalidModelMap, message: msg})
 	}
-	return problems
+	return problems, nil
 }
 
 // setMaxOutputTokensUnset records the anthropic models a crossing reaches
