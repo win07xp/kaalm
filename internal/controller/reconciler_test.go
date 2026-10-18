@@ -461,7 +461,7 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 	mkClass(t, "iref-cls")
 	mkAgent(t, "iref-agent", "iref-cls", "iref-only-agent-prov")
 	eventually(t, func() error {
-		refs, err := r.referrers(context.Background(), "iref-only-agent-prov")
+		refs, _, err := r.referrers(context.Background(), "iref-only-agent-prov")
 		if err != nil {
 			return err
 		}
@@ -479,7 +479,7 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 		}
 	})
 	eventually(t, func() error {
-		refs, err := r.referrers(context.Background(), "iref-task-prov")
+		refs, _, err := r.referrers(context.Background(), "iref-task-prov")
 		if err != nil {
 			return err
 		}
@@ -490,7 +490,7 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 	})
 
 	// An unreferenced provider.
-	if refs, err := r.referrers(context.Background(), "nobody-references-me"); err != nil || len(refs) != 0 {
+	if refs, _, err := r.referrers(context.Background(), "nobody-references-me"); err != nil || len(refs) != 0 {
 		t.Errorf("unreferenced provider: refs=%v err=%v", refs, err)
 	}
 }

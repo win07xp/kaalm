@@ -19,63 +19,127 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // referrerIndexes names the field indexes that find the objects pinning a
-// cluster-scoped resource against deletion. An empty index is skipped: an
-// AgentClass is pinned by workloads only.
+// cluster-scoped resource against deletion. An index with no key is skipped:
+// an AgentClass is pinned by workloads only.
 type referrerIndexes struct {
-	agent, task, class string
+	agent, task, class fieldIndex
+}
+
+// The referrer sets of the three resources a delete can hold.
+var (
+	modelProviderReferrers = referrerIndexes{
+		agent: providerRefField, task: providerRefField, class: allowedProvidersField,
+	}
+	toolProviderReferrers = referrerIndexes{
+		agent: toolProviderRefField, task: toolProviderRefField, class: allowedToolProvidersField,
+	}
+	agentClassReferrers = referrerIndexes{agent: agentClassRefField, task: agentClassRefField}
+)
+
+// liveHoldRecheck is how soon a delete held only by the live read is checked
+// again. Such a hold waits on a referrer the cache has not delivered yet. If
+// that referrer comes and goes while the watch is down, no event re-checks
+// the hold until the resync, hours away. Each recheck that still finds the
+// cache empty lists from the API server again, so the wait is a few seconds
+// rather than none: long enough for a lagging cache to catch up, short
+// enough that a gone referrer releases the delete promptly.
+const liveHoldRecheck = 5 * time.Second
+
+// deleteReferrers returns the objects that hold the delete of the resource
+// called name, and whether only the live read found them. It lists from
+// cached first. Only when that list is empty, the pass that would release
+// the delete, does it list again from live, the API server: a referrer
+// created moments before the delete may not be in the cache yet, and a
+// released finalizer cannot be taken back. A nil live reads from cached,
+// which suits a client with no cache.
+func deleteReferrers(ctx context.Context, cached, live client.Reader, name string, idx referrerIndexes) ([]string, bool, error) {
+	refs, err := listReferrers(ctx, cached, name, idx, false)
+	if err != nil || len(refs) > 0 {
+		return refs, false, err
+	}
+	if live == nil {
+		live = cached
+	}
+	refs, err = listReferrers(ctx, live, name, idx, true)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(refs) > 0 {
+		log.FromContext(ctx).V(1).Info("delete held by referrers the cache does not hold yet", "referrers", len(refs))
+	}
+	return refs, len(refs) > 0, nil
+}
+
+// heldResult is the result of a pass that holds a delete: a hold only the
+// live read found comes back after liveHoldRecheck, and a hold the cache
+// shows waits for its referrers' events.
+func heldResult(liveOnly bool) ctrl.Result {
+	if liveOnly {
+		return ctrl.Result{RequeueAfter: liveHoldRecheck}
+	}
+	return ctrl.Result{}
 }
 
 // listReferrers returns every Agent, AgentTask, and AgentClass whose index
 // matches name, as "Agent namespace/name", "AgentTask namespace/name", or
 // "AgentClass name": Agents first, then AgentTasks, then AgentClasses, each
-// sorted, so the referrer a message names is stable from pass to pass.
-func listReferrers(ctx context.Context, c client.Reader, name string, idx referrerIndexes) ([]string, error) {
+// sorted, so the referrer a message names is stable from pass to pass. With
+// live false it reads c's field indexes. With live true it lists each kind
+// in full and applies the index extractor, for a reader with no indexes.
+func listReferrers(ctx context.Context, c client.Reader, name string, idx referrerIndexes, live bool) ([]string, error) {
+	kinds := []struct {
+		f     fieldIndex
+		list  client.ObjectList
+		label string
+	}{
+		{idx.agent, &kaalmv1beta1.AgentList{}, "Agent"},
+		{idx.task, &kaalmv1beta1.AgentTaskList{}, "AgentTask"},
+		{idx.class, &kaalmv1beta1.AgentClassList{}, "AgentClass"},
+	}
 	var out []string
-	if idx.agent != "" {
-		var agents kaalmv1beta1.AgentList
-		if err := c.List(ctx, &agents, client.MatchingFields{idx.agent: name}); err != nil {
+	for _, k := range kinds {
+		if k.f.key == "" {
+			continue
+		}
+		var opts []client.ListOption
+		if !live {
+			opts = append(opts, client.MatchingFields{k.f.key: name})
+		}
+		if err := c.List(ctx, k.list, opts...); err != nil {
+			return nil, err
+		}
+		items, err := apimeta.ExtractList(k.list)
+		if err != nil {
 			return nil, err
 		}
 		var names []string
-		for i := range agents.Items {
-			names = append(names, "Agent "+agents.Items[i].Namespace+"/"+agents.Items[i].Name)
-		}
-		sort.Strings(names)
-		out = append(out, names...)
-	}
-	if idx.task != "" {
-		var tasks kaalmv1beta1.AgentTaskList
-		if err := c.List(ctx, &tasks, client.MatchingFields{idx.task: name}); err != nil {
-			return nil, err
-		}
-		var names []string
-		for i := range tasks.Items {
-			names = append(names, "AgentTask "+tasks.Items[i].Namespace+"/"+tasks.Items[i].Name)
-		}
-		sort.Strings(names)
-		out = append(out, names...)
-	}
-	if idx.class != "" {
-		var classes kaalmv1beta1.AgentClassList
-		if err := c.List(ctx, &classes, client.MatchingFields{idx.class: name}); err != nil {
-			return nil, err
-		}
-		var names []string
-		for i := range classes.Items {
-			names = append(names, "AgentClass "+classes.Items[i].Name)
+		for _, item := range items {
+			obj, ok := item.(client.Object)
+			if !ok || (live && !slices.Contains(k.f.extract(obj), name)) {
+				continue
+			}
+			ref := obj.GetName()
+			if ns := obj.GetNamespace(); ns != "" {
+				ref = ns + "/" + ref
+			}
+			names = append(names, k.label+" "+ref)
 		}
 		sort.Strings(names)
 		out = append(out, names...)

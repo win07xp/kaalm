@@ -310,6 +310,7 @@ func main() {
 
 	if err := (&controller.AgentClassReconciler{
 		Client:      mgr.GetClient(),
+		APIReader:   mgr.GetAPIReader(),
 		Recorder:    eventrec.Bounded(mgr.GetEventRecorder("agentclass-controller")),
 		FQDNSupport: fqdnProbe.Supported,
 		// Reads the controller's own cert-manager-issued Secret from the
@@ -331,6 +332,7 @@ func main() {
 	}
 	if err := (&controller.ModelProviderReconciler{
 		Client:            mgr.GetClient(),
+		APIReader:         mgr.GetAPIReader(),
 		Recorder:          eventrec.Bounded(mgr.GetEventRecorder("modelprovider-controller")),
 		OperatorNamespace: operatorNamespace,
 		Health:            &controller.HTTPProviderHealthChecker{Client: probeClient},
@@ -340,6 +342,7 @@ func main() {
 	}
 	if err := (&controller.ToolProviderReconciler{
 		Client:            mgr.GetClient(),
+		APIReader:         mgr.GetAPIReader(),
 		Recorder:          eventrec.Bounded(mgr.GetEventRecorder("toolprovider-controller")),
 		OperatorNamespace: operatorNamespace,
 		Health:            &controller.MCPToolHealthChecker{Client: probeClient, MaxResponseBytes: mcpMaxBodyBytes},

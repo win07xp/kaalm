@@ -56,7 +56,11 @@ const defaultHealthInterval = 60 * time.Second
 // docs/src/controller/reconcilers/modelprovider.md.
 type ModelProviderReconciler struct {
 	client.Client
-	Recorder events.EventRecorder
+	// APIReader reads from the API server, bypassing the cache; it confirms
+	// that no referrer exists before a delete is released. nil reads
+	// through Client, which suits a client with no cache.
+	APIReader client.Reader
+	Recorder  events.EventRecorder
 	// OperatorNamespace is where credential Secrets live (kaalm-system).
 	OperatorNamespace string
 	// Health probes provider liveness. Injected so tests need no real provider.
@@ -230,12 +234,12 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	if !controllerutil.ContainsFinalizer(mp, kaalmv1beta1.ProviderFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	refs, err := r.referrers(ctx, mp.Name)
+	refs, liveOnly, err := r.referrers(ctx, mp.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(refs) > 0 {
-		return r.holdDelete(ctx, mp, refs)
+		return r.holdDelete(ctx, mp, refs, liveOnly)
 	}
 	// A provider recreated under the same name must start at zero spend, so
 	// the spend ConfigMaps go before the finalizer. They stay while the
@@ -253,13 +257,14 @@ func (r *ModelProviderReconciler) reconcileDelete(
 
 // holdDelete holds the delete while any Agent, AgentTask, or AgentClass
 // references the provider, and says so on Ready. Their watches re-enqueue
-// the provider when a referrer goes away. The referrers still route through
+// the provider when a referrer goes away; a hold only the live read found
+// also comes back on a timer (liveOnly). The referrers still route through
 // the provider and the gateway keeps counting its spend, so the
 // gateway-reachability mirror and the budget and agent-spend reducers run
 // as on every other pass; the probe does not. finish writes only a changed
 // status and sends the DeletionBlocked Warning only after that write.
 func (r *ModelProviderReconciler) holdDelete(
-	ctx context.Context, mp *kaalmv1beta1.ModelProvider, refs []string,
+	ctx context.Context, mp *kaalmv1beta1.ModelProvider, refs []string, liveOnly bool,
 ) (ctrl.Result, error) {
 	liveGateways, readyGateways, err := r.gatewayPods(ctx)
 	if err != nil {
@@ -277,7 +282,7 @@ func (r *ModelProviderReconciler) holdDelete(
 	if msg, first := setDeletionBlocked(&mp.Status.Conditions, refs); first {
 		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, kaalmv1beta1.ActionDelete, nil, msg)
 	}
-	return r.finish(ctx, mp, budgetRequeue(mp, ctrl.Result{}))
+	return r.finish(ctx, mp, budgetRequeue(mp, heldResult(liveOnly)))
 }
 
 // credential resolves the provider's credential through
@@ -676,10 +681,9 @@ func formatUSD(r *big.Rat) string {
 
 // referrers lists the objects that hold the provider's delete: Agents and
 // AgentTasks naming it in spec.providers, and AgentClasses listing it in
-// allowedProviders.
-func (r *ModelProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
-	return listReferrers(ctx, r.Client, name,
-		referrerIndexes{agent: IndexProviderRef, task: IndexProviderRef, class: IndexAllowedProviders})
+// allowedProviders. The bool reports a hold only the live read found.
+func (r *ModelProviderReconciler) referrers(ctx context.Context, name string) ([]string, bool, error) {
+	return deleteReferrers(ctx, r.Client, r.APIReader, name, modelProviderReferrers)
 }
 
 // healthCheckEnabled reports whether the periodic upstream probe should run. A
@@ -752,7 +756,12 @@ func (r *ModelProviderReconciler) finish(
 		r.ownWrites.record(mp)
 	}
 	r.events.flush(r.Recorder, mp, err == nil)
-	return res, err
+	if err != nil {
+		// controller-runtime drops a RequeueAfter sent with an error, and the
+		// error already requeues with backoff.
+		return ctrl.Result{}, err
+	}
+	return res, nil
 }
 
 // SetupWithManager wires the reconciler and its reference watches.
