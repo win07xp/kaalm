@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -191,6 +192,29 @@ func TestAgentToolGrant_LongProviderNameFitsReady(t *testing.T) {
 	})
 	expectAgentDegradedBounded(t, "long-tpname-agent",
 		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes)")
+}
+
+// A grant's tools list has no item or length limit. The rule 38 message
+// names the first missing tools and counts the rest, so the Ready write
+// still fits.
+func TestAgentToolGrant_LongCatalogMissListFitsReady(t *testing.T) {
+	mkOpenTP(t, "tg-r38-long", func(tp *kaalmv1beta1.ToolProvider) {
+		tp.Spec.Tools = []kaalmv1beta1.ToolProviderTool{{ID: "web_search"}}
+	})
+	mkWorkloadClass(t, "wc-r38-long", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "tg-r38-long"}}
+	})
+	tools := make([]string, 5000)
+	for i := range tools {
+		tools[i] = fmt.Sprintf("tool-%04d", i)
+	}
+	mkWorkloadAgent(t, "r38-long-agent", "wc-r38-long", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Tools = []kaalmv1beta1.AgentToolGrant{grantOf("tg-r38-long", tools...)}
+	})
+	expectAgentDegradedBounded(t, "r38-long-agent", kaalmv1beta1.ReasonToolNotInCatalog,
+		`"tool-0000", "tool-0001"`)
+	expectAgentDegradedBounded(t, "r38-long-agent", kaalmv1beta1.ReasonToolNotInCatalog,
+		"4990 more tools, not listed")
 }
 
 func TestAgentToolGrant_NoCatalogAcceptsAnyNarrowing(t *testing.T) {
