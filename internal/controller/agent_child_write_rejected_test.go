@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -183,6 +184,35 @@ func TestAgent_ChildWriteRejectedKeepsRunningPod(t *testing.T) {
 	})
 	if p := podIn(t, ns, "kaalm.io/agent", name); p == nil || p.UID != podUID {
 		t.Fatalf("pod = %v, want the running Pod %s kept", p, podUID)
+	}
+}
+
+// A child write denied with a text longer than the Event note limit sets a
+// Ready message cut to that limit, which still names the child, and the
+// Warning carries the same text.
+func TestAgent_ChildWriteRejectedCutsLongDenial(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "long-denial", Namespace: "default"}}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(agent).
+		WithStatusSubresource(&kaalmv1beta1.Agent{}).Build()
+	rec := events.NewFakeRecorder(4)
+	r := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
+	before := agent.Status.DeepCopy()
+	rejected := &ChildWriteRejectedError{Op: "creating", Kind: "Service", Name: agent.Name,
+		Err: longDenial("services", agent.Name)}
+	if _, err := r.childBlocked(context.Background(), agent, before, rejected); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.Agent
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(agent), &got); err != nil {
+		t.Fatal(err)
+	}
+	ready := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != kaalmv1beta1.ReasonChildWriteRejected {
+		t.Fatalf("Ready = %+v, want False %s", ready, kaalmv1beta1.ReasonChildWriteRejected)
+	}
+	expectCutRejection(t, ready.Message, `creating Service "`+agent.Name+`": `)
+	if evs := drainEvents(rec); len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonChildWriteRejected+" "+ready.Message {
+		t.Errorf("events = %d, want one ChildWriteRejected Warning with the Ready message", len(evs))
 	}
 }
 

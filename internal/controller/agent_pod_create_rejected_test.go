@@ -72,6 +72,38 @@ func TestAgent_PodCreateRejectedKeepsResuming(t *testing.T) {
 	}
 }
 
+// An admission webhook's denial longer than the Event note limit is cut in
+// the Ready message, which keeps the API server's prefix, and the held
+// Warning carries the same text.
+func TestAgent_PodCreateRejectedCutsLongDenial(t *testing.T) {
+	rejection := longDenial("pods", "woken-")
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return rejection
+		},
+	}).Build()
+	agent := &kaalmv1beta1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "woken", Namespace: "default"},
+		Status:     kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentResuming, PodName: "old"},
+	}
+	r := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}
+	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080}
+	_, rejected, err := r.convergePod(context.Background(), agent, &kaalmv1beta1.AgentClass{}, eff, "woken-tls", false)
+	if err != nil || !rejected {
+		t.Fatalf("convergePod = (rejected %v, err %v), want (true, nil)", rejected, err)
+	}
+	ready := condition(agent.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != kaalmv1beta1.ReasonPodCreateRejected {
+		t.Fatalf("Ready = %+v, want False %s", ready, kaalmv1beta1.ReasonPodCreateRejected)
+	}
+	expectCutRejection(t, ready.Message,
+		`pods "woken-" is forbidden: admission webhook "policy.example.com" denied the request: `)
+	held := r.events.take(agent)
+	if len(held) != 1 || held[0].reason != kaalmv1beta1.ReasonPodCreateRejected || held[0].message != ready.Message {
+		t.Errorf("held events = %+v, want one %s with the Ready message", held, kaalmv1beta1.ReasonPodCreateRejected)
+	}
+}
+
 // expectReadyRejected checks Ready=False PodCreateRejected with a message
 // containing substr.
 func expectReadyRejected(conds []metav1.Condition, substr string) error {

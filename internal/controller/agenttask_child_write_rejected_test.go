@@ -332,3 +332,43 @@ func TestChildBlocked_FailedTaskKeepsPhase(t *testing.T) {
 	}
 	expectStoredReady(t, got, metav1.ConditionFalse, kaalmv1beta1.ReasonChildWriteRejected)
 }
+
+// A child write denied with a text longer than the Event note limit sets a
+// Ready message cut to that limit, which still names the child, and the
+// Warning carries the same text: before the Pod exists and mid-retry.
+func TestTaskChildBlocked_CutsLongDenial(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		phase kaalmv1beta1.AgentTaskPhase
+	}{
+		{"pre-Pod", kaalmv1beta1.TaskProvisioning},
+		{"mid-retry", kaalmv1beta1.TaskFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := restoreTask("long-denial", tc.phase, false, "PodStartFailed")
+			task.Status.StartTime = nil
+			if tc.phase == kaalmv1beta1.TaskProvisioning {
+				task.Status.PodName = ""
+			}
+			r, c := restoreReconciler(t, task)
+			cm := task.Name + "-completion"
+			rejected := &ChildWriteRejectedError{Op: "updating", Kind: "ConfigMap", Name: cm,
+				Err: longDenial("configmaps", cm)}
+			if _, err := r.childBlocked(context.Background(), storedTask(t, c, task), &kaalmv1beta1.AgentClass{},
+				true, rejected); err != nil {
+				t.Fatal(err)
+			}
+			got := storedTask(t, c, task)
+			expectStoredReady(t, got, metav1.ConditionFalse, kaalmv1beta1.ReasonChildWriteRejected)
+			ready := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+			if ready == nil {
+				t.FailNow()
+			}
+			expectCutRejection(t, ready.Message, `updating ConfigMap "`+cm+`": `)
+			evs := drainEvents(r.Recorder.(*events.FakeRecorder))
+			if len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonChildWriteRejected+" "+ready.Message {
+				t.Errorf("events = %d, want one ChildWriteRejected Warning with the Ready message", len(evs))
+			}
+		})
+	}
+}

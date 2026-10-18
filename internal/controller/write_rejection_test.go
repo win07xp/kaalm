@@ -19,13 +19,17 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // Only a deliberate refusal of a write is a rejection; anything a backoff
@@ -106,4 +110,47 @@ func TestRejectedWrite(t *testing.T) {
 			t.Errorf("%s: rejectedWrite = %v, want the error unchanged", tc.name, got)
 		}
 	}
+}
+
+// longDenial is a Forbidden error on resource/name carrying an admission
+// webhook's denial of about 40 KiB, longer than a condition message may be.
+func longDenial(resource, name string) error {
+	return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name,
+		errors.New(`admission webhook "policy.example.com" denied the request: `+strings.Repeat("x", 40<<10)))
+}
+
+// expectCutRejection checks msg is a rejection text cut to the Event note
+// limit: it starts with prefix, ends in the truncation marker, and is valid
+// UTF-8.
+func expectCutRejection(t *testing.T, msg, prefix string) {
+	t.Helper()
+	if len(msg) > eventrec.MaxNoteBytes {
+		t.Errorf("message is %d bytes, want at most %d", len(msg), eventrec.MaxNoteBytes)
+	}
+	if !strings.HasSuffix(msg, "... (truncated)") {
+		t.Errorf("message does not end in the truncation marker: ...%q", msg[max(0, len(msg)-40):])
+	}
+	if !strings.HasPrefix(msg, prefix) {
+		t.Errorf("message starts %q, want prefix %q", msg[:min(len(msg), len(prefix)+20)], prefix)
+	}
+	if !utf8.ValidString(msg) {
+		t.Error("message is not valid UTF-8")
+	}
+}
+
+// rejectionMessage keeps a short rejection whole and cuts a long one to the
+// Event note limit, keeping its start and never splitting a character.
+func TestRejectionMessage(t *testing.T) {
+	short := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p", errors.New("exceeded quota"))
+	if got := rejectionMessage(short); got != short.Error() {
+		t.Errorf("short: rejectionMessage = %q, want %q", got, short.Error())
+	}
+	expectCutRejection(t, rejectionMessage(longDenial("pods", "p")),
+		`pods "p" is forbidden: admission webhook "policy.example.com" denied the request: `)
+	expectCutRejection(t, rejectionMessage(&ChildWriteRejectedError{
+		Op: "creating", Kind: "Service", Name: "s", Err: longDenial("services", "s"),
+	}), `creating Service "s": `)
+	wide := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
+		errors.New(strings.Repeat("é", 20<<10)))
+	expectCutRejection(t, rejectionMessage(wide), `pods "p" is forbidden: `)
 }

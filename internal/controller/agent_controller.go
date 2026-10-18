@@ -368,7 +368,7 @@ func (r *AgentReconciler) childBlocked(
 	if cr, ok := asChildWriteRejected(err); ok {
 		// The event fires only when the reason first appears: the message
 		// carries quota counts that change between passes.
-		r.markAgentNotReady(agent, kaalmv1beta1.ReasonChildWriteRejected, cr.Error())
+		r.markAgentNotReady(agent, kaalmv1beta1.ReasonChildWriteRejected, rejectionMessage(cr))
 		if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1143,7 +1143,7 @@ func (r *AgentReconciler) convergePod(
 			// outside the Agent, and the caller's timed requeue notices the
 			// fix. The drift slot (PodUpToDate=Replacing) is kept.
 			r.setPhase(agent, podPendingPhase(agent), "Pod create rejected")
-			r.markAgentNotReady(agent, kaalmv1beta1.ReasonPodCreateRejected, err.Error())
+			r.markAgentNotReady(agent, kaalmv1beta1.ReasonPodCreateRejected, rejectionMessage(err))
 			agent.Status.PodName = ""
 			return false, true, nil
 		}

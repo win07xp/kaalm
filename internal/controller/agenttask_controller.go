@@ -304,7 +304,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 				return ctrl.Result{}, err
 			}
 			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonPodCreateRejected,
-				"Pod create rejected", err.Error())
+				"Pod create rejected", rejectionMessage(err))
 		}
 		r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 		r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
@@ -1074,9 +1074,9 @@ func (r *AgentTaskReconciler) childBlocked(
 	if cr, ok := asChildWriteRejected(err); ok {
 		if prePod && task.Status.Phase != kaalmv1beta1.TaskFailed {
 			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonChildWriteRejected,
-				"child write rejected", cr.Error())
+				"child write rejected", rejectionMessage(cr))
 		}
-		if err := r.markTaskNotReady(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, cr.Error()); err != nil {
+		if err := r.markTaskNotReady(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, rejectionMessage(cr)); err != nil {
 			return ctrl.Result{}, err
 		}
 		return heldRequeue(task, r.notReadyRecheckInterval()), nil

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,6 +27,10 @@ import (
 	nodev1 "k8s.io/api/node/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -344,4 +349,38 @@ func TestTask_CreateRejectedTimeClearedOnLostWriteRepair(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// A Pod create denied with a text longer than the Event note limit sets a
+// Ready message cut to that limit, and the Warning carries the same text.
+func TestTask_PodCreateRejectedCutsLongDenial(t *testing.T) {
+	ctx := context.Background()
+	task := restoreTask("long-denial", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
+	task.Status.PodName, task.Status.StartTime = "", nil
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, readyTaskCert(t, task)).
+		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*corev1.Pod); ok {
+					return longDenial("pods", obj.GetName())
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
+	rec := events.NewFakeRecorder(16)
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
+	if _, err := r.driveProvisioning(ctx, storedTask(t, c, task), &kaalmv1beta1.AgentClass{},
+		effectiveTaskSpec{Image: "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ready := condition(storedTask(t, c, task).Status.Conditions, kaalmv1beta1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != kaalmv1beta1.ReasonPodCreateRejected {
+		t.Fatalf("Ready = %+v, want False %s", ready, kaalmv1beta1.ReasonPodCreateRejected)
+	}
+	// The Pod has only a GenerateName, so the API error names no Pod.
+	expectCutRejection(t, ready.Message,
+		`pods is forbidden: admission webhook "policy.example.com" denied the request: `)
+	if evs := drainEvents(rec); len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonPodCreateRejected+" "+ready.Message {
+		t.Errorf("events = %d, want one PodCreateRejected Warning with the Ready message", len(evs))
+	}
 }
