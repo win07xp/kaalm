@@ -626,3 +626,26 @@ func TestForEachJSONMember(t *testing.T) {
 		return true
 	})
 }
+
+func TestMayHoldFoldedName(t *testing.T) {
+	for _, tc := range []struct {
+		data, name string
+		want       bool
+	}{
+		{`{"cacheScope":1}`, "cachescope", true},
+		{`{"CACHESCOPE":1}`, "cachescope", true},
+		{`{"cache` + "\u017f" + `cope":1}`, "cachescope", true},
+		{`{"x":"\u0041"}`, "cachescope", true},
+		{`{"\u212aind":1}`, "kind", true},
+		{`cacheScope`, "cachescope", true},
+		{`{"cache_scope":1}`, "cachescope", false},
+		{`{"cacheScop":1}`, "cachescope", false},
+		{`{"cache_scope":1}`, "cache_scope", true},
+		{`{"cache` + "\x7f" + `scope":1}`, "cache_scope", false},
+		{``, "cachescope", false},
+	} {
+		if got := mayHoldFoldedName([]byte(tc.data), tc.name); got != tc.want {
+			t.Errorf("mayHoldFoldedName(%q, %q) = %v, want %v", tc.data, tc.name, got, tc.want)
+		}
+	}
+}

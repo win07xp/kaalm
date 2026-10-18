@@ -761,16 +761,18 @@ func (s *Server) relayFilteredToolsList(
 	return int64(n), http.StatusOK, "", ""
 }
 
-// mayCarryCacheScope reports whether a tools/list result can hold a
-// cacheScope member: the name as written, or a \u escape that could spell
-// it. A result without one needs no rewrite for a caller allowed every tool.
-func mayCarryCacheScope(result json.RawMessage) bool {
-	return bytes.Contains(result, []byte("cacheScope")) || bytes.Contains(result, []byte(`\u`))
+// mayCarryCacheScope reports whether a tools/list answer can hold a member
+// that encoding/json reads as cacheScope: any letter case, a long s, or a
+// \u escape that could spell it. An answer without one needs no rewrite
+// for a caller allowed every tool.
+func mayCarryCacheScope(data []byte) bool {
+	return mayHoldFoldedName(data, "cachescope")
 }
 
 // narrowToolsResult keeps the tools in a tools/list result that filter
-// permits, and marks a cacheScope private: the answer is per caller, so a
-// shared cache must never serve it as the server's list. It
+// permits, and marks every member encoding/json reads as cacheScope
+// private: the answer is per caller, so a shared cache must never serve it
+// as the server's list, whichever copy the client's parser keeps. It
 // returns false for a result that is not an object. Kept entries are
 // joined from the upstream bytes; the result is re-encoded, which compacts
 // it as encoding/json does.
@@ -804,8 +806,10 @@ func narrowToolsResult(result json.RawMessage, filter *toolFilter) (json.RawMess
 		}
 	}
 	m["tools"] = append(kept, ']')
-	if _, ok := m["cacheScope"]; ok {
-		m["cacheScope"] = json.RawMessage(`"private"`)
+	for k := range m {
+		if jsonNameMatches(k, "cacheScope") {
+			m[k] = json.RawMessage(`"private"`)
+		}
 	}
 	narrowed, err := json.Marshal(m)
 	if err != nil {

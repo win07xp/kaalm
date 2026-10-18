@@ -386,3 +386,42 @@ func forEachJSONMember(b []byte, open int, fn func(name string, valueStart, valu
 		}
 	}
 }
+
+// mayHoldFoldedName reports whether data can hold a member that
+// encoding/json reads as name, which must be lowercase ASCII: a run of
+// bytes that folds to name (an ASCII letter in either case, s also as
+// U+017F, k also as U+212A, any other byte exact), or a \u escape that
+// could spell it.
+func mayHoldFoldedName(data []byte, name string) bool {
+	if bytes.Contains(data, []byte(`\u`)) {
+		return true
+	}
+	for i := range data {
+		if foldedPrefixLen(data[i:], name) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// foldedPrefixLen returns the length of the prefix of data that folds to
+// name as mayHoldFoldedName describes, or 0 when none does.
+func foldedPrefixLen(data []byte, name string) int {
+	j := 0
+	for k := 0; k < len(name); k++ {
+		c := name[k]
+		switch {
+		case j < len(data) && c >= 'a' && c <= 'z' && data[j]|0x20 == c:
+			j++
+		case j < len(data) && data[j] == c:
+			j++
+		case c == 's' && bytes.HasPrefix(data[j:], []byte("ſ")):
+			j += len("ſ")
+		case c == 'k' && bytes.HasPrefix(data[j:], []byte("K")):
+			j += len("K")
+		default:
+			return 0
+		}
+	}
+	return j
+}
