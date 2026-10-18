@@ -490,6 +490,30 @@ func TestSetFallbackEligibility_Events(t *testing.T) {
 	}
 }
 
+// fallbackPass runs one scan pass over findings for callers in namespaces
+// and returns the notes of the events it holds.
+func fallbackPass(r *ModelProviderReconciler, mp *kaalmv1beta1.ModelProvider, namespaces ...string) []string {
+	r.setFallbackEligibility(mp, nsFindings(namespaces...))
+	var notes []string
+	for _, ev := range r.events.take(mp) {
+		notes = append(notes, ev.message)
+	}
+	return notes
+}
+
+// A fix and a new finding in the same pass leave the total unchanged. The
+// new finding is still named, even when neither finding is listed.
+func TestSetFallbackEligibility_FixPlusNewUnlistedFindingIsNamed(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "uid-p"}}
+	r := &ModelProviderReconciler{}
+	fallbackPass(r, mp, nsRange(1, 12)...)
+	got := fallbackPass(r, mp, append(nsRange(1, 11), "ns-13")...)
+	want := []string{"new: " + nsFinding("ns-13")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fix plus a new unlisted finding held\n %q\nwant\n %q", got, want)
+	}
+}
+
 // Many long model ids that a fallback does not offer still let the status
 // write through: FallbackIneligible lists the first ten findings and counts
 // the rest, and Ready is recorded at the current generation.
