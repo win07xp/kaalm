@@ -336,6 +336,75 @@ func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
 	}
 }
 
+// Through full reconciles, a new provider's first scan names every finding,
+// listed in the condition or not, and a pass that fixes one unlisted finding
+// and adds another names the new one. That pass leaves the condition
+// message as it was, so finish finds the status already stored and writes
+// nothing; the event must still go out.
+func TestModelProvider_FallbackIneligibleNamesUnlistedFindings(t *testing.T) {
+	const name = "ev-mp-swap"
+	mp := eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: name + "-backup"}}
+	})
+	backup := eventsProvider(name+"-backup", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.AllowedNamespaces = []string{"team-00"}
+	})
+	agentIn := func(ns string) *kaalmv1beta1.Agent {
+		return &kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: ns},
+			Spec: kaalmv1beta1.AgentSpec{Providers: []kaalmv1beta1.AgentProviderReference{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: name}},
+			}},
+		}
+	}
+	finding := func(ns string) string {
+		return fmt.Sprintf("fallback %q does not admit namespace %q", name+"-backup", ns)
+	}
+	objs := []client.Object{mp, backup, providerKey(name)}
+	for i := 1; i <= 12; i++ {
+		objs = append(objs, agentIn(fmt.Sprintf("team-%02d", i)))
+	}
+	conflicts := &statusConflicts{}
+	r, rec := eventsProviderReconciler(t, conflicts, nil, objs...)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	prefix := "Warning " + kaalmv1beta1.ReasonFallbackIneligible
+
+	// The first scan names all twelve findings, though the condition lists
+	// ten.
+	ev := expectEventOnceAcrossConflict(t, r, rec, conflicts, req, prefix)
+	for i := 1; i <= 12; i++ {
+		if f := finding(fmt.Sprintf("team-%02d", i)); !strings.Contains(ev, "new: ") || !strings.Contains(ev, f) {
+			t.Errorf("first event = %q, want it to name %s as new", ev, f)
+		}
+	}
+
+	// Fix the unlisted team-12 finding and add team-13: the listed ten and
+	// the total stay the same.
+	var gone kaalmv1beta1.Agent
+	if err := r.Get(ctxT(), types.NamespacedName{Namespace: "team-12", Name: "agent"}, &gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctxT(), &gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Create(ctxT(), agentIn("team-13")); err != nil {
+		t.Fatal(err)
+	}
+	pass := func() []string {
+		t.Helper()
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+		return withPrefix(drainEvents(rec), prefix)
+	}
+	if got, want := pass(), []string{prefix + " new: " + finding("team-13")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("events for the swap = %q, want %q", got, want)
+	}
+	if got := pass(); len(got) != 0 {
+		t.Errorf("a pass over the same findings emitted %q", got)
+	}
+}
+
 // A model id can hold the separator the condition message joins findings
 // with. The quoted value is one finding, so a second pass over the same
 // finding must not announce it again.
@@ -516,6 +585,7 @@ func TestSetFallbackEligibility_EventsAfterRestart(t *testing.T) {
 	cases := []struct {
 		name       string
 		before, ns []string
+		cleared    bool // a pass with no findings follows before
 		want       []string
 	}{{
 		name:   "the same set sends nothing",
@@ -536,15 +606,22 @@ func TestSetFallbackEligibility_EventsAfterRestart(t *testing.T) {
 		name:   "a fix plus a new unlisted finding goes unreported",
 		before: nsRange(1, 12), ns: append(nsRange(1, 11), "ns-13"),
 	}, {
-		name: "no stored condition names the listed findings after the total",
+		name: "no stored condition names every finding as new after the total",
 		ns:   nsRange(1, 11),
-		want: []string{"11 findings in total; now listed: " + listedNs(nsRange(1, 10)...)},
+		want: []string{"11 findings in total; new: " + listedNs(nsRange(1, 11)...)},
+	}, {
+		name:   "a stored False condition names every finding as new after the total",
+		before: nsRange(1, 3), cleared: true, ns: nsRange(1, 11),
+		want: []string{"11 findings in total; new: " + listedNs(nsRange(1, 11)...)},
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "uid-p"}}
 			if tc.before != nil {
 				fallbackPass(&ModelProviderReconciler{}, mp, tc.before...)
+			}
+			if tc.cleared {
+				fallbackPass(&ModelProviderReconciler{}, mp)
 			}
 			r := &ModelProviderReconciler{} // the restarted controller
 			if got := fallbackPass(r, mp, tc.ns...); !reflect.DeepEqual(got, tc.want) {
