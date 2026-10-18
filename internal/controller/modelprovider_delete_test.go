@@ -62,32 +62,16 @@ func spendConfigMaps(name string) []client.Object {
 }
 
 // deleteReconciler builds a ModelProviderReconciler over a fake client with
-// the three referrer indexes registered.
+// the three referrer indexes registered from the same field vars the
+// manager uses, so the cached and live rules match.
 func deleteReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *ModelProviderReconciler {
 	t.Helper()
-	byProviderRef := func(o client.Object) []string {
-		switch w := o.(type) {
-		case *kaalmv1beta1.Agent:
-			return providerRefNames(w.Spec.Providers)
-		case *kaalmv1beta1.AgentTask:
-			return providerRefNames(w.Spec.Providers)
-		}
-		return nil
-	}
-	byAllowed := func(o client.Object) []string {
-		ac := o.(*kaalmv1beta1.AgentClass)
-		out := make([]string, 0, len(ac.Spec.AllowedProviders))
-		for _, p := range ac.Spec.AllowedProviders {
-			out = append(out, p.Name)
-		}
-		return out
-	}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexProviderRef, byProviderRef).
-		WithIndex(&kaalmv1beta1.AgentTask{}, IndexProviderRef, byProviderRef).
-		WithIndex(&kaalmv1beta1.AgentClass{}, IndexAllowedProviders, byAllowed).
+		WithIndex(&kaalmv1beta1.Agent{}, providerRefField.key, providerRefField.extract).
+		WithIndex(&kaalmv1beta1.AgentTask{}, providerRefField.key, providerRefField.extract).
+		WithIndex(&kaalmv1beta1.AgentClass{}, allowedProvidersField.key, allowedProvidersField.extract).
 		WithInterceptorFuncs(funcs).
 		Build()
 	return &ModelProviderReconciler{

@@ -31,9 +31,9 @@ import (
 // Field index keys. Cross-resource lookups (usage counts, reference tracking,
 // re-enqueue on a referenced object's change) go through these indexes rather
 // than full list scans, so the controller stays cheap at the 1000-workload target
-// (docs/src/controller/overview.md). The one exception is the check that
-// releases a delete, which lists from the API server (deleteReferrers in
-// deletion_blocked.go).
+// (docs/src/controller/overview.md). The check that releases a delete also
+// lists from the API server when the cache shows no referrer (deleteReferrers
+// in deletion_blocked.go); overview.md names the other exceptions.
 const (
 	// IndexAgentClassRef indexes Agents and AgentTasks by spec.agentClassRef.name.
 	IndexAgentClassRef = "spec.agentClassRef.name"
