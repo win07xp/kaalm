@@ -562,6 +562,99 @@ func TestToolProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 	}
 }
 
+// longProbeError is a probe error carrying a tool server's JSON-RPC message
+// far past the 32,768-character limit on a condition message.
+func longProbeError() error {
+	return errString("tools/list: JSON-RPC error -32603: " + strings.Repeat("x", 40<<10))
+}
+
+// A probe error longer than a condition message may be is cut, so the
+// status write succeeds and Healthy turns False. The API server enforces the
+// condition schema here, which the fake client does not.
+func TestToolProvider_LongProbeErrorTurnsHealthyFalse(t *testing.T) {
+	const name = "tp-longerr"
+	mkSecret(t, name+"-key")
+	mkToolProvider(t, name, nil)
+	get := toolProviderConditions(name)
+	eventually(t, func() error {
+		c := condition(get(), kaalmv1beta1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionTrue {
+			return errString("not yet Healthy")
+		}
+		return nil
+	})
+
+	fakeToolHealth.set(name, ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: longProbeError()}})
+	// A spec change moves the generation, so the next pass probes at once.
+	var generation int64
+	eventually(t, func() error {
+		var tp kaalmv1beta1.ToolProvider
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
+			return err
+		}
+		tp.Spec.HealthCheck = &kaalmv1beta1.ToolProviderHealthCheck{Enabled: true, IntervalSeconds: 30}
+		if err := testClient.Update(ctxT(), &tp); err != nil {
+			return err
+		}
+		generation = tp.Generation
+		return nil
+	})
+
+	eventually(t, func() error {
+		var tp kaalmv1beta1.ToolProvider
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
+			return err
+		}
+		c := condition(tp.Status.Conditions, kaalmv1beta1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonProviderUnhealthy {
+			return errString("Healthy is not yet False with ProviderUnhealthy")
+		}
+		if tp.Status.ObservedGeneration != generation {
+			return errString("status has not observed the new generation yet")
+		}
+		return nil
+	})
+	c := condition(get(), kaalmv1beta1.ConditionHealthy)
+	if len(c.Message) > maxProbeErrorBytes {
+		t.Fatalf("Healthy message is %d bytes, want at most %d", len(c.Message), maxProbeErrorBytes)
+	}
+	if !strings.HasPrefix(c.Message, "tools/list: JSON-RPC error -32603: ") || !strings.HasSuffix(c.Message, "... (truncated)") {
+		t.Fatalf("Healthy message = %q, want the start of the probe error and the truncation marker", c.Message)
+	}
+}
+
+// The Healthy message and the ProviderUnhealthy Event carry the same cut
+// probe error, without relying on the bounded recorder to cut the Event.
+func TestToolProvider_ProbeErrorMessageIsBounded(t *testing.T) {
+	const name = "ev-tp-long"
+	tp := eventsToolProvider(name)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp, providerKey(name)).WithStatusSubresource(tp).Build()
+	health := newFakeToolHealth()
+	health.set(name, ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: longProbeError()}})
+	rec := events.NewFakeRecorder(16)
+	r := &ToolProviderReconciler{
+		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health,
+	}
+	mustReconcile(t, r, name)
+
+	var got kaalmv1beta1.ToolProvider
+	if err := c.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	h := condition(got.Status.Conditions, kaalmv1beta1.ConditionHealthy)
+	if h == nil || h.Status != metav1.ConditionFalse || h.Reason != kaalmv1beta1.ReasonProviderUnhealthy {
+		t.Fatalf("Healthy = %+v, want False with ProviderUnhealthy", h)
+	}
+	if len(h.Message) > maxProbeErrorBytes || !strings.HasSuffix(h.Message, "... (truncated)") {
+		t.Fatalf("Healthy message is %d bytes, want at most %d and the truncation marker", len(h.Message), maxProbeErrorBytes)
+	}
+	evs := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy)
+	if len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonProviderUnhealthy+" "+h.Message {
+		t.Fatalf("ProviderUnhealthy events = %d, want one carrying the Healthy message", len(evs))
+	}
+}
+
 // Rule 49 for a ToolProvider with credentialsRef: an unlabeled Secret keeps
 // it not Ready, and the probe never carries the credential until the label is
 // set; removing the label takes it out again.

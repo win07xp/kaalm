@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 const defaultHealthInterval = 60 * time.Second
@@ -191,7 +192,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		case res.AuthFailed:
 			msg := "provider rejected the credential"
 			if res.Err != nil {
-				msg += ": " + res.Err.Error()
+				msg = eventrec.Truncate(msg+": "+res.Err.Error(), maxProbeErrorBytes)
 			}
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
 			r.setReadyFalse(&mp, kaalmv1beta1.ReasonCredentialsInvalid, msg)
@@ -202,9 +203,10 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			// one event with a count, which keeps it visible through a long
 			// outage. A pass that reuses the recorded failure sent nothing
 			// new to report.
-			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+			msg := eventrec.Truncate(res.Err.Error(), maxProbeErrorBytes)
+			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, msg)
 			if !cached {
-				r.Recorder.Eventf(&mp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", res.Err.Error())
+				r.Recorder.Eventf(&mp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", msg)
 			}
 			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&mp))}
 		default: // Healthy

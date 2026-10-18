@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // ToolProviderReconciler validates a ToolProvider's credentials and
@@ -170,10 +171,11 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			// An occurrence: reported on every failing probe, and the
 			// recorder folds the repeats into one event with a count. A pass
 			// that reuses the recorded failure has nothing new to report.
+			msg := eventrec.Truncate(res.Err.Error(), maxProbeErrorBytes)
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
-				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+				kaalmv1beta1.ReasonProviderUnhealthy, msg)
 			if !cached {
-				r.Recorder.Eventf(&tp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", res.Err.Error())
+				r.Recorder.Eventf(&tp, nil, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, kaalmv1beta1.ActionProbe, "%s", msg)
 			}
 			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&tp))}
 		default: // Healthy

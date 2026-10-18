@@ -65,7 +65,7 @@ The probe never follows a redirect, so a redirecting endpoint cannot receive the
 
 The `401` and `403` class matches the credential problems in [Fallback triggers](../../gateways/llm/fallback.md#fallback-triggers).
 
-The `Healthy` message carries the HTTP status or the network error. A `404` or a redirect from a wrong `spec.endpoint` path persists: the provider stays `Healthy=False` until the endpoint is fixed.
+The `Healthy` message carries the HTTP status or the network error, cut to 1,024 bytes ([the `Healthy` condition](../../resources/modelprovider.md#status) states the cut). A `404` or a redirect from a wrong `spec.endpoint` path persists: the provider stays `Healthy=False` until the endpoint is fixed.
 
 ### The google-vertex probe
 
@@ -73,7 +73,7 @@ For `spec.type: google-vertex` the credential Secret holds a GCP service-account
 
 The probe mints an OAuth2 access token (scope `https://www.googleapis.com/auth/cloud-platform`) with a JWT bearer grant signed by the key, then sends `GET {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models` to `spec.endpoint` with the token as a bearer credential. `project` is the key's `project_id`. `location` is the `{location}` of a regional `{location}-aiplatform.googleapis.com` endpoint host, and `global` for any other host, including the global `aiplatform.googleapis.com` endpoint. The private key signs the assertion and is never sent. The probe sends the assertion to the key's `token_uri` and the access token to `spec.endpoint`, so those two hosts bound where this credential goes.
 
-`CredentialsInvalid` covers a `401` or `403` from Vertex, a token endpoint that refuses the key (HTTP `401`, `403`, or a `400` carrying OAuth2 error `invalid_grant` or `invalid_client`), and a Secret value that is not a usable service-account key. Any other failure (a network error, a `5xx`, or another token-endpoint error) sets `ProviderUnhealthy`.
+`CredentialsInvalid` covers a `401` or `403` from Vertex, a token endpoint that refuses the key (HTTP `401`, `403`, or a `400` carrying OAuth2 error `invalid_grant` or `invalid_client`), and a Secret value that is not a usable service-account key. Any other failure (a network error, a `5xx`, or another token-endpoint error) sets `ProviderUnhealthy`. Under `ProviderUnhealthy`, a token-endpoint error can include the endpoint's response body; [the `Healthy` condition](../../resources/modelprovider.md#status) states how the message is cut.
 
 Only this probe mints Vertex tokens; the gateway does not serve the type ([The google-vertex type is reserved](../../gateways/llm/request-handling.md#the-google-vertex-type-is-reserved)).
 
