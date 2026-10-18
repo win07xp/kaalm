@@ -292,7 +292,7 @@ func roleWriteReason(err error) (reason, msg string, _ error) {
 		return kaalmv1beta1.ReasonChildConflict, err.Error(), nil
 	}
 	if cr, ok := asChildWriteRejected(err); ok {
-		return kaalmv1beta1.ReasonChildWriteRejected, cr.Error(), nil
+		return kaalmv1beta1.ReasonChildWriteRejected, rejectionMessage(cr), nil
 	}
 	return "", "", err
 }

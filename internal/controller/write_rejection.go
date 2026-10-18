@@ -23,6 +23,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // isWriteRejection reports whether a write failed because the API server or
@@ -75,4 +77,20 @@ func rejectedWrite(op string, scheme *runtime.Scheme, obj client.Object, err err
 		return err
 	}
 	return &ChildWriteRejectedError{Op: op, Kind: kindOf(scheme, obj), Name: obj.GetName(), Err: err}
+}
+
+// maxRejectionMessageBytes bounds the rejection text a workload copies into
+// its Ready message and the matching Warning event. The text can carry an
+// admission webhook's denial, which a third party writes at any length. A
+// condition message over the schema's 32,768-character limit fails the whole
+// status write and leaves Ready at its last value. The Event carries the same
+// text, and the Event note limit is this bound.
+const maxRejectionMessageBytes = eventrec.MaxNoteBytes
+
+// rejectionMessage returns err's text cut to maxRejectionMessageBytes: the
+// Ready message and Event text for a write the API server refused. It takes
+// any error: a ChildWriteRejectedError, or the raw API error of a rejected
+// Pod create.
+func rejectionMessage(err error) string {
+	return eventrec.Truncate(err.Error(), maxRejectionMessageBytes)
 }

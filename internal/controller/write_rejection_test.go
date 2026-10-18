@@ -137,3 +137,20 @@ func expectCutRejection(t *testing.T, msg, prefix string) {
 		t.Error("message is not valid UTF-8")
 	}
 }
+
+// rejectionMessage keeps a short rejection whole and cuts a long one to the
+// Event note limit, keeping its start and never splitting a character.
+func TestRejectionMessage(t *testing.T) {
+	short := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p", errors.New("exceeded quota"))
+	if got := rejectionMessage(short); got != short.Error() {
+		t.Errorf("short: rejectionMessage = %q, want %q", got, short.Error())
+	}
+	expectCutRejection(t, rejectionMessage(longDenial("pods", "p")),
+		`pods "p" is forbidden: admission webhook "policy.example.com" denied the request: `)
+	expectCutRejection(t, rejectionMessage(&ChildWriteRejectedError{
+		Op: "creating", Kind: "Service", Name: "s", Err: longDenial("services", "s"),
+	}), `creating Service "s": `)
+	wide := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
+		errors.New(strings.Repeat("é", 20<<10)))
+	expectCutRejection(t, rejectionMessage(wide), `pods "p" is forbidden: `)
+}
