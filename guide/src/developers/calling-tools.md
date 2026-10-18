@@ -71,8 +71,10 @@ Three wire facts:
 - Only `initialize`, `server/discover`, `ping`, `notifications/*`,
   `tools/list`, and `tools/call` pass the broker. Any other method
   (`resources/*`, `prompts/*`, `sampling/*`) returns `403 tool_denied`
-  naming the method, and JSON-RPC batch arrays are rejected with
-  `400 invalid_request`.
+  naming the method. JSON-RPC batch arrays are rejected with
+  `400 invalid_request`, and so is a body that names `method`, `params`, or
+  `params.name` more than once, ignoring letter case. An SDK-built body never
+  does. See [The tool plane](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/tool-plane.md#the-broker).
 
 On the 2026-07-28 revision, which a client selects with its
 `MCP-Protocol-Version` header, there is no session and the first call is
