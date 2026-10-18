@@ -759,7 +759,7 @@ func (r *AgentTaskReconciler) taskViolation(
 	}
 	if eff.Image != "" && !imageAllowed(eff.Image, class.Spec.Image.AllowedImages) {
 		return kaalmv1beta1.ReasonClassConstraintViolation,
-			fmt.Sprintf("image %q does not match AgentClass %q allowedImages", eff.Image, class.Name)
+			fmt.Sprintf("image %s does not match AgentClass %q allowedImages", quotedEntry(eff.Image), class.Name)
 	}
 	for _, p := range task.Spec.Providers {
 		name := p.ProviderRef.Name

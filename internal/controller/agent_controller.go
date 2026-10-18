@@ -742,7 +742,7 @@ func (r *AgentReconciler) degradedReasons(
 	// Rule 2: image allowlist.
 	if eff.Image != "" && !imageAllowed(eff.Image, class.Spec.Image.AllowedImages) {
 		add(kaalmv1beta1.ReasonClassConstraintViolation,
-			fmt.Sprintf("image %q does not match AgentClass %q allowedImages", eff.Image, class.Name))
+			fmt.Sprintf("image %s does not match AgentClass %q allowedImages", quotedEntry(eff.Image), class.Name))
 	}
 	// Rules 4, 5: provider resolution, allowlist, and namespace admission.
 	for _, p := range agent.Spec.Providers {
