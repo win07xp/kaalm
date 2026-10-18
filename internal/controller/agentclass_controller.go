@@ -49,6 +49,10 @@ import (
 // docs/src/controller/reconcilers/agentclass.md.
 type AgentClassReconciler struct {
 	client.Client
+	// APIReader reads from the API server, bypassing the cache; it confirms
+	// that no referrer exists before a delete is released. nil reads
+	// through Client, which suits a client with no cache.
+	APIReader client.Reader
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
 	claimsWarned claimsWarnings
 	Recorder     events.EventRecorder
@@ -251,8 +255,7 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	if !controllerutil.ContainsFinalizer(ac, kaalmv1beta1.ClassFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	refs, err := listReferrers(ctx, r.Client, ac.Name,
-		referrerIndexes{agent: IndexAgentClassRef, task: IndexAgentClassRef})
+	refs, err := deleteReferrers(ctx, r.Client, r.APIReader, ac.Name, agentClassReferrers)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

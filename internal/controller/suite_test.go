@@ -339,7 +339,7 @@ func runSuite(m *testing.M) int {
 	secretSource := secretwatch.NewReader(secretWatcher)
 	fakeHealth = newFakeHealth()
 	if err := (&AgentClassReconciler{
-		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorder("test"),
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder("test"),
 		// The class sees the real envtest discovery minus cilium.io, so its
 		// FQDNPolicySupported=False path stays covered while the Agent and
 		// AgentTask reconcilers below synthesize policies.
@@ -354,14 +354,14 @@ func runSuite(m *testing.M) int {
 		return setupFailed("AgentClassReconciler", err)
 	}
 	if err := (&ModelProviderReconciler{
-		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorder("test"),
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder("test"),
 		OperatorNamespace: testOperatorNamespace, Health: fakeHealth,
 	}).SetupWithManager(mgr); err != nil {
 		return setupFailed("ModelProviderReconciler", err)
 	}
 	fakeToolHealth = newFakeToolHealth()
 	if err := (&ToolProviderReconciler{
-		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorder("test"),
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder("test"),
 		OperatorNamespace: testOperatorNamespace, Health: fakeToolHealth,
 	}).SetupWithManager(mgr); err != nil {
 		return setupFailed("ToolProviderReconciler", err)

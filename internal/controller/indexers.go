@@ -29,9 +29,11 @@ import (
 )
 
 // Field index keys. Cross-resource lookups (usage counts, reference tracking,
-// re-enqueue on a referenced object's change) all go through these indexes rather
+// re-enqueue on a referenced object's change) go through these indexes rather
 // than full list scans, so the controller stays cheap at the 1000-workload target
-// (docs/src/controller/overview.md).
+// (docs/src/controller/overview.md). The one exception is the check that
+// releases a delete, which lists from the API server (deleteReferrers in
+// deletion_blocked.go).
 const (
 	// IndexAgentClassRef indexes Agents and AgentTasks by spec.agentClassRef.name.
 	IndexAgentClassRef = "spec.agentClassRef.name"
@@ -69,55 +71,23 @@ const (
 func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	idx := mgr.GetFieldIndexer()
 
-	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexAgentClassRef, func(o client.Object) []string {
-		return []string{o.(*kaalmv1beta1.Agent).Spec.AgentClassRef.Name}
-	}); err != nil {
-		return err
+	referrers := []struct {
+		obj client.Object
+		f   fieldIndex
+	}{
+		{&kaalmv1beta1.Agent{}, agentClassRefField},
+		{&kaalmv1beta1.AgentTask{}, agentClassRefField},
+		{&kaalmv1beta1.Agent{}, providerRefField},
+		{&kaalmv1beta1.AgentTask{}, providerRefField},
+		{&kaalmv1beta1.AgentClass{}, allowedProvidersField},
+		{&kaalmv1beta1.Agent{}, toolProviderRefField},
+		{&kaalmv1beta1.AgentTask{}, toolProviderRefField},
+		{&kaalmv1beta1.AgentClass{}, allowedToolProvidersField},
 	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexAgentClassRef, func(o client.Object) []string {
-		return []string{o.(*kaalmv1beta1.AgentTask).Spec.AgentClassRef.Name}
-	}); err != nil {
-		return err
-	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexProviderRef, func(o client.Object) []string {
-		return providerRefNames(o.(*kaalmv1beta1.Agent).Spec.Providers)
-	}); err != nil {
-		return err
-	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexProviderRef, func(o client.Object) []string {
-		return providerRefNames(o.(*kaalmv1beta1.AgentTask).Spec.Providers)
-	}); err != nil {
-		return err
-	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentClass{}, IndexAllowedProviders, func(o client.Object) []string {
-		ac := o.(*kaalmv1beta1.AgentClass)
-		names := make([]string, 0, len(ac.Spec.AllowedProviders))
-		for _, p := range ac.Spec.AllowedProviders {
-			names = append(names, p.Name)
+	for _, r := range referrers {
+		if err := idx.IndexField(ctx, r.obj, r.f.key, r.f.extract); err != nil {
+			return err
 		}
-		return names
-	}); err != nil {
-		return err
-	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexToolProviderRef, func(o client.Object) []string {
-		return toolGrantNames(o.(*kaalmv1beta1.Agent).Spec.Tools)
-	}); err != nil {
-		return err
-	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexToolProviderRef, func(o client.Object) []string {
-		return toolGrantNames(o.(*kaalmv1beta1.AgentTask).Spec.Tools)
-	}); err != nil {
-		return err
-	}
-	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentClass{}, IndexAllowedToolProviders, func(o client.Object) []string {
-		ac := o.(*kaalmv1beta1.AgentClass)
-		names := make([]string, 0, len(ac.Spec.AllowedToolProviders))
-		for _, p := range ac.Spec.AllowedToolProviders {
-			names = append(names, p.Name)
-		}
-		return names
-	}); err != nil {
-		return err
 	}
 	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex); err != nil {
 		return err
@@ -132,6 +102,83 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 		return err
 	}
 	return nil
+}
+
+// fieldIndex pairs an index key with its extractor, so a lookup that
+// cannot use the index (a read from the API server) applies the same rule.
+type fieldIndex struct {
+	key     string
+	extract client.IndexerFunc
+}
+
+// The referrer indexes: what pins a ModelProvider, ToolProvider, or
+// AgentClass against deletion.
+var (
+	agentClassRefField        = fieldIndex{IndexAgentClassRef, agentClassRefIndex}
+	providerRefField          = fieldIndex{IndexProviderRef, providerRefIndex}
+	toolProviderRefField      = fieldIndex{IndexToolProviderRef, toolProviderRefIndex}
+	allowedProvidersField     = fieldIndex{IndexAllowedProviders, allowedProvidersIndex}
+	allowedToolProvidersField = fieldIndex{IndexAllowedToolProviders, allowedToolProvidersIndex}
+)
+
+// agentClassRefIndex is the IndexAgentClassRef extractor for Agents and
+// AgentTasks.
+func agentClassRefIndex(o client.Object) []string {
+	switch w := o.(type) {
+	case *kaalmv1beta1.Agent:
+		return []string{w.Spec.AgentClassRef.Name}
+	case *kaalmv1beta1.AgentTask:
+		return []string{w.Spec.AgentClassRef.Name}
+	}
+	return nil
+}
+
+// providerRefIndex is the IndexProviderRef extractor for Agents and
+// AgentTasks.
+func providerRefIndex(o client.Object) []string {
+	switch w := o.(type) {
+	case *kaalmv1beta1.Agent:
+		return providerRefNames(w.Spec.Providers)
+	case *kaalmv1beta1.AgentTask:
+		return providerRefNames(w.Spec.Providers)
+	}
+	return nil
+}
+
+// toolProviderRefIndex is the IndexToolProviderRef extractor for Agents and
+// AgentTasks.
+func toolProviderRefIndex(o client.Object) []string {
+	switch w := o.(type) {
+	case *kaalmv1beta1.Agent:
+		return toolGrantNames(w.Spec.Tools)
+	case *kaalmv1beta1.AgentTask:
+		return toolGrantNames(w.Spec.Tools)
+	}
+	return nil
+}
+
+// allowedProvidersIndex is the IndexAllowedProviders extractor.
+func allowedProvidersIndex(o client.Object) []string {
+	if ac, ok := o.(*kaalmv1beta1.AgentClass); ok {
+		return localRefNames(ac.Spec.AllowedProviders)
+	}
+	return nil
+}
+
+// allowedToolProvidersIndex is the IndexAllowedToolProviders extractor.
+func allowedToolProvidersIndex(o client.Object) []string {
+	if ac, ok := o.(*kaalmv1beta1.AgentClass); ok {
+		return localRefNames(ac.Spec.AllowedToolProviders)
+	}
+	return nil
+}
+
+func localRefNames(refs []kaalmv1beta1.LocalObjectReference) []string {
+	names := make([]string, 0, len(refs))
+	for _, r := range refs {
+		names = append(names, r.Name)
+	}
+	return names
 }
 
 // asyncChannelIndex is the IndexAsyncChannel extractor. A record without

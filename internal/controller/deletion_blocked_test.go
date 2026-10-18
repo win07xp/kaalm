@@ -30,8 +30,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/gateway"
 )
 
 func TestDeletionBlockedMessage(t *testing.T) {
@@ -372,4 +374,191 @@ func TestModelProvider_HeldDeleteRefreshesStaleHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectHeldHealthy(t, got.Status.Conditions, rec)
+}
+
+// indexedReferrerClient is a fake client holding objs, with every referrer
+// index registered from the same field vars SetupIndexers uses.
+func indexedReferrerClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	b := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}, &kaalmv1beta1.ToolProvider{}, &kaalmv1beta1.AgentClass{})
+	for _, f := range []fieldIndex{agentClassRefField, providerRefField, toolProviderRefField} {
+		b = b.WithIndex(&kaalmv1beta1.Agent{}, f.key, f.extract).WithIndex(&kaalmv1beta1.AgentTask{}, f.key, f.extract)
+	}
+	for _, f := range []fieldIndex{allowedProvidersField, allowedToolProvidersField} {
+		b = b.WithIndex(&kaalmv1beta1.AgentClass{}, f.key, f.extract)
+	}
+	return b.Build()
+}
+
+// allowingClass is an AgentClass that allows provider in both allowed lists.
+func allowingClass(name, provider string) *kaalmv1beta1.AgentClass {
+	return &kaalmv1beta1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			AllowedProviders:     []kaalmv1beta1.LocalObjectReference{{Name: provider}},
+			AllowedToolProviders: []kaalmv1beta1.LocalObjectReference{{Name: provider}},
+		},
+	}
+}
+
+// The live read and the index lookup find the same referrers, in the same
+// order, for each of the three referrer sets.
+func TestListReferrers_LiveMatchesIndex(t *testing.T) {
+	objs := []client.Object{
+		&kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "ag-p"},
+			Spec: kaalmv1beta1.AgentSpec{
+				AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "cls"},
+				Providers: []kaalmv1beta1.AgentProviderReference{
+					{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "p"}},
+				},
+			},
+		},
+		&kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "ag-tool"},
+			Spec: kaalmv1beta1.AgentSpec{
+				Tools: []kaalmv1beta1.AgentToolGrant{{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "p"}}},
+			},
+		},
+		&kaalmv1beta1.AgentTask{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "task-p"},
+			Spec: kaalmv1beta1.AgentTaskSpec{
+				AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "cls"},
+				Providers: []kaalmv1beta1.AgentProviderReference{
+					{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "p"}},
+				},
+			},
+		},
+		allowingClass("allow-p", "p"),
+		allowingClass("allow-q", "q"),
+	}
+	c := indexedReferrerClient(t, objs...)
+	cases := []struct {
+		name string
+		set  referrerIndexes
+		ref  string
+		want []string
+	}{
+		{"model provider", modelProviderReferrers, "p", []string{"Agent team-a/ag-p", "AgentTask team-b/task-p", "AgentClass allow-p"}},
+		{"tool provider", toolProviderReferrers, "p", []string{"Agent team-a/ag-tool", "AgentClass allow-p"}},
+		{"agent class", agentClassReferrers, "cls", []string{"Agent team-a/ag-p", "AgentTask team-b/task-p"}},
+		{"no referrers", modelProviderReferrers, "unused", nil},
+	}
+	for _, tc := range cases {
+		for _, live := range []bool{false, true} {
+			got, err := listReferrers(context.Background(), c, tc.ref, tc.set, live)
+			if err != nil {
+				t.Fatalf("%s (live=%v): %v", tc.name, live, err)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("%s (live=%v) = %q, want %q", tc.name, live, got, tc.want)
+			}
+		}
+	}
+}
+
+// An empty cached list is confirmed against the live reader, and a referrer
+// only the live reader holds keeps a ModelProvider delete held.
+func TestDeleteReferrers_ConfirmsLiveWhenCacheEmpty(t *testing.T) {
+	name := "live-held"
+	live := indexedReferrerClient(t, allowingClass("live-class", name))
+	got, err := deleteReferrers(context.Background(), indexedReferrerClient(t), live, name, modelProviderReferrers)
+	if err != nil || strings.Join(got, ",") != "AgentClass live-class" {
+		t.Fatalf("deleteReferrers = %q, %v; want [AgentClass live-class]", got, err)
+	}
+
+	r := deleteReconciler(t, interceptor.Funcs{}, append(spendConfigMaps(name), deletingProvider(name))...)
+	r.APIReader = live
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var mp kaalmv1beta1.ModelProvider
+	if err := r.Get(context.Background(), types.NamespacedName{Name: name}, &mp); err != nil {
+		t.Fatalf("provider gone after a live-only hold: %v", err)
+	}
+	if len(mp.Finalizers) == 0 {
+		t.Error("finalizer removed although the live reader holds a referrer")
+	}
+	c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if c == nil || c.Reason != kaalmv1beta1.ReasonDeletionBlocked || !strings.Contains(c.Message, "AgentClass live-class") {
+		t.Errorf("Ready = %+v, want DeletionBlocked naming AgentClass live-class", c)
+	}
+	for _, cm := range []string{gateway.BudgetConfigMapName(name), gateway.AgentSpendConfigMapName(name)} {
+		if !configMapExists(t, r.Client, cm) {
+			t.Errorf("ConfigMap %s deleted although the delete is held", cm)
+		}
+	}
+}
+
+// A cached list that holds the delete settles it: no live read runs.
+func TestDeleteReferrers_SkipsLiveWhenCacheHolds(t *testing.T) {
+	cached := indexedReferrerClient(t, allowingClass("cached-class", "p"))
+	got, err := deleteReferrers(context.Background(), cached, newErrListClient(t), "p", modelProviderReferrers)
+	if err != nil || strings.Join(got, ",") != "AgentClass cached-class" {
+		t.Fatalf("deleteReferrers = %q, %v; want the cached list and no live read", got, err)
+	}
+}
+
+// A live read that fails keeps the finalizer on all three resources, and a
+// ModelProvider's spend ConfigMaps with it.
+func TestReconcileDelete_LiveListErrorKeepsFinalizer(t *testing.T) {
+	now := metav1.Now()
+	ctx := context.Background()
+	req := func(name string) ctrl.Request {
+		return ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	}
+
+	t.Run("ModelProvider", func(t *testing.T) {
+		name := "live-err-mp"
+		c := indexedReferrerClient(t, append(spendConfigMaps(name), deletingProvider(name))...)
+		r := &ModelProviderReconciler{
+			Client: c, APIReader: newErrListClient(t), Recorder: events.NewFakeRecorder(8),
+			OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
+		}
+		if _, err := r.Reconcile(ctx, req(name)); err == nil {
+			t.Fatal("reconcile returned nil; want the live list error")
+		}
+		var mp kaalmv1beta1.ModelProvider
+		if err := c.Get(ctx, types.NamespacedName{Name: name}, &mp); err != nil || len(mp.Finalizers) == 0 {
+			t.Errorf("finalizer not kept (err=%v)", err)
+		}
+		for _, cm := range []string{gateway.BudgetConfigMapName(name), gateway.AgentSpendConfigMapName(name)} {
+			if !configMapExists(t, c, cm) {
+				t.Errorf("ConfigMap %s deleted after a failed live read", cm)
+			}
+		}
+	})
+
+	t.Run("ToolProvider", func(t *testing.T) {
+		tp := eventsToolProvider("live-err-tp")
+		tp.DeletionTimestamp = &now
+		c := indexedReferrerClient(t, tp)
+		r := &ToolProviderReconciler{
+			Client: c, APIReader: newErrListClient(t), Recorder: events.NewFakeRecorder(8),
+			OperatorNamespace: testOperatorNamespace,
+		}
+		if _, err := r.Reconcile(ctx, req(tp.Name)); err == nil {
+			t.Fatal("reconcile returned nil; want the live list error")
+		}
+		var got kaalmv1beta1.ToolProvider
+		if err := c.Get(ctx, types.NamespacedName{Name: tp.Name}, &got); err != nil || len(got.Finalizers) == 0 {
+			t.Errorf("finalizer not kept (err=%v)", err)
+		}
+	})
+
+	t.Run("AgentClass", func(t *testing.T) {
+		ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{
+			Name: "live-err-ac", DeletionTimestamp: &now, Finalizers: []string{kaalmv1beta1.ClassFinalizer},
+		}}
+		c := indexedReferrerClient(t, ac)
+		r := &AgentClassReconciler{Client: c, APIReader: newErrListClient(t), Recorder: events.NewFakeRecorder(8)}
+		if _, err := r.Reconcile(ctx, req(ac.Name)); err == nil {
+			t.Fatal("reconcile returned nil; want the live list error")
+		}
+		var got kaalmv1beta1.AgentClass
+		if err := c.Get(ctx, types.NamespacedName{Name: ac.Name}, &got); err != nil || len(got.Finalizers) == 0 {
+			t.Errorf("finalizer not kept (err=%v)", err)
+		}
+	})
 }

@@ -56,7 +56,11 @@ const defaultHealthInterval = 60 * time.Second
 // docs/src/controller/reconcilers/modelprovider.md.
 type ModelProviderReconciler struct {
 	client.Client
-	Recorder events.EventRecorder
+	// APIReader reads from the API server, bypassing the cache; it confirms
+	// that no referrer exists before a delete is released. nil reads
+	// through Client, which suits a client with no cache.
+	APIReader client.Reader
+	Recorder  events.EventRecorder
 	// OperatorNamespace is where credential Secrets live (kaalm-system).
 	OperatorNamespace string
 	// Health probes provider liveness. Injected so tests need no real provider.
@@ -678,8 +682,7 @@ func formatUSD(r *big.Rat) string {
 // AgentTasks naming it in spec.providers, and AgentClasses listing it in
 // allowedProviders.
 func (r *ModelProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
-	return listReferrers(ctx, r.Client, name,
-		referrerIndexes{agent: IndexProviderRef, task: IndexProviderRef, class: IndexAllowedProviders})
+	return deleteReferrers(ctx, r.Client, r.APIReader, name, modelProviderReferrers)
 }
 
 // healthCheckEnabled reports whether the periodic upstream probe should run. A

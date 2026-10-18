@@ -49,7 +49,11 @@ import (
 // docs/src/controller/reconcilers/toolprovider.md.
 type ToolProviderReconciler struct {
 	client.Client
-	Recorder events.EventRecorder
+	// APIReader reads from the API server, bypassing the cache; it confirms
+	// that no referrer exists before a delete is released. nil reads
+	// through Client, which suits a client with no cache.
+	APIReader client.Reader
+	Recorder  events.EventRecorder
 	// OperatorNamespace is where credential Secrets live (kaalm-system).
 	OperatorNamespace string
 	// Health probes tool server liveness. Injected so tests need no real server.
@@ -233,8 +237,7 @@ func (r *ToolProviderReconciler) reconcileDelete(
 // AgentTasks granting its tools in spec.tools, and AgentClasses listing it in
 // allowedToolProviders.
 func (r *ToolProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
-	return listReferrers(ctx, r.Client, name,
-		referrerIndexes{agent: IndexToolProviderRef, task: IndexToolProviderRef, class: IndexAllowedToolProviders})
+	return deleteReferrers(ctx, r.Client, r.APIReader, name, toolProviderReferrers)
 }
 
 // credential resolves the provider's credential from the operator namespace
