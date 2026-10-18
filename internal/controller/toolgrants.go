@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,15 +81,16 @@ func toolGrantViolations(
 			for _, t := range tp.Spec.Tools {
 				catalog[t.ID] = true
 			}
-			var missing []string
+			var missing entryList
 			for _, t := range g.Tools {
 				if !catalog[t] {
-					missing = append(missing, t)
+					missing.add(t, quotedEntry(t))
 				}
 			}
-			if len(missing) > 0 {
-				add(kaalmv1beta1.ReasonToolNotInCatalog,
-					fmt.Sprintf("granted tools %v are not in the declared catalog of tool provider %q", missing, name))
+			if len(missing.listed) > 0 {
+				add(kaalmv1beta1.ReasonToolNotInCatalog, cutConditionMessage(fmt.Sprintf(
+					"granted tools not in the declared catalog of tool provider %s: %s", quotedEntry(name),
+					strings.Join(missing.messages("1 more tool, not listed", "%d more tools, not listed"), ", "))))
 			}
 		}
 	}
