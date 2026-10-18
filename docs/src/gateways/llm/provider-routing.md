@@ -45,7 +45,7 @@ The gateway supports multiple upstream provider types through adapters (the `pro
 - **Path patterns**: the proxy maps each inbound path to an adapter, which is how the gateway detects the request format. See [Request format detection](request-handling.md#request-format-detection).
 - **Credential header**: the adapter injects the provider's auth header.
 - **Usage extraction**: the adapter knows where each provider puts token counts, for buffered and streamed responses: `usage.input_tokens` and `usage.output_tokens` for Anthropic, `usage.prompt_tokens` and `usage.completion_tokens` for OpenAI. See [Streaming responses](request-handling.md#streaming-responses).
-- **Request fixups**: the OpenAI adapter injects `stream_options: {"include_usage": true}` into streaming requests when absent, so usage data is observable. See [Streaming responses](request-handling.md#streaming-responses).
+- **Request fixups**: the OpenAI adapter sets `stream_options.include_usage` to true on every streaming request, so usage data is observable. See [Streaming responses](request-handling.md#streaming-responses).
 
 The [ModelProviderReconciler](../../controller/reconcilers/modelprovider.md) runs provider health probes, not the adapters. Format translation for a fallback edge that crosses formats also lives outside the adapters ([Crossing formats](fallback.md#crossing-formats)), so an adapter never converts one provider's request format into another's.
 
