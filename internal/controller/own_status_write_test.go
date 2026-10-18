@@ -17,13 +17,17 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -162,5 +166,212 @@ func TestOwnStatusWrites_ToolProviderHeldDelete(t *testing.T) {
 	}
 	if r.ownWrites.skipOwn().Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
 		t.Error("the held delete's own status write was admitted")
+	}
+}
+
+// A pass that reads the provider at any resourceVersion other than the
+// recorded write drops the record, so that write's event is admitted. A pass
+// that reads it at the recorded write keeps the record.
+func TestOwnStatusWrites_StaleReadReleasesTheRecord(t *testing.T) {
+	at := func(rv string) *kaalmv1beta1.ModelProvider {
+		return &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", ResourceVersion: rv}}
+	}
+	ev := event.UpdateEvent{ObjectOld: at("4"), ObjectNew: at("5")}
+	var w ownWrites
+	p := w.skipOwn()
+	w.readStale(at("4")) // the zero value is ready to use
+
+	w.record(at("5"))
+	w.readStale(at("4"))
+	if !p.Update(ev) {
+		t.Error("a read from before the own write did not release its event")
+	}
+	w.record(at("5"))
+	w.readStale(at("5"))
+	if p.Update(ev) {
+		t.Error("a read at the own write released its event")
+	}
+	w.record(at("5"))
+	w.readStale(at("6"))
+	if !p.Update(ev) {
+		t.Error("a read newer than the own write did not release its event")
+	}
+	w.readStale(at("4")) // no record is left: readStale must not create one
+	if len(w.rv) != 0 {
+		t.Errorf("a read with no record created one: %v", w.rv)
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: at("3"), ObjectNew: at("4")}) {
+		t.Error("a read with no record dropped the event at the read resourceVersion")
+	}
+}
+
+// staleReads is a fake client whose Get returns a set copy of one object
+// while one is set: it plays the informer cache trailing a write.
+type staleReads struct {
+	key   client.ObjectKey
+	stale client.Object
+}
+
+func (s *staleReads) funcs() interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if s.stale != nil && key == s.key && reflect.TypeOf(obj) == reflect.TypeOf(s.stale) {
+				reflect.ValueOf(obj).Elem().Set(reflect.ValueOf(s.stale.DeepCopyObject()).Elem())
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+// expectStaleReadAdmitsOwnWrite runs a provider through a credential change
+// that reaches the reconciler while its cache still holds the provider from
+// before its last status write. The pass on that copy finds nothing to
+// write; the write's event must then run one more pass, which stores the
+// change.
+func expectStaleReadAdmitsOwnWrite(
+	t *testing.T, c client.Client, s *staleReads, p predicate.Predicate, obj client.Object,
+	reconcile func(), ready func(client.Object) (metav1.ConditionStatus, string),
+) {
+	t.Helper()
+	get := func() client.Object {
+		t.Helper()
+		into := obj.DeepCopyObject().(client.Object)
+		if err := c.Get(ctxT(), client.ObjectKeyFromObject(obj), into); err != nil {
+			t.Fatal(err)
+		}
+		return into
+	}
+	expectReady := func(step string, want metav1.ConditionStatus, reason string) {
+		t.Helper()
+		if st, r := ready(get()); st != want || (reason != "" && r != reason) {
+			t.Fatalf("%s: Ready=%s %s, want %s %s", step, st, r, want, reason)
+		}
+	}
+	secret := &corev1.Secret{}
+	secretKey := client.ObjectKey{Namespace: testOperatorNamespace, Name: obj.GetName() + "-key"}
+	setLabel := func(on bool) {
+		t.Helper()
+		if err := c.Get(ctxT(), secretKey, secret); err != nil {
+			t.Fatal(err)
+		}
+		if on {
+			if secret.Labels == nil {
+				secret.Labels = map[string]string{}
+			}
+			secret.Labels[kaalmv1beta1.LabelProviderCredential] = kaalmv1beta1.AnnotationTrue
+		} else {
+			delete(secret.Labels, kaalmv1beta1.LabelProviderCredential)
+		}
+		if err := c.Update(ctxT(), secret); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	setLabel(false)
+	reconcile()
+	expectReady("unlabeled", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	before := get()
+
+	setLabel(true)
+	reconcile()
+	expectReady("labeled", metav1.ConditionTrue, "")
+	written := get()
+	if written.GetResourceVersion() == before.GetResourceVersion() {
+		t.Fatal("the labeled pass wrote no status; the test needs one that does")
+	}
+
+	setLabel(false)
+	s.stale = before
+	reconcile()
+	s.stale = nil
+	if got := get().GetResourceVersion(); got != written.GetResourceVersion() {
+		t.Fatalf("the stale pass wrote the status (resourceVersion %s, want %s); the test needs one that does not",
+			got, written.GetResourceVersion())
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: written}) {
+		t.Fatal("a pass on a copy from before the own write left that write's event dropped")
+	}
+	reconcile()
+	expectReady("after the admitted event", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+}
+
+func readyStatus(conds []metav1.Condition) (metav1.ConditionStatus, string) {
+	c := apimeta.FindStatusCondition(conds, kaalmv1beta1.ConditionReady)
+	if c == nil {
+		return "", ""
+	}
+	return c.Status, c.Reason
+}
+
+func TestOwnStatusWrites_StaleReadAfterOwnWrite_ModelProvider(t *testing.T) {
+	mp := eventsProvider("own-write-stale-mp", nil)
+	s := &staleReads{key: client.ObjectKeyFromObject(mp)}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(mp, providerKey(mp.Name)).
+		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}).
+		WithInterceptorFuncs(s.funcs()).Build()
+	r := &ModelProviderReconciler{
+		Client: c, Recorder: events.NewFakeRecorder(64), OperatorNamespace: testOperatorNamespace,
+		Health: newFakeHealth(),
+	}
+	expectStaleReadAdmitsOwnWrite(t, c, s, r.ownWrites.skipOwn(), mp,
+		func() { mustReconcile(t, r, mp.Name) },
+		func(o client.Object) (metav1.ConditionStatus, string) {
+			return readyStatus(o.(*kaalmv1beta1.ModelProvider).Status.Conditions)
+		})
+}
+
+func TestOwnStatusWrites_StaleReadAfterOwnWrite_ToolProvider(t *testing.T) {
+	tp := eventsToolProvider("own-write-stale-tp")
+	s := &staleReads{key: client.ObjectKeyFromObject(tp)}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp, providerKey(tp.Name)).
+		WithStatusSubresource(&kaalmv1beta1.ToolProvider{}).
+		WithInterceptorFuncs(s.funcs()).Build()
+	health := newFakeToolHealth()
+	health.set(tp.Name, ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true}})
+	r := &ToolProviderReconciler{
+		Client: c, Recorder: events.NewFakeRecorder(64), OperatorNamespace: testOperatorNamespace,
+		Health: health,
+	}
+	expectStaleReadAdmitsOwnWrite(t, c, s, r.ownWrites.skipOwn(), tp,
+		func() { mustReconcile(t, r, tp.Name) },
+		func(o client.Object) (metav1.ConditionStatus, string) {
+			return readyStatus(o.(*kaalmv1beta1.ToolProvider).Status.Conditions)
+		})
+}
+
+// A pass that reads the provider at its own last write and finds nothing to
+// write keeps the record: the write's event is still dropped.
+func TestOwnStatusWrites_FreshReadKeepsDropping(t *testing.T) {
+	mp := eventsProvider("own-write-fresh-mp", nil)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(mp, providerKey(mp.Name)).
+		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}).Build()
+	r := &ModelProviderReconciler{
+		Client: c, Recorder: events.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace,
+		Health: newFakeHealth(),
+	}
+	get := func() *kaalmv1beta1.ModelProvider {
+		t.Helper()
+		var got kaalmv1beta1.ModelProvider
+		if err := c.Get(ctxT(), client.ObjectKeyFromObject(mp), &got); err != nil {
+			t.Fatal(err)
+		}
+		return &got
+	}
+	before := get()
+	mustReconcile(t, r, mp.Name)
+	after := get()
+	if after.ResourceVersion == before.ResourceVersion {
+		t.Fatal("the pass wrote no status; the test needs one that does")
+	}
+	mustReconcile(t, r, mp.Name)
+	if get().ResourceVersion != after.ResourceVersion {
+		t.Fatal("the second pass wrote the status; the test needs one that does not")
+	}
+	if r.ownWrites.skipOwn().Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
+		t.Error("a pass at the own write released that write's event")
 	}
 }

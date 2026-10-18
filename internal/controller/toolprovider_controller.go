@@ -100,6 +100,9 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, err
 	}
+	// A read from before the last own status write lets that write's event
+	// through (see ownWrites).
+	r.ownWrites.readStale(&tp)
 	if !tp.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &tp)
 	}

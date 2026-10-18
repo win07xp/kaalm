@@ -25,12 +25,13 @@ import (
 )
 
 // ownWrites lets a provider reconciler's For() watch drop the update event
-// its own status write raises. That event carries nothing the next pass
-// would read differently: the pass that wrote the status already acted on
-// the spec, metadata, and status it wrote from, and it returned its own
-// requeue for the next probe or budget fold. Without the filter, every
-// status change runs a second full pass (the gateway Pod list, the spend
-// folds, the credential read, validation).
+// its own status write raises. For a pass that reads the provider at or
+// after that write, the event carries nothing it would read differently:
+// the pass that wrote the status already acted on the spec, metadata, and
+// status it wrote from, and it returned its own requeue for the next probe
+// or budget fold. Without the filter, every status change runs a second full
+// pass (the gateway Pod list, the spend folds, the credential read,
+// validation).
 //
 // Only that one event is dropped. A spec, label, annotation, finalizer, or
 // deletion change, a status write by any other client, a resync, and every
@@ -38,6 +39,14 @@ import (
 // resourceVersion the write returned and used once. When the event arrives
 // before the write returns, the pass runs as it would without the filter.
 // The zero value is ready to use.
+//
+// A pass that reads the provider at any resourceVersion other than the
+// recorded write drops the record (readStale), so the write's event runs one
+// more pass. A read from before the write is the case that matters: the
+// informer cache can trail the write, a pass on that stale copy can compute
+// the status the copy already holds and skip its write, and dropping the
+// write's event would then leave the status from before the change until the
+// next requeue. A read newer than the write costs at most one extra pass.
 type ownWrites struct {
 	mu sync.Mutex
 	rv map[client.ObjectKey]string
@@ -52,6 +61,19 @@ func (w *ownWrites) record(obj client.Object) {
 		w.rv = map[client.ObjectKey]string{}
 	}
 	w.rv[client.ObjectKeyFromObject(obj)] = obj.GetResourceVersion()
+}
+
+// readStale is called with the provider a pass just read. When the read is at
+// any resourceVersion other than the recorded write, it drops the record, so
+// that write's event runs one more pass. resourceVersions are opaque, so they
+// are compared for equality only.
+func (w *ownWrites) readStale(obj client.Object) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	key := client.ObjectKeyFromObject(obj)
+	if rv, ok := w.rv[key]; ok && rv != obj.GetResourceVersion() {
+		delete(w.rv, key)
+	}
 }
 
 // forget drops the record for a provider that is gone.

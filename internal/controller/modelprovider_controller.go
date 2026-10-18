@@ -110,6 +110,9 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{}, err
 	}
+	// A read from before the last own status write lets that write's event
+	// through (see ownWrites).
+	r.ownWrites.readStale(&mp)
 
 	// Events held for a status write that never happened (an error before
 	// finish) are dropped: the next pass derives them again.
