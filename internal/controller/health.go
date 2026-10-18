@@ -25,6 +25,7 @@ import (
 	"time"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // ProviderProbeResult classifies a provider liveness probe. Exactly one of
@@ -41,6 +42,15 @@ type ProviderProbeResult struct {
 	// Err is a network error or a 5xx: transient, does not flip Ready.
 	Err error
 }
+
+// maxProbeErrorBytes bounds the probe error a ModelProvider or ToolProvider
+// copies into its conditions and the matching Event. The error carries text
+// the upstream writes, such as a token endpoint's response body or a
+// JSON-RPC error message. A condition message over the schema's
+// 32,768-character limit fails the whole status write and leaves the
+// conditions stale. The Event carries the same text, and the Event note
+// limit is this bound.
+const maxProbeErrorBytes = eventrec.MaxNoteBytes
 
 // ProviderHealthChecker probes an upstream LLM provider for liveness. It is an
 // interface so reconcilers can be tested with a fake and never reach a real API.

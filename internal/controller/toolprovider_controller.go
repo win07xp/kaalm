@@ -69,14 +69,6 @@ type ToolProviderReconciler struct {
 	ownWrites ownWrites
 }
 
-// maxProbeErrorBytes bounds the probe error copied into the Healthy message
-// and the ProviderUnhealthy Event. The error carries text the tool server
-// writes, such as a JSON-RPC error message read up to the MCP response cap.
-// A condition message over the schema's 32,768-character limit fails the
-// whole status write and leaves Healthy stale. The Event carries the same
-// text, and the Event note limit is this bound.
-const maxProbeErrorBytes = eventrec.MaxNoteBytes
-
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/finalizers,verbs=update

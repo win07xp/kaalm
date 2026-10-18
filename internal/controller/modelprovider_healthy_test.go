@@ -207,3 +207,67 @@ func TestModelProvider_NotProbedPassIsStable(t *testing.T) {
 			writes, settled.ResourceVersion, after.ResourceVersion)
 	}
 }
+
+// vertexTokenError is a google-vertex token endpoint failure whose response
+// body runs far past the 32,768-character limit on a condition message.
+func vertexTokenError() error {
+	return errString("minting the Vertex access token: oauth2: cannot fetch token: 500 Internal Server Error\nResponse: " +
+		strings.Repeat("x", 40<<10))
+}
+
+// expectBoundedProbeMessage checks that msg starts with prefix, fits the
+// probe error bound, and carries the truncation marker.
+func expectBoundedProbeMessage(t *testing.T, what, msg, prefix string) {
+	t.Helper()
+	if len(msg) > maxProbeErrorBytes {
+		t.Fatalf("%s message is %d bytes, want at most %d", what, len(msg), maxProbeErrorBytes)
+	}
+	if !strings.HasPrefix(msg, prefix) || !strings.HasSuffix(msg, "... (truncated)") {
+		t.Fatalf("%s message = %q, want the start of the probe error and the truncation marker", what, msg)
+	}
+}
+
+// A probe error longer than a condition message may be is cut, so the
+// status write succeeds and Healthy turns False. The API server enforces the
+// condition schema here, which the fake client does not.
+func TestModelProvider_LongProbeErrorTurnsHealthyFalse(t *testing.T) {
+	const name = "mp-longerr"
+	mkSecret(t, name+"-key")
+	fakeHealth.set(name, ProviderProbeResult{Err: vertexTokenError()})
+	mkProvider(t, name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true}
+	})
+	get := providerConditions(name)
+	eventually(t, func() error {
+		c := condition(get(), kaalmv1beta1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonProviderUnhealthy {
+			return errString("Healthy is not yet False with ProviderUnhealthy")
+		}
+		return nil
+	})
+	expectBoundedProbeMessage(t, "Healthy", condition(get(), kaalmv1beta1.ConditionHealthy).Message,
+		"minting the Vertex access token: ")
+}
+
+// A credential refusal whose detail is longer than a condition message may
+// be is cut the same way, so Ready and Healthy both turn False.
+func TestModelProvider_LongAuthFailedErrorTurnsReadyFalse(t *testing.T) {
+	const name = "mp-longauth"
+	mkSecret(t, name+"-key")
+	fakeHealth.set(name, ProviderProbeResult{AuthFailed: true, Err: vertexTokenError()})
+	mkProvider(t, name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true}
+	})
+	get := providerConditions(name)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
+	conds := get()
+	ready := condition(conds, kaalmv1beta1.ConditionReady)
+	healthy := condition(conds, kaalmv1beta1.ConditionHealthy)
+	if healthy == nil || healthy.Status != metav1.ConditionFalse || healthy.Reason != kaalmv1beta1.ReasonCredentialsInvalid {
+		t.Fatalf("Healthy = %+v, want False with CredentialsInvalid", healthy)
+	}
+	expectBoundedProbeMessage(t, "Ready", ready.Message, "provider rejected the credential: minting the Vertex access token: ")
+	if healthy.Message != ready.Message {
+		t.Fatalf("Healthy message differs from Ready message")
+	}
+}

@@ -417,3 +417,61 @@ func TestModelProvider_NoCrossingNoMaxOutputTokensCondition(t *testing.T) {
 		t.Fatalf("a provider with no crossing has MaxOutputTokensUnset = %+v", c)
 	}
 }
+
+// The Healthy message and the ProviderUnhealthy Event carry the same cut
+// probe error, without relying on the bounded recorder to cut the Event.
+func TestModelProvider_ProbeErrorMessageIsBounded(t *testing.T) {
+	const name = "ev-mp-long"
+	mp := eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true}
+	})
+	health := newFakeHealth()
+	health.set(name, ProviderProbeResult{Err: vertexTokenError()})
+	r, rec := eventsProviderReconciler(t, &statusConflicts{}, health, mp, providerKey(name))
+	mustReconcile(t, r, name)
+
+	var got kaalmv1beta1.ModelProvider
+	if err := r.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	h := condition(got.Status.Conditions, kaalmv1beta1.ConditionHealthy)
+	if h == nil || h.Status != metav1.ConditionFalse || h.Reason != kaalmv1beta1.ReasonProviderUnhealthy {
+		t.Fatalf("Healthy = %+v, want False with ProviderUnhealthy", h)
+	}
+	expectBoundedProbeMessage(t, "Healthy", h.Message, "minting the Vertex access token: ")
+	evs := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy)
+	if len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonProviderUnhealthy+" "+h.Message {
+		t.Fatalf("ProviderUnhealthy events = %d, want one carrying the Healthy message", len(evs))
+	}
+}
+
+// A credential refusal with a long detail puts the same cut text in Ready,
+// Healthy, and the CredentialsInvalid Event.
+func TestModelProvider_AuthFailedMessageIsBounded(t *testing.T) {
+	const name = "ev-mp-longauth"
+	mp := eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true}
+	})
+	health := newFakeHealth()
+	health.set(name, ProviderProbeResult{AuthFailed: true, Err: vertexTokenError()})
+	r, rec := eventsProviderReconciler(t, &statusConflicts{}, health, mp, providerKey(name))
+	mustReconcile(t, r, name)
+
+	var got kaalmv1beta1.ModelProvider
+	if err := r.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	ready := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	healthy := condition(got.Status.Conditions, kaalmv1beta1.ConditionHealthy)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != kaalmv1beta1.ReasonCredentialsInvalid {
+		t.Fatalf("Ready = %+v, want False with CredentialsInvalid", ready)
+	}
+	expectBoundedProbeMessage(t, "Ready", ready.Message, "provider rejected the credential: ")
+	if healthy == nil || healthy.Message != ready.Message {
+		t.Fatalf("Healthy = %+v, want the Ready message", healthy)
+	}
+	evs := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonCredentialsInvalid)
+	if len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonCredentialsInvalid+" "+ready.Message {
+		t.Fatalf("CredentialsInvalid events = %v, want one carrying the Ready message", len(evs))
+	}
+}
