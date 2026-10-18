@@ -54,7 +54,7 @@ func toolGrantViolations(
 		}
 		if !allowed {
 			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("tool provider %q is not in AgentClass %q allowedToolProviders", name, class.Name))
+				fmt.Sprintf("tool provider %s is not in AgentClass %q allowedToolProviders", quotedEntry(name), class.Name))
 			continue
 		}
 		// Rule 35: the reference must resolve.
@@ -62,14 +62,14 @@ func toolGrantViolations(
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, &tp); err != nil {
 			if apierrors.IsNotFound(err) {
 				add(kaalmv1beta1.ReasonClassConstraintViolation,
-					fmt.Sprintf("tool provider %q does not exist", name))
+					fmt.Sprintf("tool provider %s does not exist", quotedEntry(name)))
 			}
 			continue
 		}
 		// Rule 36: the provider must admit the workload's namespace.
 		if !namespaceAllowed(namespace, tp.Spec.AllowedNamespaces) {
 			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("tool provider %q does not allow namespace %q", name, namespace))
+				fmt.Sprintf("tool provider %s does not allow namespace %q", quotedEntry(name), namespace))
 			continue
 		}
 		// Rule 38: when the provider declares a catalog, every granted tool

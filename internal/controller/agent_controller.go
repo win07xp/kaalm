@@ -757,20 +757,20 @@ func (r *AgentReconciler) degradedReasons(
 		}
 		if !allowed {
 			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("provider %q is not in AgentClass %q allowedProviders", name, class.Name))
+				fmt.Sprintf("provider %s is not in AgentClass %q allowedProviders", quotedEntry(name), class.Name))
 			continue
 		}
 		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: name}, &mp); err != nil {
 			if apierrors.IsNotFound(err) {
 				add(kaalmv1beta1.ReasonClassConstraintViolation,
-					fmt.Sprintf("provider %q does not exist", name))
+					fmt.Sprintf("provider %s does not exist", quotedEntry(name)))
 			}
 			continue
 		}
 		if !namespaceAllowed(agent.Namespace, mp.Spec.AllowedNamespaces) {
 			add(kaalmv1beta1.ReasonClassConstraintViolation,
-				fmt.Sprintf("provider %q does not allow namespace %q", name, agent.Namespace))
+				fmt.Sprintf("provider %s does not allow namespace %q", quotedEntry(name), agent.Namespace))
 		}
 	}
 	// Rules 35 to 38: tool grant resolution, class allowlist, namespace
@@ -807,12 +807,15 @@ func (r *AgentReconciler) enterOrStayDegraded(
 	ctx context.Context, agent *kaalmv1beta1.Agent, reasons []metav1.Condition,
 ) error {
 	first := reasons[0]
+	// Each check bounds the spec values it quotes; the cut keeps the Ready
+	// write within the condition schema whichever check reported first.
+	msg := cutConditionMessage(first.Message)
 	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
 		agent.Status.PreDegradedPhase = agent.Status.Phase
 		r.setPhase(agent, kaalmv1beta1.AgentDegraded, first.Reason)
-		r.events.add(agent, corev1.EventTypeWarning, first.Reason, kaalmv1beta1.ActionValidate, nil, first.Message)
+		r.events.add(agent, corev1.EventTypeWarning, first.Reason, kaalmv1beta1.ActionValidate, nil, msg)
 	}
-	r.setReady(agent, false, first.Reason, first.Message)
+	r.setReady(agent, false, first.Reason, msg)
 	return r.writeStatus(ctx, agent)
 }
 
