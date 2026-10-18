@@ -372,7 +372,7 @@ func TestAgentClass_LongPatternListsTurnReadyFalse(t *testing.T) {
 		}
 		c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
 		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern ||
-			c.ObservedGeneration != got.Generation {
+			got.Status.ObservedGeneration != got.Generation {
 			return fmt.Errorf("Ready = %+v, want False/%s at generation %d",
 				c, kaalmv1beta1.ReasonInvalidNamespacePattern, got.Generation)
 		}

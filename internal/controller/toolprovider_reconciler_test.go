@@ -901,7 +901,7 @@ func TestToolProvider_LongNamespacePatternTurnsReadyFalse(t *testing.T) {
 		}
 		c := condition(tp.Status.Conditions, kaalmv1beta1.ConditionReady)
 		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern ||
-			c.ObservedGeneration != tp.Generation {
+			tp.Status.ObservedGeneration != tp.Generation {
 			return fmt.Errorf("Ready = %+v, want False/%s at generation %d",
 				c, kaalmv1beta1.ReasonInvalidNamespacePattern, tp.Generation)
 		}
