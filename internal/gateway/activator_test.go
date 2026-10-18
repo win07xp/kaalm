@@ -282,6 +282,30 @@ func TestWakeTimeout(t *testing.T) {
 	}
 }
 
+func TestWakeTimeout_GatewayCap(t *testing.T) {
+	capped := &Server{Config: Config{MaxWakeTimeout: 15 * time.Minute}}
+	spec := func(d time.Duration) *kaalmv1beta1.Agent {
+		a := &kaalmv1beta1.Agent{}
+		a.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: d}
+		return a
+	}
+	if got := capped.wakeTimeout(spec(24 * time.Hour)); got != 15*time.Minute {
+		t.Errorf("spec 24h under a 15m cap = %v, want 15m", got)
+	}
+	effective := spec(time.Minute)
+	effective.Status.EffectiveWakeTimeout = &metav1.Duration{Duration: time.Hour}
+	if got := capped.wakeTimeout(effective); got != 15*time.Minute {
+		t.Errorf("effective 1h under a 15m cap = %v, want 15m", got)
+	}
+	if got := capped.wakeTimeout(spec(5 * time.Minute)); got != 5*time.Minute {
+		t.Errorf("spec 5m under a 15m cap = %v, want 5m", got)
+	}
+	// A Server built without the field gets the default cap.
+	if got := (&Server{}).wakeTimeout(spec(24 * time.Hour)); got != 15*time.Minute {
+		t.Errorf("spec 24h under the default cap = %v, want 15m", got)
+	}
+}
+
 func TestAgentServiceHostPort(t *testing.T) {
 	// No overrides: derived Service DNS and default port.
 	s := &Server{}

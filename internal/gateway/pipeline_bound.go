@@ -50,11 +50,13 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 }
 
 // backgroundPipelineBound is the deadline for one background pipeline run,
-// derived from the budgets the run contains, so no Agent's wakeTimeout is cut
-// short by a fixed ceiling. It sums:
+// derived from the budgets the run contains. The wake leg uses the same
+// capped wakeTimeout as the wake wait, so the bound never cuts the wait
+// short, and the gateway cap is what keeps one run from holding a goroutine
+// for as long as a tenant sets. It sums:
 //
-//   - the activator call and the Agent's effective wakeTimeout, plus one
-//     readiness connect and poll interval, which the last poll can overrun;
+//   - the activator call and the capped wakeTimeout, plus one readiness
+//     connect and poll interval, which the last poll can overrun;
 //   - the agent-delivery schedule, each attempt at gateway.agentReadTimeout;
 //   - responseRequests runs of the callback schedule, each attempt at
 //     gateway.callbackReadTimeout: the callback and the polling-record patch

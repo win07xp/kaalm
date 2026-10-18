@@ -291,6 +291,11 @@ func (s *Server) wakeAndDeliver(
 					"agent did not become ready: the wait ended after %s, before the %s wakeTimeout elapsed",
 					waited.Round(time.Second), s.wakeTimeout(agent))
 			}
+			if s.wakeTimeout(agent) < s.agentWakeTimeout(agent) {
+				return nil, errWakeTimeout, fmt.Errorf(
+					"agent did not become ready within %s, the gateway's maxWakeTimeout, which caps the Agent's %s wakeTimeout",
+					s.wakeTimeout(agent), s.agentWakeTimeout(agent))
+			}
 			return nil, errWakeTimeout, fmt.Errorf(
 				"agent did not become ready within wakeTimeout (%s)", s.wakeTimeout(agent))
 		}
@@ -329,9 +334,28 @@ func (s *Server) recordChannelFailure(healthPath, reason, message string) {
 	s.ChannelHealth.RecordFailure(healthPath, reason, message)
 }
 
-// wakeTimeout prefers the controller's effective value, which carries the
-// class default and cap (rule 9), then the Agent's own value, then 120s.
+// defaultMaxWakeTimeout is the gateway cap on any wake wait when
+// Config.MaxWakeTimeout is unset.
+const defaultMaxWakeTimeout = 15 * time.Minute
+
+// maxWakeTimeout is the gateway cap on any wake wait.
+func (s *Server) maxWakeTimeout() time.Duration {
+	if s.Config.MaxWakeTimeout > 0 {
+		return s.Config.MaxWakeTimeout
+	}
+	return defaultMaxWakeTimeout
+}
+
+// wakeTimeout is the value every wake wait and the background pipeline bound
+// use: the Agent's own wakeTimeout, capped by the gateway's maxWakeTimeout so
+// a tenant's value cannot set how long one message holds the gateway.
 func (s *Server) wakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
+	return min(s.agentWakeTimeout(agent), s.maxWakeTimeout())
+}
+
+// agentWakeTimeout prefers the controller's effective value, which carries
+// the class default and cap (rule 9), then the Agent's own value, then 120s.
+func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 	if e := agent.Status.EffectiveWakeTimeout; e != nil && e.Duration > 0 {
 		return e.Duration
 	}

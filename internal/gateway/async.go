@@ -239,8 +239,8 @@ const (
 
 // runAsyncPipeline executes wake, delivery, and response dispatch after the
 // 202. No sync deadline applies: the run is bounded by
-// backgroundPipelineBound, which covers the Agent's full wakeTimeout and
-// every retry schedule the run contains.
+// backgroundPipelineBound, which covers the capped wakeTimeout and every
+// retry schedule the run contains.
 func (s *Server) runAsyncPipeline(
 	traceCtx context.Context, requestID string,
 	channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent, env MessageEnvelope,

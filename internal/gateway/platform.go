@@ -215,7 +215,8 @@ func platformErrorMessage(errType string, err error) string {
 	case errControllerDown:
 		return "controller activator endpoint unreachable; wake could not be triggered"
 	case errWakeTimeout:
-		// Built by wakeAndDeliver from the effective wakeTimeout only.
+		// Built by wakeAndDeliver from the wakeTimeout and the gateway cap
+		// only.
 		return err.Error()
 	case errResponseTooLarge:
 		return "the agent's response exceeded the gateway's size limit"

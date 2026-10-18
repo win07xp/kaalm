@@ -153,6 +153,24 @@ func TestGateway_ProviderFirstByteTimeoutReachesUpstreamTimeout(t *testing.T) {
 
 // gateway.mcpMaxBodyBytes and gateway.mcpUpstreamTimeout are the tool
 // broker's own body cap and whole-call timeout, separate from the LLM proxy's.
+func TestGateway_MaxWakeTimeoutReachesFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"default", nil, "--max-wake-timeout=15m"},
+		{"custom", []string{"--set", "gateway.maxWakeTimeout=30m"}, "--max-wake-timeout=30m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := renderGatewayArgs(t, tc.args...)
+			if !slices.Contains(args, tc.want) {
+				t.Errorf("gateway args %v do not contain %s", args, tc.want)
+			}
+		})
+	}
+}
+
 func TestGateway_MCPLimitsReachGatewayFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string

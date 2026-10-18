@@ -104,6 +104,9 @@ type Config struct {
 	AgentConnectTimeout time.Duration
 	// SyncDeliveryDeadline bounds sync-mode wall-clock (default 30s).
 	SyncDeliveryDeadline time.Duration
+	// MaxWakeTimeout caps the wakeTimeout the gateway applies to any wake,
+	// whatever the Agent or its class sets (zero means the 15m default).
+	MaxWakeTimeout time.Duration
 	// DeliveryBackoff is the agent-delivery retry schedule (1s, 5s, 25s).
 	DeliveryBackoff []time.Duration
 	// CallbackBackoff is the callback retry schedule (1s, 5s, 25s).

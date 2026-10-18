@@ -214,6 +214,19 @@ func TestLimitFlagsAcceptZeroAndDefaults(t *testing.T) {
 // The request-path kinds are served from the cache without a deep copy;
 // the options that keep Secrets out of the cache and scope ConfigMaps
 // stay as they were.
+func TestValidateMaxWakeTimeout(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		if err := validateMaxWakeTimeout(d); err == nil {
+			t.Errorf("validateMaxWakeTimeout(%v) = nil, want an error", d)
+		}
+	}
+	for _, d := range []time.Duration{time.Second, 15 * time.Minute} {
+		if err := validateMaxWakeTimeout(d); err != nil {
+			t.Errorf("validateMaxWakeTimeout(%v) = %v, want nil", d, err)
+		}
+	}
+}
+
 func TestClusterOptionsShareRequestPathObjects(t *testing.T) {
 	scheme := runtime.NewScheme()
 	var o cluster.Options

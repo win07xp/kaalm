@@ -181,8 +181,9 @@ func TestRunPlatformPipeline_BoundCoversLargeWakeTimeout(t *testing.T) {
 	channel := h.seedChannel("async")
 	agent := h.store.agents["team-a/sup"]
 	agent.Status.Phase = kaalmv1beta1.AgentHibernated
-	// Far above the old fixed 10-minute ceiling. The activator fails at once,
-	// so nothing waits this long.
+	// The gateway cap is raised so a 20m wakeTimeout fits under it. The
+	// activator fails at once, so nothing waits this long.
+	h.server.Config.MaxWakeTimeout = time.Hour
 	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 20 * time.Minute}
 	act := &deadlineActivator{}
 	h.server.Activator = act
