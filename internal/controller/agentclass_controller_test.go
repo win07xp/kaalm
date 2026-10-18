@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -346,4 +348,45 @@ func TestAgentClass_UnchangedPassSkipsStatusWrite(t *testing.T) {
 	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonInvalidReference); len(got) != 1 {
 		t.Errorf("two passes sent %d InvalidReference Warnings, want 1", len(got))
 	}
+}
+
+// Rules 51 and 52: long lists of long malformed entries in both fields still
+// turn Ready False. Each field lists its first entries and counts the rest,
+// so the message fits the condition schema and the status write is accepted.
+func TestAgentClass_LongPatternListsTurnReadyFalse(t *testing.T) {
+	const name = "ac-long-patterns"
+	var patterns []string
+	for i := range 12 {
+		patterns = append(patterns, "["+strings.Repeat("\x00", 4096)+strconv.Itoa(i))
+	}
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	ac.Spec.AllowedNamespaces = patterns
+	ac.Spec.Image.AllowedImages = patterns
+	if err := testClient.Create(ctxT(), ac); err != nil {
+		t.Fatalf("create class %s: %v", name, err)
+	}
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentClass
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+			return err
+		}
+		c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern ||
+			c.ObservedGeneration != got.Generation {
+			return fmt.Errorf("Ready = %+v, want False/%s at generation %d",
+				c, kaalmv1beta1.ReasonInvalidNamespacePattern, got.Generation)
+		}
+		if len(c.Message) >= conditionMessageLimit {
+			return fmt.Errorf("Ready message is %d bytes", len(c.Message))
+		}
+		for _, want := range []string{
+			"allowedNamespaces has 2 more malformed entries, not listed",
+			"allowedImages has 2 more malformed entries, not listed",
+		} {
+			if !strings.Contains(c.Message, want) {
+				return fmt.Errorf("Ready message does not hold %q", want)
+			}
+		}
+		return nil
+	})
 }

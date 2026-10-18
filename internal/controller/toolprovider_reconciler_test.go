@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -881,5 +882,62 @@ func TestToolProvider_CredentialFailureWinsOverNamespacePattern(t *testing.T) {
 	}
 	if n := health.count(name); n != 0 {
 		t.Fatalf("probe ran %d times on a pass that should not probe", n)
+	}
+}
+
+// Rule 51: a malformed allowedNamespaces entry longer than the condition
+// message limit still turns Ready False. The message quotes only the entry's
+// start, so the status write is accepted.
+func TestToolProvider_LongNamespacePatternTurnsReadyFalse(t *testing.T) {
+	const name = "tp-long-pattern"
+	mkSecret(t, name+"-key")
+	mkToolProvider(t, name, func(tp *kaalmv1beta1.ToolProvider) {
+		tp.Spec.AllowedNamespaces = []string{"[" + strings.Repeat("a", 40<<10)}
+	})
+	eventually(t, func() error {
+		var tp kaalmv1beta1.ToolProvider
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
+			return err
+		}
+		c := condition(tp.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern ||
+			c.ObservedGeneration != tp.Generation {
+			return fmt.Errorf("Ready = %+v, want False/%s at generation %d",
+				c, kaalmv1beta1.ReasonInvalidNamespacePattern, tp.Generation)
+		}
+		if !strings.Contains(c.Message, "(first 256 of 40961 bytes)") || len(c.Message) > conditionMessageLimit {
+			return fmt.Errorf("Ready message (%d bytes) does not quote the entry's first 256 bytes", len(c.Message))
+		}
+		return nil
+	})
+}
+
+// The InvalidNamespacePattern Warning carries the same cut text as Ready.
+func TestToolProvider_LongNamespacePatternEventMatchesReady(t *testing.T) {
+	const name = "tp-long-pattern-event"
+	tp := eventsToolProvider(name)
+	tp.Spec.AllowedNamespaces = []string{"[" + strings.Repeat("a", 40<<10)}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp, providerKey(name)).WithStatusSubresource(tp).Build()
+	rec := events.NewFakeRecorder(16)
+	r := &ToolProviderReconciler{
+		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: newFakeToolHealth(),
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	if _, err := r.Reconcile(ctxT(), req); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.ToolProvider
+	if err := c.Get(ctxT(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	ready := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if ready == nil || ready.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern ||
+		!strings.Contains(ready.Message, "(first 256 of 40961 bytes)") {
+		t.Fatalf("Ready = %+v, want %s quoting the entry's first 256 bytes", ready, kaalmv1beta1.ReasonInvalidNamespacePattern)
+	}
+	ev := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonInvalidNamespacePattern)
+	if want := "Warning " + kaalmv1beta1.ReasonInvalidNamespacePattern + " " + ready.Message; len(ev) != 1 || ev[0] != want {
+		t.Fatalf("events = %q, want one %q", ev, want)
 	}
 }
