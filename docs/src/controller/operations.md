@@ -40,7 +40,7 @@ An AgentChannel reports the same reason when the API server refuses a write of o
 
 ### A long rejection is cut
 
-For both reasons, and for an AgentChannel, the `Ready` message is cut to 1,024 bytes. For `ChildWriteRejected`, the message is the operation, the kind and name of the object, and then the API server's error, and the cut applies to all of it. A longer message ends in `... (truncated)`, and the Warning Event carries the same text. An admission webhook or policy engine writes the denial and can make it any length, and a condition message over the schema's limit fails the whole status write, so `Ready` would stay at its last value and the refusal would never show. The cut keeps the start of the text, which names the object, the webhook, and the cause.
+For both reasons, and for an AgentChannel, the `Ready` message is cut to 1,024 bytes. For `ChildWriteRejected`, the message is the operation, the kind and name of the object, and then the API server's error, and the cut applies to all of it. A longer message ends in `... (truncated)`, and the Warning Event carries the same text. An admission webhook or policy engine writes the denial and can make it any length, and a condition message over the schema's limit fails the whole status write, so `Ready` would stay at its last value and the refusal would never show. The cut keeps the start of the text, where the API server and the webhook name what was refused and why.
 
 ## Event emission
 
