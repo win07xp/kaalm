@@ -23,10 +23,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -175,24 +177,20 @@ func fallbackIneligibility(
 // them. This scan's findings also grow when other people act: a new team's
 // Agents start using the primary from a namespace a fallback does not admit.
 // The platform team learns of that only from an event, so the pass holds a
-// FallbackIneligible Warning, sent once finish writes the condition, when
-// either:
+// FallbackIneligible Warning, sent once finish writes the condition, that
+// names every new finding, listed in the condition or not, and starts with
+// the new total when the total grows. A fixed finding is not announced,
+// since whoever fixed it already knows, and a steady set sends nothing. The
+// total leads the note because the event recorder cuts a note at 1,024
+// bytes, and the total is the part that must survive.
 //
-//   - a finding is newly among the listed ones: the event names it;
-//   - the total grows: the event starts with the new total, and when every
-//     new finding is past the listed ones, the total is all it says.
-//
-// A fixed finding is not announced, since whoever fixed it already knows,
-// and a finding past the listed ones is never named, so it is counted once
-// in a higher total and never announced again. The total leads the note
-// because the event recorder cuts a note at 1,024 bytes, and the total is
-// the part that must survive. Both messages are read the same way, by
-// listedFindings, so a steady set of findings never sends an event. With no
-// status field to hold the full set, a fix and a new unlisted finding in the
-// same pass leave the total unchanged, so no event reports the new finding.
-// When the fixed finding was a listed one, the event names only the finding
-// that moved into the list.
+// The condition message cannot hold the full set, so the reconciler keeps
+// the last one in memory (fallbackSeen). The first pass after a restart or a
+// leader change has none and compares against the stored message instead
+// (see fallbackListedNote).
 func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelProvider, findings []fallbackFinding) {
+	known, remembered := r.fallbackSeen.lookup(mp)
+	r.fallbackSeen.stage(mp, findings)
 	prev := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
 	if len(findings) == 0 {
 		if prev != nil {
@@ -205,14 +203,19 @@ func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelP
 		return
 	}
 	msg := fallbackFindingsMessage(findings)
-	// prev points into the conditions slice, so read it before the set below
-	// overwrites its message.
-	var prevEntries []string
-	prevTotal := 0
-	if prev != nil && prev.Status == metav1.ConditionTrue {
-		prevEntries, prevTotal = listedFindings(prev.Message)
+	var note string
+	if remembered {
+		note = fallbackNewNote(known, findings)
+	} else {
+		// prev points into the conditions slice, so read it before the set
+		// below overwrites its message.
+		var prevEntries []string
+		prevTotal := 0
+		if prev != nil && prev.Status == metav1.ConditionTrue {
+			prevEntries, prevTotal = listedFindings(prev.Message)
+		}
+		note = fallbackListedNote(prevEntries, prevTotal, msg)
 	}
-	note := fallbackFindingsNote(prevEntries, prevTotal, msg)
 	apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 		Type:    kaalmv1beta1.ConditionFallbackIneligible,
 		Status:  metav1.ConditionTrue,
@@ -224,10 +227,35 @@ func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelP
 	}
 }
 
-// fallbackFindingsNote returns the FallbackIneligible event note for a pass
-// that turns a message with prevEntries listed and prevTotal findings into
-// msg, or "" when the pass sends no event (see setFallbackEligibility).
-func fallbackFindingsNote(prevEntries []string, prevTotal int, msg string) string {
+// fallbackNewNote returns the FallbackIneligible event note for a pass whose
+// previous findings, by key, are known: it names every finding not in known,
+// in order. It returns "" when no finding is new.
+func fallbackNewNote(known map[string]struct{}, findings []fallbackFinding) string {
+	var added []string
+	for _, f := range findings {
+		if _, ok := known[f.key]; !ok {
+			added = append(added, f.message)
+		}
+	}
+	if len(added) == 0 {
+		return ""
+	}
+	note := "new: " + strings.Join(added, findingsSeparator)
+	if len(findings) > len(known) {
+		note = fallbackTotal(len(findings)) + "; " + note
+	}
+	return note
+}
+
+// fallbackListedNote returns the FallbackIneligible event note for a pass
+// with no remembered findings, which turns a message with prevEntries
+// listed and prevTotal findings into msg, or "" when the pass sends no
+// event. It names the findings newly among the listed ones as "now listed",
+// not "new": one may only have moved into the list when a listed one was
+// fixed. A fix and a new unlisted finding in the same pass leave both the
+// listed findings and the total unchanged, so this pass cannot report that
+// new finding.
+func fallbackListedNote(prevEntries []string, prevTotal int, msg string) string {
 	curEntries, curTotal := listedFindings(msg)
 	listed := make(map[string]bool, len(prevEntries))
 	for _, e := range prevEntries {
@@ -239,17 +267,101 @@ func fallbackFindingsNote(prevEntries []string, prevTotal int, msg string) strin
 			added = append(added, e)
 		}
 	}
-	if curTotal <= prevTotal {
-		return strings.Join(added, findingsSeparator)
+	var note string
+	if len(added) > 0 {
+		note = "now listed: " + strings.Join(added, findingsSeparator)
 	}
-	total := "1 finding in total"
-	if curTotal != 1 {
-		total = fmt.Sprintf("%d findings in total", curTotal)
+	if curTotal <= prevTotal {
+		return note
 	}
 	if len(added) == 0 {
-		return fmt.Sprintf("%s; the new findings are not among the %d the condition lists", total, len(curEntries))
+		note = fmt.Sprintf("the new findings are not among the %d the condition lists", len(curEntries))
 	}
-	return total + "; new: " + strings.Join(added, findingsSeparator)
+	return fallbackTotal(curTotal) + "; " + note
+}
+
+// fallbackTotal is the total that leads a FallbackIneligible event note.
+func fallbackTotal(n int) string {
+	if n == 1 {
+		return "1 finding in total"
+	}
+	return fmt.Sprintf("%d findings in total", n)
+}
+
+// fallbackFindingsMemory holds, per ModelProvider, the keys of the findings
+// of its last recorded scan, so an event can name a new finding the
+// condition message does not list. A pass stages its set, and finish
+// commits it only when the pass's status is stored: after a failed status
+// write the next pass compares against the same set again and sends the
+// event the failed pass dropped.
+//
+// Entries are indexed by name, so the NotFound path, which has no UID, can
+// drop them, and an entry is used only by the provider with the UID that
+// recorded it, so a provider recreated under the same name starts with no
+// memory. Each provider holds at most one entry, dropped when the provider
+// is deleted. The zero value is ready to use.
+type fallbackFindingsMemory struct {
+	mu      sync.Mutex
+	known   map[string]fallbackFindingsSet
+	pending map[string]fallbackFindingsSet
+}
+
+type fallbackFindingsSet struct {
+	uid  types.UID
+	keys map[string]struct{}
+}
+
+// lookup returns the provider's remembered finding keys, and whether there
+// are any; a provider whose findings dropped to zero has an empty set.
+func (m *fallbackFindingsMemory) lookup(mp *kaalmv1beta1.ModelProvider) (map[string]struct{}, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.known[mp.Name]
+	if !ok || s.uid != mp.UID {
+		return nil, false
+	}
+	return s.keys, true
+}
+
+// stage holds the pass's findings until settle.
+func (m *fallbackFindingsMemory) stage(mp *kaalmv1beta1.ModelProvider, findings []fallbackFinding) {
+	keys := make(map[string]struct{}, len(findings))
+	for _, f := range findings {
+		keys[f.key] = struct{}{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pending == nil {
+		m.pending = map[string]fallbackFindingsSet{}
+	}
+	m.pending[mp.Name] = fallbackFindingsSet{uid: mp.UID, keys: keys}
+}
+
+// settle drops the pass's staged findings, and remembers them when stored
+// is true: the pass's status is in the API server.
+func (m *fallbackFindingsMemory) settle(mp *kaalmv1beta1.ModelProvider, stored bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.pending[mp.Name]
+	if !ok {
+		return
+	}
+	delete(m.pending, mp.Name)
+	if !stored {
+		return
+	}
+	if m.known == nil {
+		m.known = map[string]fallbackFindingsSet{}
+	}
+	m.known[mp.Name] = s
+}
+
+// forget drops the provider's remembered findings once it is deleted.
+func (m *fallbackFindingsMemory) forget(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.known, name)
+	delete(m.pending, name)
 }
 
 // findingsSeparator joins the sorted findings in the condition message.

@@ -79,6 +79,9 @@ type ModelProviderReconciler struct {
 	// ownWrites lets the For() watch skip the event of the reconciler's own
 	// status write.
 	ownWrites ownWrites
+	// fallbackSeen remembers each provider's last FallbackIneligible
+	// findings, so the event can name a finding the condition does not list.
+	fallbackSeen fallbackFindingsMemory
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders,verbs=get;list;watch;update;patch
@@ -107,6 +110,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			dropBudgetCanonical(req.Name)
 			r.probes.forget(req.Name)
 			r.ownWrites.forget(req.Name)
+			r.fallbackSeen.forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -115,9 +119,13 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// through (see ownWrites).
 	r.ownWrites.readStale(&mp)
 
-	// Events held for a status write that never happened (an error before
-	// finish) are dropped: the next pass derives them again.
-	defer r.events.take(&mp)
+	// Events and fallback findings held for a status write that never
+	// happened (an error before finish) are dropped: the next pass derives
+	// them again.
+	defer func() {
+		r.events.take(&mp)
+		r.fallbackSeen.settle(&mp, false)
+	}()
 	if !mp.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &mp)
 	}
@@ -257,6 +265,7 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	// series again before the finalizer goes.
 	dropBudgetCanonical(mp.Name)
 	r.probes.forget(mp.Name)
+	r.fallbackSeen.forget(mp.Name)
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
 }
@@ -791,6 +800,7 @@ func (r *ModelProviderReconciler) finish(
 	if err := r.Get(ctx, client.ObjectKeyFromObject(mp), &current); err == nil &&
 		equality.Semantic.DeepEqual(current.Status, mp.Status) {
 		r.events.flush(r.Recorder, mp, false)
+		r.fallbackSeen.settle(mp, true)
 		return res, nil
 	}
 	err := r.Status().Update(ctx, mp)
@@ -798,6 +808,7 @@ func (r *ModelProviderReconciler) finish(
 		r.ownWrites.record(mp)
 	}
 	r.events.flush(r.Recorder, mp, err == nil)
+	r.fallbackSeen.settle(mp, err == nil)
 	if err != nil {
 		// controller-runtime drops a RequeueAfter sent with an error, and the
 		// error already requeues with backoff.
