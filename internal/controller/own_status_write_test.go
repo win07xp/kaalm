@@ -196,9 +196,12 @@ func TestOwnStatusWrites_StaleReadReleasesTheRecord(t *testing.T) {
 	if !p.Update(ev) {
 		t.Error("a read newer than the own write did not release its event")
 	}
-	w.readStale(at("4"))
-	if !p.Update(ev) {
-		t.Error("a read with no record dropped an event")
+	w.readStale(at("4")) // no record is left: readStale must not create one
+	if len(w.rv) != 0 {
+		t.Errorf("a read with no record created one: %v", w.rv)
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: at("3"), ObjectNew: at("4")}) {
+		t.Error("a read with no record dropped the event at the read resourceVersion")
 	}
 }
 
