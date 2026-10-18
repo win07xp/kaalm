@@ -756,7 +756,12 @@ func (r *ModelProviderReconciler) finish(
 		r.ownWrites.record(mp)
 	}
 	r.events.flush(r.Recorder, mp, err == nil)
-	return res, err
+	if err != nil {
+		// controller-runtime drops a RequeueAfter sent with an error, and the
+		// error already requeues with backoff.
+		return ctrl.Result{}, err
+	}
+	return res, nil
 }
 
 // SetupWithManager wires the reconciler and its reference watches.

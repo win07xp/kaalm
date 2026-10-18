@@ -264,7 +264,10 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 		// watches on Agent/AgentTask re-enqueue us when a referrer goes away;
 		// a hold only the live read found also comes back on a timer.
 		before := slices.Clone(ac.Status.Conditions)
-		return heldResult(liveOnly), holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, before, refs)
+		if err := holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, before, refs); err != nil {
+			return ctrl.Result{}, err
+		}
+		return heldResult(liveOnly), nil
 	}
 	controllerutil.RemoveFinalizer(ac, kaalmv1beta1.ClassFinalizer)
 	return ctrl.Result{}, r.Update(ctx, ac)
