@@ -6,6 +6,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,64 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 // The request-path kinds are served from the cache without a deep copy;
 // the options that keep Secrets out of the cache and scope ConfigMaps
 // stay as they were.
+func TestValidateLimits(t *testing.T) {
+	tests := []struct {
+		name      string
+		counts    map[string]int64
+		durations map[string]time.Duration
+		// wantFlags lists the flags the error must name; empty means no error.
+		wantFlags []string
+	}{
+		{
+			name:      "zero keeps the fallback",
+			counts:    map[string]int64{"mcp-max-body-bytes": 0},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": 0},
+		},
+		{
+			name:      "flag defaults",
+			counts:    map[string]int64{"mcp-max-body-bytes": 4 << 20},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": 120 * time.Second},
+		},
+		{
+			name:      "negative MCP body cap",
+			counts:    map[string]int64{"mcp-max-body-bytes": -1},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": 0},
+			wantFlags: []string{"--mcp-max-body-bytes"},
+		},
+		{
+			name:      "negative MCP timeout",
+			counts:    map[string]int64{"mcp-max-body-bytes": 0},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": -5 * time.Second},
+			wantFlags: []string{"--mcp-upstream-timeout"},
+		},
+		{
+			name:      "both negative in one error",
+			counts:    map[string]int64{"mcp-max-body-bytes": -1},
+			durations: map[string]time.Duration{"mcp-upstream-timeout": -time.Second},
+			wantFlags: []string{"--mcp-max-body-bytes", "--mcp-upstream-timeout"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLimits(tt.counts, tt.durations)
+			if len(tt.wantFlags) == 0 {
+				if err != nil {
+					t.Fatalf("validateLimits: %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateLimits returned nil, want an error naming %v", tt.wantFlags)
+			}
+			for _, flagName := range tt.wantFlags {
+				if !strings.Contains(err.Error(), flagName) {
+					t.Errorf("error %q does not name %s", err, flagName)
+				}
+			}
+		})
+	}
+}
+
 func TestClusterOptionsShareRequestPathObjects(t *testing.T) {
 	scheme := runtime.NewScheme()
 	var o cluster.Options

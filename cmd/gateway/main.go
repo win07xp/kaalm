@@ -8,11 +8,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -147,6 +150,17 @@ func main() {
 
 	if err := drain.Validate(drainDelay, shutdownTimeout); err != nil {
 		logger.Error("invalid shutdown flags", "error", err)
+		os.Exit(1)
+	}
+	if err := validateLimits(
+		map[string]int64{
+			"mcp-max-body-bytes": mcpMaxBodyBytes,
+		},
+		map[string]time.Duration{
+			"mcp-upstream-timeout": mcpUpstreamTimeout,
+		},
+	); err != nil {
+		logger.Error("invalid limit flags", "error", err)
 		os.Exit(1)
 	}
 
@@ -511,6 +525,28 @@ func parseStartupPolicy(
 		}
 	}
 	return policy
+}
+
+// validateLimits rejects a negative size, count, or timeout flag. Zero is
+// valid for every one of these flags and keeps its documented default or
+// fallback, while a negative value has no meaning and would otherwise
+// half-apply: a 0-byte cap, an already-expired deadline, or a quiet switch
+// to another value. The keys are flag names without the leading dashes; the
+// error names every negative flag, in a fixed order, so one run reports them
+// all.
+func validateLimits(counts map[string]int64, durations map[string]time.Duration) error {
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(counts)) {
+		if v := counts[name]; v < 0 {
+			errs = append(errs, fmt.Errorf("--%s must not be negative, got %d", name, v))
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(durations)) {
+		if v := durations[name]; v < 0 {
+			errs = append(errs, fmt.Errorf("--%s must not be negative, got %s", name, v))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // mustParseBackoff is parseBackoff with the startup-failure contract.
