@@ -101,7 +101,7 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 	if !tp.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, &tp)
+		return r.reconcileDelete(ctx, &tp)
 	}
 	// Events held for a status write that never happened are dropped: the
 	// next pass derives them again.
@@ -203,40 +203,41 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 func (r *ToolProviderReconciler) reconcileDelete(
 	ctx context.Context, tp *kaalmv1beta1.ToolProvider,
-) error {
+) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer) {
-		return nil
+		return ctrl.Result{}, nil
 	}
 	// No probe runs once the delete has started; a provider whose delete is
 	// held probes at once if the hold ends without the delete finishing.
 	r.probes.forget(tp.Name)
-	refs, err := r.referrers(ctx, tp.Name)
+	refs, liveOnly, err := r.referrers(ctx, tp.Name)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	if len(refs) > 0 {
 		// Hold while any Agent, AgentTask, or AgentClass references it, and
 		// say so on Ready. Their watches re-enqueue us when a referrer goes
-		// away. Healthy says the probe does not run during the hold.
+		// away; a hold only the live read found also comes back on a timer.
+		// Healthy says the probe does not run during the hold.
 		before := slices.Clone(tp.Status.Conditions)
 		setHealthyNotProbed(&tp.Status.Conditions, "deletion is held")
 		rv := tp.ResourceVersion
 		if err := holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, before, refs); err != nil {
-			return err
+			return ctrl.Result{}, err
 		}
 		if tp.ResourceVersion != rv {
 			r.ownWrites.record(tp)
 		}
-		return nil
+		return heldResult(liveOnly), nil
 	}
 	controllerutil.RemoveFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer)
-	return r.Update(ctx, tp)
+	return ctrl.Result{}, r.Update(ctx, tp)
 }
 
 // referrers lists the objects that hold the provider's delete: Agents and
 // AgentTasks granting its tools in spec.tools, and AgentClasses listing it in
-// allowedToolProviders.
-func (r *ToolProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
+// allowedToolProviders. The bool reports a hold only the live read found.
+func (r *ToolProviderReconciler) referrers(ctx context.Context, name string) ([]string, bool, error) {
 	return deleteReferrers(ctx, r.Client, r.APIReader, name, toolProviderReferrers)
 }
 

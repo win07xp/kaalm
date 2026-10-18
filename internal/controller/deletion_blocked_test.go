@@ -463,9 +463,9 @@ func TestListReferrers_LiveMatchesIndex(t *testing.T) {
 func TestDeleteReferrers_ConfirmsLiveWhenCacheEmpty(t *testing.T) {
 	name := "live-held"
 	live := indexedReferrerClient(t, allowingClass("live-class", name))
-	got, err := deleteReferrers(context.Background(), indexedReferrerClient(t), live, name, modelProviderReferrers)
-	if err != nil || strings.Join(got, ",") != "AgentClass live-class" {
-		t.Fatalf("deleteReferrers = %q, %v; want [AgentClass live-class]", got, err)
+	got, liveOnly, err := deleteReferrers(context.Background(), indexedReferrerClient(t), live, name, modelProviderReferrers)
+	if err != nil || strings.Join(got, ",") != "AgentClass live-class" || !liveOnly {
+		t.Fatalf("deleteReferrers = %q, %v, %v; want [AgentClass live-class], live only", got, liveOnly, err)
 	}
 
 	r := deleteReconciler(t, interceptor.Funcs{}, append(spendConfigMaps(name), deletingProvider(name))...)
@@ -494,9 +494,9 @@ func TestDeleteReferrers_ConfirmsLiveWhenCacheEmpty(t *testing.T) {
 // A cached list that holds the delete settles it: no live read runs.
 func TestDeleteReferrers_SkipsLiveWhenCacheHolds(t *testing.T) {
 	cached := indexedReferrerClient(t, allowingClass("cached-class", "p"))
-	got, err := deleteReferrers(context.Background(), cached, newErrListClient(t), "p", modelProviderReferrers)
-	if err != nil || strings.Join(got, ",") != "AgentClass cached-class" {
-		t.Fatalf("deleteReferrers = %q, %v; want the cached list and no live read", got, err)
+	got, liveOnly, err := deleteReferrers(context.Background(), cached, newErrListClient(t), "p", modelProviderReferrers)
+	if err != nil || strings.Join(got, ",") != "AgentClass cached-class" || liveOnly {
+		t.Fatalf("deleteReferrers = %q, %v, %v; want the cached list and no live read", got, liveOnly, err)
 	}
 }
 
@@ -578,9 +578,9 @@ func TestReconcileDelete_LiveOnlyHoldRequeuesSoon(t *testing.T) {
 			Spec:       kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: class}},
 		}
 	}
-	// check reconciles name with the referrer in the live reader only, then
+	// check reconciles obj with the referrer in the live reader only, then
 	// in both readers, and checks the requeue of each hold.
-	check := func(t *testing.T, name string, reconcile func(cached, live client.Client) (ctrl.Result, error),
+	check := func(t *testing.T, reconcile func(cached, live client.Client) (ctrl.Result, error),
 		obj func() client.Object, referrer client.Object) {
 		t.Helper()
 		res, err := reconcile(indexedReferrerClient(t, obj()), indexedReferrerClient(t, referrer))
@@ -602,7 +602,7 @@ func TestReconcileDelete_LiveOnlyHoldRequeuesSoon(t *testing.T) {
 
 	t.Run("ModelProvider", func(t *testing.T) {
 		name := "live-requeue-mp"
-		check(t, name, func(cached, live client.Client) (ctrl.Result, error) {
+		check(t, func(cached, live client.Client) (ctrl.Result, error) {
 			r := &ModelProviderReconciler{
 				Client: cached, APIReader: live, Recorder: events.NewFakeRecorder(8),
 				OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
@@ -613,7 +613,7 @@ func TestReconcileDelete_LiveOnlyHoldRequeuesSoon(t *testing.T) {
 
 	t.Run("ToolProvider", func(t *testing.T) {
 		name := "live-requeue-tp"
-		check(t, name, func(cached, live client.Client) (ctrl.Result, error) {
+		check(t, func(cached, live client.Client) (ctrl.Result, error) {
 			r := &ToolProviderReconciler{
 				Client: cached, APIReader: live, Recorder: events.NewFakeRecorder(8),
 				OperatorNamespace: testOperatorNamespace,
@@ -628,7 +628,7 @@ func TestReconcileDelete_LiveOnlyHoldRequeuesSoon(t *testing.T) {
 
 	t.Run("AgentClass", func(t *testing.T) {
 		name := "live-requeue-ac"
-		check(t, name, func(cached, live client.Client) (ctrl.Result, error) {
+		check(t, func(cached, live client.Client) (ctrl.Result, error) {
 			r := &AgentClassReconciler{Client: cached, APIReader: live, Recorder: events.NewFakeRecorder(8)}
 			return r.Reconcile(ctx, req(name))
 		}, func() client.Object {

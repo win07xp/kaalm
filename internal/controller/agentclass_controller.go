@@ -255,15 +255,16 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	if !controllerutil.ContainsFinalizer(ac, kaalmv1beta1.ClassFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	refs, err := deleteReferrers(ctx, r.Client, r.APIReader, ac.Name, agentClassReferrers)
+	refs, liveOnly, err := deleteReferrers(ctx, r.Client, r.APIReader, ac.Name, agentClassReferrers)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(refs) > 0 {
 		// Hold until the last reference is removed, and say so on Ready. The
-		// watches on Agent/AgentTask re-enqueue us when a referrer goes away.
+		// watches on Agent/AgentTask re-enqueue us when a referrer goes away;
+		// a hold only the live read found also comes back on a timer.
 		before := slices.Clone(ac.Status.Conditions)
-		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, before, refs)
+		return heldResult(liveOnly), holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, before, refs)
 	}
 	controllerutil.RemoveFinalizer(ac, kaalmv1beta1.ClassFinalizer)
 	return ctrl.Result{}, r.Update(ctx, ac)

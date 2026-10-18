@@ -21,12 +21,14 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -51,28 +53,48 @@ var (
 	agentClassReferrers = referrerIndexes{agent: agentClassRefField, task: agentClassRefField}
 )
 
+// liveHoldRecheck is how soon a delete held only by the live read is checked
+// again. Such a hold waits on a referrer the cache has not delivered yet. If
+// that referrer comes and goes while the watch is down, no event re-checks
+// the hold until the resync, hours away. Each recheck that still finds the
+// cache empty lists from the API server again, so the wait is a few seconds
+// rather than none: long enough for a lagging cache to catch up, short
+// enough that a gone referrer releases the delete promptly.
+const liveHoldRecheck = 5 * time.Second
+
 // deleteReferrers returns the objects that hold the delete of the resource
-// called name. It lists from cached first. Only when that list is empty, the
-// pass that would release the delete, does it list again from live, the API
-// server: a referrer created moments before the delete may not be in the
-// cache yet, and a released finalizer cannot be taken back. A nil live reads
-// from cached, which suits a client with no cache.
-func deleteReferrers(ctx context.Context, cached, live client.Reader, name string, idx referrerIndexes) ([]string, error) {
+// called name, and whether only the live read found them. It lists from
+// cached first. Only when that list is empty, the pass that would release
+// the delete, does it list again from live, the API server: a referrer
+// created moments before the delete may not be in the cache yet, and a
+// released finalizer cannot be taken back. A nil live reads from cached,
+// which suits a client with no cache.
+func deleteReferrers(ctx context.Context, cached, live client.Reader, name string, idx referrerIndexes) ([]string, bool, error) {
 	refs, err := listReferrers(ctx, cached, name, idx, false)
 	if err != nil || len(refs) > 0 {
-		return refs, err
+		return refs, false, err
 	}
 	if live == nil {
 		live = cached
 	}
 	refs, err = listReferrers(ctx, live, name, idx, true)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(refs) > 0 {
 		log.FromContext(ctx).V(1).Info("delete held by referrers the cache does not hold yet", "referrers", len(refs))
 	}
-	return refs, nil
+	return refs, len(refs) > 0, nil
+}
+
+// heldResult is the result of a pass that holds a delete: a hold only the
+// live read found comes back after liveHoldRecheck, and a hold the cache
+// shows waits for its referrers' events.
+func heldResult(liveOnly bool) ctrl.Result {
+	if liveOnly {
+		return ctrl.Result{RequeueAfter: liveHoldRecheck}
+	}
+	return ctrl.Result{}
 }
 
 // listReferrers returns every Agent, AgentTask, and AgentClass whose index
