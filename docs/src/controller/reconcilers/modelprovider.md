@@ -95,7 +95,7 @@ The reconciler scans the fallback tree for candidates a request could never reac
 
 **The event.** A `Warning` event of the same reason fires on the primary when a finding is newly among the listed ten, or when the total grows ([Event emission](../operations.md#event-emission) gives the reason). The event is how the platform team learns that other teams' workloads added findings, and a finding the condition does not list cannot be named, so the event reports it only as a higher total, once. When the total grows, the note starts with the new total, because an Event note is cut at 1,024 bytes and the total is the part that must survive. It then names the findings newly among the listed ten. A pass with the same findings sends no event, and neither does clearing.
 
-When a listed finding is fixed, the next finding moves into the list and the event names it once. A fix and a new unlisted finding in the same pass leave the total unchanged and send no event, so check the condition after you change callers.
+When a listed finding is fixed, the next finding moves into the list and the event names it once. A fix and a new unlisted finding in the same pass leave the total unchanged, so no event reports the new finding. If the fix was a listed finding, the event still names the older finding that moved into the list, but not the new one. Check the condition after you change callers.
 
 The gateway's request-time check still runs on every request: it catches a change between passes and a request body the target format cannot express.
 
