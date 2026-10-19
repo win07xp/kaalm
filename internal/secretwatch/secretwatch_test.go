@@ -50,7 +50,13 @@ const waitTimeout = 3 * time.Second
 // eventually polls fn until it returns true or waitTimeout passes.
 func eventually(t *testing.T, fn func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(waitTimeout)
+	waitUntil(t, waitTimeout, fn)
+}
+
+// waitUntil polls fn until it returns true or d passes.
+func waitUntil(t *testing.T, d time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
 	for !fn() {
 		if time.Now().After(deadline) {
 			t.Fatal("condition not met in time")
@@ -226,9 +232,10 @@ func TestWatcherZeroErrorTTLRetriesOnTheNextRead(t *testing.T) {
 	}
 }
 
-// A grant that lands is never hidden by the cached error: the informer's
-// own list retry picks it up even before ErrorTTL passes.
-func TestWatcherRecoversThroughTheInformersOwnRetry(t *testing.T) {
+// An informer whose first GET is refused stops instead of retrying on its
+// own: until ErrorTTL passes, reads answer the refusal and cost no GET, even
+// once a grant lands.
+func TestWatcherStopsAnInformerWhoseFirstGetIsForbidden(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	g := newGrantable()
@@ -238,11 +245,283 @@ func TestWatcherRecoversThroughTheInformersOwnRetry(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
 		t.Fatalf("first read: err = %v, want Forbidden", err)
 	}
+	entry := currentEntry(w, hookKey)
+	eventuallyAcrossBackoff(t, entry.informer.IsStopped)
 	g.grant()
-	eventually(t, func() bool {
-		_, err := w.Get(ctx, "team-a", "hook")
-		return err == nil
+	for i := range 10 {
+		if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+			t.Fatalf("read %d within ErrorTTL: err = %v, want the cached Forbidden", i, err)
+		}
+	}
+	if got := g.gets.Load(); got != 1 {
+		t.Errorf("a stopped informer and 11 reads cost %d GETs, want 1", got)
+	}
+}
+
+// hookKey is the Secret the revocable and grantable clientsets hold.
+var hookKey = types.NamespacedName{Namespace: "team-a", Name: "hook"}
+
+// reflectorWait bounds a wait that spans a reflector backoff: its first
+// retry comes 0.8 to 1.6s after a failure, the next 1.6 to 3.2s later.
+const reflectorWait = 10 * time.Second
+
+// eventuallyAcrossBackoff polls fn until it returns true or reflectorWait
+// passes.
+func eventuallyAcrossBackoff(t *testing.T, fn func() bool) {
+	t.Helper()
+	waitUntil(t, reflectorWait, fn)
+}
+
+// currentEntry returns the watcher's entry for key, or nil.
+func currentEntry(w *Watcher, key types.NamespacedName) *secretInformer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.informers[key]
+}
+
+// revocable is a clientset holding team-a/hook (token "v", resourceVersion
+// 1) whose GETs and watches can be made to fail. Every watch it opens is a
+// fake the test drives: endWatch ends the newest one, as an API server does
+// when a watch times out, and latestWatch delivers events through it.
+type revocable struct {
+	cs      *fake.Clientset
+	gets    atomic.Int32 // every GET
+	refused atomic.Int32 // GETs answered with getErr
+
+	mu       sync.Mutex
+	getErr   error
+	watchErr error
+	watches  []*watch.RaceFreeFakeWatcher
+}
+
+func newRevocable() *revocable {
+	sec := secretObj("team-a", "hook", "v")
+	sec.ResourceVersion = "1"
+	r := &revocable{cs: fake.NewSimpleClientset(sec)}
+	r.cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		r.gets.Add(1)
+		r.mu.Lock()
+		err := r.getErr
+		r.mu.Unlock()
+		if err != nil {
+			r.refused.Add(1)
+			return true, nil, err
+		}
+		return false, nil, nil
 	})
+	r.cs.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.watchErr != nil {
+			return true, nil, r.watchErr
+		}
+		fw := watch.NewRaceFreeFake()
+		r.watches = append(r.watches, fw)
+		return true, fw, nil
+	})
+	return r
+}
+
+// fail makes later GETs and watches answer getErr and watchErr; nil lets
+// them through.
+func (r *revocable) fail(getErr, watchErr error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.getErr, r.watchErr = getErr, watchErr
+}
+
+// revoke refuses later GETs and watches as Forbidden, as the API server does
+// once the Role granting them is gone.
+func (r *revocable) revoke() {
+	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("role deleted"))
+	r.fail(forbidden, forbidden)
+}
+
+func (r *revocable) watchCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.watches)
+}
+
+func (r *revocable) latestWatch() *watch.RaceFreeFakeWatcher {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.watches[len(r.watches)-1]
+}
+
+// endWatch ends the newest watch, so the reflector watches or lists again.
+func (r *revocable) endWatch() { r.latestWatch().Stop() }
+
+// A synced informer whose GET is refused (its Role was deleted) stops, and
+// the next read answers Forbidden instead of the cached Secret.
+func TestWatcherStopsAnInformerWhoseGetIsForbidden(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	entry := currentEntry(w, hookKey)
+	r.revoke()
+	r.endWatch()
+	eventuallyAcrossBackoff(t, func() bool { return r.refused.Load() >= 1 })
+	eventuallyAcrossBackoff(t, entry.informer.IsStopped)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+		t.Fatalf("read after the refusal: err = %v, want Forbidden, not the cached Secret", err)
+	}
+}
+
+// A later read starts a fresh informer once ErrorTTL has passed, and
+// subscribers hear about changes through it.
+func TestWatcherRestartsAForbiddenInformerOnALaterRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+	w.ErrorTTL = 200 * time.Millisecond
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	old := currentEntry(w, hookKey)
+	r.revoke()
+	r.endWatch()
+	eventuallyAcrossBackoff(t, old.informer.IsStopped)
+
+	before := r.gets.Load()
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+		t.Fatalf("read within ErrorTTL: err = %v, want the cached Forbidden", err)
+	}
+	if got := r.gets.Load() - before; got != 0 {
+		t.Errorf("read within ErrorTTL cost %d GETs, want 0", got)
+	}
+
+	r.fail(nil, nil)
+	time.Sleep(250 * time.Millisecond)
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil {
+		t.Fatalf("read after ErrorTTL: %v", err)
+	}
+	if got := string(sec.Data["token"]); got != "v" {
+		t.Fatalf("token = %q, want v", got)
+	}
+	fresh := currentEntry(w, hookKey)
+	if fresh == old {
+		t.Fatal("the read after ErrorTTL reused the stopped informer")
+	}
+	if fresh.informer.IsStopped() {
+		t.Fatal("the fresh informer is stopped")
+	}
+
+	eventually(t, func() bool { return r.watchCount() == 2 })
+	changed := secretObj("team-a", "hook", "v2")
+	changed.ResourceVersion = "2"
+	r.latestWatch().Modify(changed)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 200*time.Millisecond)
+}
+
+// Errors other than a refused GET leave the informer running: a synced one
+// keeps serving its cache and resumes once the error clears.
+func TestWatcherKeepsServingThroughTransientErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"internal error", apierrors.NewInternalError(errors.New("etcd unavailable"))},
+		{"server timeout", apierrors.NewServerTimeout(corev1.Resource("secrets"), "get", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r := newRevocable()
+			w := New(ctx, r.cs)
+
+			if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+				t.Fatalf("first read: %v", err)
+			}
+			eventually(t, func() bool { return r.watchCount() == 1 })
+			entry := currentEntry(w, hookKey)
+			r.fail(tc.err, tc.err)
+			r.endWatch()
+			// A second failed GET means the informer retried after the first.
+			eventuallyAcrossBackoff(t, func() bool { return r.refused.Load() >= 2 })
+			if entry.informer.IsStopped() {
+				t.Fatal("a transient error stopped the informer")
+			}
+			sec, err := w.Get(ctx, "team-a", "hook")
+			if err != nil || string(sec.Data["token"]) != "v" {
+				t.Fatalf("read during the error: sec = %v, err = %v, want the cached Secret", sec, err)
+			}
+
+			r.fail(nil, nil)
+			eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 2 })
+			if entry.informer.IsStopped() {
+				t.Fatal("the informer stopped after the error cleared")
+			}
+			if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+				t.Fatalf("read after the error cleared: %v", err)
+			}
+		})
+	}
+}
+
+// A Secret deleted while its informer runs is a valid empty state, not a
+// reason to stop.
+func TestWatcherKeepsRunningOnANotFoundSecret(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	entry := currentEntry(w, hookKey)
+	r.fail(apierrors.NewNotFound(corev1.Resource("secrets"), "hook"), nil)
+	r.endWatch()
+	// The relist's GET answers NotFound, then the informer watches again.
+	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 2 })
+	if entry.informer.IsStopped() {
+		t.Fatal("a NotFound GET stopped the informer")
+	}
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsNotFound(err) {
+		t.Fatalf("read of the deleted Secret: err = %v, want NotFound", err)
+	}
+}
+
+// Only a refused GET stops an informer. A refused watch alone (a get-only
+// grant) leaves the informer relisting and serving its cache.
+func TestWatcherKeepsRunningWhenOnlyTheWatchIsForbidden(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	entry := currentEntry(w, hookKey)
+	r.fail(nil, apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("get only")))
+	r.endWatch()
+	// The initial GET, a relist, and a relist after a refused watch.
+	eventuallyAcrossBackoff(t, func() bool { return r.gets.Load() >= 3 })
+	if entry.informer.IsStopped() {
+		t.Fatal("a refused watch stopped the informer")
+	}
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil || string(sec.Data["token"]) != "v" {
+		t.Fatalf("read: sec = %v, err = %v, want the Secret", sec, err)
+	}
 }
 
 // hangingClient blocks the first Secret GET until release is closed, so the
