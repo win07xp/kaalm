@@ -30,8 +30,8 @@ import (
 // query or fragment (even a bare ? or #) would swallow the appended path,
 // and user info would leak into logs or be dropped by the client. label
 // starts every error message. A parse failure reports only the inner cause,
-// and the other errors name the value only through hideUserInfo, so an error
-// never carries a password or token.
+// and the other errors name the value only through hideSecrets, so an error
+// never carries a password or token from the user info, query, or fragment.
 func ParseBaseURL(label, value string) (*url.URL, error) {
 	u, err := url.Parse(value)
 	if err != nil {
@@ -42,35 +42,43 @@ func ParseBaseURL(label, value string) (*url.URL, error) {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return nil, fmt.Errorf("%s %s: need http(s)://host[:port][/path]", label, hideUserInfo(u))
+		return nil, fmt.Errorf("%s %s: need http(s)://host[:port][/path]", label, hideSecrets(u))
 	}
 	// u.Fragment is empty for a bare #, which still breaks the appended path.
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(value, "#") {
-		return nil, fmt.Errorf("%s %s: need http(s)://host[:port][/path] with no user info, query, or fragment", label, hideUserInfo(u))
+		return nil, fmt.Errorf("%s %s: need http(s)://host[:port][/path] with no user info, query, or fragment", label, hideSecrets(u))
 	}
 	if p := u.Port(); p != "" {
 		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-			return nil, fmt.Errorf("%s %s: port %s is outside 1-65535", label, hideUserInfo(u), p)
+			return nil, fmt.Errorf("%s %s: port %s is outside 1-65535", label, hideSecrets(u), p)
 		}
 	}
 	return u, nil
 }
 
-// hideUserInfo renders u, quoted, for an error message, with any user info
-// replaced by "redacted". url.URL.Redacted masks only a password, and a user
-// name with no password is often a bearer token. Without the // after the
-// scheme, or without a scheme, url.Parse leaves user info in the opaque part
-// or the path rather than in User, so a value with an @ anywhere else is
-// left out entirely.
-func hideUserInfo(u *url.URL) string {
-	if u.User != nil {
-		c := *u
+// hideSecrets renders u, quoted, for an error message. It keeps the
+// scheme, host, port, and path so the operator can find the value, and
+// replaces the parts that can carry a secret: user info becomes "redacted",
+// and query or fragment text becomes "?redacted" or "#redacted".
+// url.URL.Redacted masks only a password, and a user name with no password
+// is often a bearer token. Without the // after the scheme, or without a
+// scheme, url.Parse leaves user info in the opaque part or the path rather
+// than in User, so a value with an @ anywhere else is left out entirely.
+func hideSecrets(u *url.URL) string {
+	c := *u
+	if c.User != nil {
 		c.User = url.User("redacted")
-		return strconv.Quote(c.String())
 	}
-	s := u.String()
-	if strings.Contains(s, "@") {
+	query, fragment := c.RawQuery != "", c.Fragment != "" || c.RawFragment != ""
+	c.RawQuery, c.Fragment, c.RawFragment = "", "", ""
+	if query {
+		c.RawQuery = "redacted"
+	}
+	if fragment {
+		c.Fragment = "redacted"
+	}
+	if u.User == nil && strings.Contains(c.String(), "@") {
 		return "(value hidden: it may hold user info)"
 	}
-	return strconv.Quote(s)
+	return strconv.Quote(c.String())
 }
