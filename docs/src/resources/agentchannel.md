@@ -204,7 +204,7 @@ status:
 | Status | Reason |
 |---|---|
 | `True` | `WebhookReady` |
-| `False` | The most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. The message is that failure's error text. |
+| `False` | The most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. The message is that failure's error text, cut to 1,024 bytes when longer ([How a condition message lists problems](validation-and-defaulting.md#how-a-condition-message-lists-problems)). |
 | `Unknown` | `NoRecentTraffic` |
 
 The reason names are shared across channel types: `WebhookReady` means the inbound path works whatever the platform. The observations behind each reason, and the reduction, are on [Channel health tracking](../gateways/user/platform-adapters.md#channel-health-tracking).
