@@ -1500,6 +1500,43 @@ func TestReduceChannelHealth_DefaultReturnsNoCondition(t *testing.T) {
 	}
 }
 
+func TestReduceChannelHealth_MissingKeyReadsAsEmpty(t *testing.T) {
+	// A gateway replica omits a path with no in-window observation, so a
+	// missing key must reduce exactly like the empty state.
+	cases := []struct {
+		name      string
+		startedAt time.Time
+		wantCond  bool
+	}{
+		{name: "replica up a full window", startedAt: time.Now().Add(-time.Hour), wantCond: true},
+		{name: "replica younger than its window", startedAt: time.Now()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &AgentChannelReconciler{Health: fakeChannelHealth{
+				total: 1,
+				reachable: []ReplicaChannelHealth{{
+					StartedAt:     tc.startedAt,
+					WindowSeconds: 60,
+					Channels:      map[string]ChannelHealthState{},
+				}},
+			}}
+			ch := newChannelAt()
+			r.reduceChannelHealth(context.Background(), ch)
+			c := platformCond(ch)
+			if !tc.wantCond {
+				if c != nil {
+					t.Fatalf("rule 4 expected no condition, got %+v", c)
+				}
+				return
+			}
+			if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != kaalmv1beta1.ReasonNoRecentTraffic {
+				t.Fatalf("rule 3 expected Unknown/NoRecentTraffic, got %+v", c)
+			}
+		})
+	}
+}
+
 func TestNewerHealth(t *testing.T) {
 	cases := []struct {
 		name string
