@@ -85,7 +85,7 @@ The gateway keeps per-channel delivery health in memory, per replica, from inbou
 
 ### What a replica records
 
-Each replica keeps the in-window observations per registered channel path, at most the newest 256, each `{ result: success | failure, reason, timestamp, lastError? }`.
+Each replica keeps the in-window observations per registered channel path, at most the newest 256, each `{ result: success | failure, reason, timestamp, lastError? }`. Each `lastError` is cut to 1,024 bytes, so a replica's memory per channel stays bounded whatever an error or a platform reply contains ([the `lastError` field](../api/internal-endpoints.md#get-v1channelshealth)).
 
 | Reason | Result | Recorded when |
 |---|---|---|
