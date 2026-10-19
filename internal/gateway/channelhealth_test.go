@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/win07xp/kaalm/internal/eventrec"
@@ -136,5 +137,84 @@ func TestChannelHealthStore_KeepsNewest256(t *testing.T) {
 	}
 	if first, last := list[0].lastError, list[len(list)-1].lastError; first != "44" || last != "299" {
 		t.Fatalf("kept %q through %q, want the newest 256 (\"44\" through \"299\")", first, last)
+	}
+}
+
+func TestChannelHealthStore_SnapshotDropsAgedOutPaths(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := t0
+	c := NewChannelHealthStore(time.Minute)
+	c.now = func() time.Time { return now }
+
+	// A deleted channel and a channel in another namespace never record again.
+	c.RecordFailure("/channels/team-a/deleted", healthReasonDispatchFailed, "gone")
+	c.RecordFailure("/channels/team-b/gone", healthReasonDispatchFailed, "gone")
+	now = t0.Add(time.Second)
+	c.RecordFailure("/channels/team-a/at-cutoff", healthReasonDispatchFailed, "edge")
+	now = t0.Add(50 * time.Second)
+	c.RecordSuccess("/channels/team-a/live")
+
+	// The cutoff is t0+1s: an observation exactly at it has aged out.
+	now = t0.Add(61 * time.Second)
+	resp := c.Snapshot("team-a")
+	for _, path := range []string{"/channels/team-a/deleted", "/channels/team-a/at-cutoff"} {
+		if entry, ok := resp.Channels[path]; ok {
+			t.Errorf("response has key %s (state %q), want none once all its observations aged out", path, entry.State)
+		}
+	}
+	live := resp.Channels["/channels/team-a/live"]
+	if live.State != "success" || live.Reason == nil || *live.Reason != healthReasonWebhookReady {
+		t.Errorf("live channel = %+v, want success with reason WebhookReady", live)
+	}
+
+	// Snapshot drops aged-out paths in every namespace, without waiting for
+	// the path to record again.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, path := range []string{"/channels/team-a/deleted", "/channels/team-b/gone", "/channels/team-a/at-cutoff"} {
+		if _, ok := c.observations[path]; ok {
+			t.Errorf("store still holds %s after all its observations aged out", path)
+		}
+	}
+	if _, ok := c.observations["/channels/team-a/live"]; !ok {
+		t.Error("store dropped the live channel")
+	}
+}
+
+func TestChannelHealthStore_RecordDropsAgedOutPaths(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := t0
+	c := NewChannelHealthStore(time.Minute)
+	c.now = func() time.Time { return now }
+	has := func(path string) bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.observations[path]
+		return ok
+	}
+
+	// Nothing calls Snapshot here, as on a manager that does not poll the
+	// gateway: records alone must bound memory.
+	c.RecordFailure("/channels/team-a/old", healthReasonDispatchFailed, "x")
+	now = t0.Add(30 * time.Second)
+	c.RecordFailure("/channels/team-a/recent", healthReasonDispatchFailed, "x")
+	now = t0.Add(61 * time.Second)
+	c.RecordSuccess("/channels/team-a/other")
+	if has("/channels/team-a/old") {
+		t.Error("store still holds /channels/team-a/old after it aged out")
+	}
+	for _, path := range []string{"/channels/team-a/recent", "/channels/team-a/other"} {
+		if !has(path) {
+			t.Errorf("store dropped %s while it is inside the window", path)
+		}
+	}
+
+	// recent has aged out by t0+91s, but less than one window has passed
+	// since the last sweep. The request path sweeps the whole map at most
+	// once per window, not on every record, so recent stays until then.
+	now = t0.Add(91 * time.Second)
+	c.RecordSuccess("/channels/team-a/next")
+	if !has("/channels/team-a/recent") {
+		t.Error("record swept the whole map again within one window")
 	}
 }
