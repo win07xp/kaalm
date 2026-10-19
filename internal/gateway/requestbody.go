@@ -387,6 +387,20 @@ func forEachJSONMember(b []byte, open int, fn func(name string, valueStart, valu
 	}
 }
 
+// repeatsJSONMember reports whether the object that opens at b[open] has
+// more than one member whose unescaped name matches field the way
+// encoding/json matches struct fields. b must already pass json.Valid.
+func repeatsJSONMember(b []byte, open int, field string) bool {
+	count := 0
+	forEachJSONMember(b, open, func(name string, _, _ int) bool {
+		if jsonNameMatches(name, field) {
+			count++
+		}
+		return count < 2
+	})
+	return count > 1
+}
+
 // mayHoldFoldedName reports whether data can hold a member that
 // encoding/json reads as name, which must be lowercase ASCII: a run of
 // bytes that folds to name (an ASCII letter in either case, s also as

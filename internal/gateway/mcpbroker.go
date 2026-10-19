@@ -104,16 +104,10 @@ func repeatedMCPMember(body []byte) error {
 	if err != nil || paramsStart < 0 {
 		return err
 	}
-	var names int
-	forEachJSONMember(body, paramsStart, func(name string, _, _ int) bool {
-		if jsonNameMatches(name, "name") {
-			if names++; names > 1 {
-				err = &duplicateFieldError{name: "params.name"}
-			}
-		}
-		return err == nil
-	})
-	return err
+	if repeatsJSONMember(body, paramsStart, "name") {
+		return &duplicateFieldError{name: "params.name"}
+	}
+	return nil
 }
 
 // isJSONBatch reports whether the body is a JSON-RPC batch array.
@@ -770,18 +764,38 @@ func mayCarryCacheScope(data []byte) bool {
 }
 
 // narrowToolsResult keeps the tools in a tools/list result that filter
-// permits, and marks every member encoding/json reads as cacheScope
-// private: the answer is per caller, so a shared cache must never serve it
-// as the server's list, whichever copy the client's parser keeps. It
-// returns false for a result that is not an object. Kept entries are
-// joined from the upstream bytes; the result is re-encoded, which compacts
-// it as encoding/json does.
+// permits, and returns them as one list under the exact name tools. The
+// source is the member named exactly tools, or, without one, the member
+// encoding/json reads as tools; every other member whose name folds to
+// tools is dropped, and so is an entry that names name more than once in any
+// letter case. Kept entries are relayed as the upstream bytes, and client
+// parsers keep different copies of a repeated member (encoding/json the last
+// case-insensitive match, JavaScript and Python only the exact name), so a
+// second copy could show a client a tool the filter never checked. It also
+// marks every member encoding/json reads as cacheScope private: the answer
+// is per caller, so a shared cache must never serve it as the server's list,
+// whichever copy the client's parser keeps. It returns false for a result
+// that is not an object. The result is re-encoded, which compacts it as
+// encoding/json does.
 func narrowToolsResult(result json.RawMessage, filter *toolFilter) (json.RawMessage, bool) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(result, &m); err != nil || m == nil {
 		return nil, false
 	}
-	tools := m["tools"]
+	tools, ok := m["tools"]
+	if !ok {
+		// The result already decoded as an object, so this cannot fail.
+		var folded struct {
+			Tools json.RawMessage `json:"tools"`
+		}
+		_ = json.Unmarshal(result, &folded)
+		tools = folded.Tools
+	}
+	for k := range m {
+		if jsonNameMatches(k, "tools") {
+			delete(m, k)
+		}
+	}
 	kept := make([]byte, 0, len(tools))
 	kept = append(kept, '[')
 	dec := json.NewDecoder(bytes.NewReader(tools))
@@ -796,13 +810,14 @@ func narrowToolsResult(result json.RawMessage, filter *toolFilter) (json.RawMess
 			if err != nil && !errors.As(err, &typeErr) {
 				break // the result already parsed, so this cannot happen
 			}
-			if err != nil || !filter.permits(t.Name) {
+			entry := bytes.TrimLeft(tools[start:dec.InputOffset()], " \t\r\n,")
+			if err != nil || !filter.permits(t.Name) || (entry[0] == '{' && repeatsJSONMember(entry, 0, "name")) {
 				continue
 			}
 			if len(kept) > 1 {
 				kept = append(kept, ',')
 			}
-			kept = append(kept, bytes.TrimLeft(tools[start:dec.InputOffset()], " \t\r\n,")...)
+			kept = append(kept, entry...)
 		}
 	}
 	m["tools"] = append(kept, ']')
