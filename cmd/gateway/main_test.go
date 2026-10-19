@@ -114,6 +114,12 @@ func TestValidatePlatformBaseURL_HidesUserInfo(t *testing.T) {
 		{"ftp://tok3n@h.example", "tok3n"},
 		{"user:secret@h.example/v1", "secret"},
 		{"https:tok3n@h.example/v1", "tok3n"},
+		// A query or fragment can carry a token too.
+		{"https://h.example/v1?token=s3cret", "s3cret"},
+		{"https://h.example:99999/v1?token=s3cret", "s3cret"},
+		{"https://h.example/v1#s3cret", "s3cret"},
+		{"ftp://h.example/v1#s3cret", "s3cret"},
+		{"h.example/v1?token=s3cret", "s3cret"},
 	} {
 		err := validatePlatformBaseURL(tc.value)
 		if err == nil {

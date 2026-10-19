@@ -46,3 +46,22 @@ func TestParseBaseURL(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBaseURL_HidesQueryAndFragment(t *testing.T) {
+	// The error keeps the scheme, host, port, and path so the operator can
+	// find the value, and replaces the query and fragment text.
+	for _, tc := range []struct{ value, want string }{
+		{"https://h.example:8443/v1?token=s3cret", `"https://h.example:8443/v1?redacted"`},
+		{"https://h.example/v1#s3cret", `"https://h.example/v1#redacted"`},
+		{"https://h.example:99999/v1?token=s3cret#s3cret", `"https://h.example:99999/v1?redacted#redacted"`},
+	} {
+		_, err := ParseBaseURL("some url", tc.value)
+		if err == nil {
+			t.Errorf("ParseBaseURL(%q) must error", tc.value)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("ParseBaseURL(%q) = %q, want it to name %s and not s3cret", tc.value, err, tc.want)
+		}
+	}
+}

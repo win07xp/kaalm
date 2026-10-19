@@ -453,6 +453,11 @@ func TestNewTracing_HidesThePassword(t *testing.T) {
 		{"user:secret@collector:4318", "secret"},
 		{"http:tok3n@collector:4318", "tok3n"},
 		{"tok3n@collector", "tok3n"},
+		// A query or fragment can carry a token too.
+		{"http://collector:4318?token=s3cret", "s3cret"},
+		{"http://collector:99999?token=s3cret", "s3cret"},
+		{"http://collector:4318#s3cret", "s3cret"},
+		{"collector:4318?token=s3cret", "s3cret"},
 	} {
 		t.Run(tc.endpoint, func(t *testing.T) {
 			tr, err := NewTracing(context.Background(), tc.endpoint, 1, nil, "gw-0")
@@ -461,7 +466,7 @@ func TestNewTracing_HidesThePassword(t *testing.T) {
 				t.Fatalf("NewTracing(%q) returned no error", tc.endpoint)
 			}
 			if strings.Contains(err.Error(), tc.secret) {
-				t.Fatalf("error %q echoes the user info", err)
+				t.Fatalf("error %q echoes %q", err, tc.secret)
 			}
 		})
 	}
