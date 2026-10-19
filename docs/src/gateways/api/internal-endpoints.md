@@ -90,7 +90,7 @@ GET /v1/channels/health?namespace=team-support
 | `state` | string | `success` when any in-window observation succeeded; `failure` when the in-window list is non-empty and holds only failures; `empty` when this replica has no in-window observation |
 | `reason` | string or null | For `success`, the most recent success's reason (`WebhookReady`). For `failure`, the most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. `null` when `empty`. |
 | `timestamp` | timestamp or null | The most recent in-window observation behind `state`. `null` when `empty`. |
-| `lastError` | string or null | The most recent in-window failure's message, when there is one. It is set on a `success` record too when a failure also fell inside the window. |
+| `lastError` | string or null | The most recent in-window failure's message, when there is one. It is set on a `success` record too when a failure also fell inside the window. It is at most 1,024 bytes. Longer failure text is cut and ends with `... (truncated)`, so the marker means the gateway shortened the message. |
 
 The third channel in the example shows `state: "empty"`: this replica recorded observations for that path, and all of them have aged out of the window. How the controller turns that into `Unknown` with `reason=NoRecentTraffic`, or keeps the existing condition, is in [Channel health tracking](../user/platform-adapters.md#channel-health-tracking).
 
