@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"net/http"
-	"net/url"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -536,7 +535,7 @@ func parseStartupPolicy(
 		"platform-whatsapp-api-base-url": whatsAppBaseURL,
 	} {
 		if err := validatePlatformBaseURL(value); err != nil {
-			logger.Error("malformed platform base URL", "flag", flagName, "value", value, "error", err)
+			logger.Error("malformed platform base URL", "flag", flagName, "error", err)
 			os.Exit(1)
 		}
 	}
@@ -607,17 +606,14 @@ func validateMaxWakeTimeout(d time.Duration) error {
 }
 
 // validatePlatformBaseURL rejects a malformed platform base URL: reply URLs
-// are built by appending path segments to it, so a bad value would otherwise
-// surface only as delivery failures at runtime.
+// are built by appending path segments to it, so it must be
+// http(s)://host[:port][/path] with no user info, query, or fragment, and a
+// bad value would otherwise surface only as delivery failures at runtime.
+// The error never echoes the value raw, so a credential in it stays out of
+// the log.
 func validatePlatformBaseURL(value string) error {
-	u, err := url.Parse(value)
-	if err != nil {
-		return err
-	}
-	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("need http(s)://host[/path] with no query or fragment, got %q", value)
-	}
-	return nil
+	_, err := gateway.ParseBaseURL("platform base URL", value)
+	return err
 }
 
 // setupTracing wires the OTLP exporter when an endpoint is configured and
