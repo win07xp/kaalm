@@ -233,6 +233,9 @@ func main() {
 	restCfg.Burst = clientBurst
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme: scheme,
+		// Cuts any condition message past the schema's limit on every status
+		// write, so one long message never blocks Ready and observedGeneration.
+		NewClient: controller.NewManagerClient,
 		// The Secret informer covers the operator namespace only, which is
 		// all the controller's RBAC lets it list: provider credentials live
 		// there. A Secret in a user namespace is served by secretSource

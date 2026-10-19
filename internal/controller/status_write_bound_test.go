@@ -17,14 +17,20 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"reflect"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -145,5 +151,149 @@ func TestManagerClient_CutsOversizedConditionMessage(t *testing.T) {
 					len(c.Message), conditionMessageLimit)
 			}
 		})
+	}
+}
+
+// boundFakeClient is a fake client with the status subresource on the six
+// Kaalm kinds, wrapped in boundStatusWrites.
+func boundFakeClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+		WithStatusSubresource(&kaalmv1beta1.Agent{}, &kaalmv1beta1.AgentTask{}, &kaalmv1beta1.AgentChannel{},
+			&kaalmv1beta1.AgentClass{}, &kaalmv1beta1.ModelProvider{}, &kaalmv1beta1.ToolProvider{}).
+		Build()
+	return boundStatusWrites(c)
+}
+
+// expectCut fails unless msg is cut to the condition limit with the marker.
+func expectCut(t *testing.T, msg string) {
+	t.Helper()
+	if len(msg) > conditionMessageLimit || !strings.HasSuffix(msg, "... (truncated)") {
+		t.Fatalf("message is %d bytes, want at most %d ending with the truncation marker", len(msg), conditionMessageLimit)
+	}
+}
+
+func TestBoundStatusWrites_UpdateCutsLongMessageOnly(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"}}
+	c := boundFakeClient(t, agent)
+	agent.Status.Conditions = []metav1.Condition{
+		{Type: "Long", Status: metav1.ConditionTrue, Reason: "R", Message: strings.Repeat("x", 40000)},
+		{Type: "Short", Status: metav1.ConditionTrue, Reason: "R", Message: "short"},
+	}
+	if err := c.Status().Update(context.Background(), agent); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+	var got kaalmv1beta1.Agent
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(agent), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	expectCut(t, apimeta.FindStatusCondition(got.Status.Conditions, "Long").Message)
+	if m := apimeta.FindStatusCondition(got.Status.Conditions, "Short").Message; m != "short" {
+		t.Fatalf("short message = %q, want it unchanged", m)
+	}
+}
+
+func TestBoundStatusWrites_MergePatchCutsLongMessage(t *testing.T) {
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "mp"}}
+	c := boundFakeClient(t, mp)
+	orig := mp.DeepCopy()
+	mp.Status.Conditions = []metav1.Condition{
+		{Type: "Long", Status: metav1.ConditionTrue, Reason: "R", Message: strings.Repeat("x", 40000)},
+	}
+	if err := c.Status().Patch(context.Background(), mp, client.MergeFrom(orig)); err != nil {
+		t.Fatalf("status patch: %v", err)
+	}
+	var got kaalmv1beta1.ModelProvider
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(mp), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	expectCut(t, apimeta.FindStatusCondition(got.Status.Conditions, "Long").Message)
+}
+
+func TestCutConditionMessages_Boundary(t *testing.T) {
+	atLimit := strings.Repeat("x", maxConditionMessageBytes)
+	agent := &kaalmv1beta1.Agent{Status: kaalmv1beta1.AgentStatus{Conditions: []metav1.Condition{
+		{Type: "AtLimit", Message: atLimit},
+		{Type: "OverLimit", Message: atLimit + "x"},
+	}}}
+	cutConditionMessages(context.Background(), agent)
+	if agent.Status.Conditions[0].Message != atLimit {
+		t.Fatalf("a %d-byte message was changed", maxConditionMessageBytes)
+	}
+	expectCut(t, agent.Status.Conditions[1].Message)
+}
+
+// Objects the net cannot inspect pass through unchanged.
+func TestBoundStatusWrites_PassesThroughOtherObjects(t *testing.T) {
+	long := strings.Repeat("x", 40000)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+	c := boundFakeClient(t, pod)
+	pod.Status.Conditions = []corev1.PodCondition{{Type: "Long", Status: corev1.ConditionTrue, Message: long}}
+	if err := c.Status().Update(context.Background(), pod); err != nil {
+		t.Fatalf("pod status update: %v", err)
+	}
+	if pod.Status.Conditions[0].Message != long {
+		t.Fatalf("a Pod condition message was changed")
+	}
+
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion(kaalmv1beta1.GroupVersion.String())
+	u.SetKind("Agent")
+	u.SetName("u")
+	if err := unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Long", "message": long}},
+		"status", "conditions"); err != nil {
+		t.Fatalf("set conditions: %v", err)
+	}
+	cutConditionMessages(context.Background(), u)
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if conds[0].(map[string]any)["message"] != long {
+		t.Fatalf("an unstructured Agent's condition message was changed")
+	}
+}
+
+// The common case, where no message is too long, allocates nothing.
+func TestCutConditionMessages_ShortMessagesAllocateNothing(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{Status: kaalmv1beta1.AgentStatus{Conditions: []metav1.Condition{
+		{Type: "Ready", Message: "agent Pod is ready"},
+		{Type: "PodUpToDate", Message: "agent Pod matches the derived spec"},
+	}}}
+	ctx := context.Background()
+	if n := testing.AllocsPerRun(100, func() { cutConditionMessages(ctx, agent) }); n != 0 {
+		t.Fatalf("cutConditionMessages allocated %v times per run, want 0", n)
+	}
+}
+
+// Every Kaalm kind whose status has conditions is one conditionsOf knows, so
+// a new kind cannot skip the net.
+func TestConditionsOf_CoversEveryKindWithConditions(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add to scheme: %v", err)
+	}
+	condType := reflect.TypeFor[[]metav1.Condition]()
+	checked := 0
+	for kind, typ := range scheme.KnownTypes(kaalmv1beta1.GroupVersion) {
+		status, ok := typ.FieldByName("Status")
+		if !ok || status.Type.Kind() != reflect.Struct {
+			continue
+		}
+		field, ok := status.Type.FieldByName("Conditions")
+		if !ok || field.Type != condType {
+			continue
+		}
+		ptr := reflect.New(typ)
+		ptr.Elem().FieldByName("Status").FieldByName("Conditions").
+			Set(reflect.ValueOf([]metav1.Condition{{Type: "Ready"}}))
+		obj, ok := ptr.Interface().(client.Object)
+		if !ok {
+			t.Fatalf("%s is not a client.Object", kind)
+		}
+		if got := len(conditionsOf(obj)); got != 1 {
+			t.Errorf("conditionsOf(%s) has %d conditions, want 1: add it to conditionsOf", kind, got)
+		}
+		checked++
+	}
+	if checked < 6 {
+		t.Fatalf("checked %d kinds, want at least the six with status conditions", checked)
 	}
 }
