@@ -543,8 +543,7 @@ func (r *AgentTaskReconciler) continueRunning(
 // stores it: status.agentReportedMessage and the Completed and Ready
 // condition messages. The gateway accepts a message of up to 32 KiB (the
 // message and artifact values together), so status keeps a short, readable
-// copy. The completion mailbox keeps the
-// full message for the task's life.
+// copy. The completion mailbox keeps the full message for the task's life.
 const maxAgentMessageBytes = 4096
 
 // driveCompleting settles the terminal phase. The outcome is re-derived from
