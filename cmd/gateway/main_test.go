@@ -72,6 +72,11 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 		"https://discord.com/api/v10",
 		"https://graph.facebook.com/v23.0",
 		"http://mockdiscord.kaalm-e2e.svc:8080",
+		"http://mock-discord.e2e.svc:8080/api/v10",
+		"http://mock-whatsapp.e2e.svc:8080",
+		"https://h.example:443/v1",
+		"http://[::1]:8080/api",
+		"HTTPS://h.example/v1",
 	} {
 		if err := validatePlatformBaseURL(ok); err != nil {
 			t.Errorf("validatePlatformBaseURL(%q) = %v, want nil", ok, err)
@@ -79,15 +84,44 @@ func TestValidatePlatformBaseURL(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"",
-		"discord.com/api",        // no scheme
-		"ftp://discord.com",      // wrong scheme
-		"https://",               // no host
-		"https://h.example?x=1",  // query
-		"https://h.example#frag", // fragment
-		"https://h .example/api", // unparseable
+		"discord.com/api",                   // no scheme
+		"ftp://discord.com",                 // wrong scheme
+		"https://",                          // no host
+		"https://h.example?x=1",             // query
+		"https://h.example#frag",            // fragment
+		"https://h .example/api",            // unparseable
+		"https://graph.facebook.com/v23.0?", // bare query
+		"https://h.example/v1#",             // bare fragment
+		"https://h.example#",                // bare fragment, no path
+		"https://h.example:99999/v1",        // port too high
+		"https://h.example:0/v1",            // port zero
+		"https://user:pw@h.example/v1",      // user info
+		"https://tok3n@h.example/v1",        // user name only, often a token
+		"http://:8080",                      // empty hostname
 	} {
 		if err := validatePlatformBaseURL(bad); err == nil {
 			t.Errorf("validatePlatformBaseURL(%q) must error", bad)
+		}
+	}
+}
+
+func TestValidatePlatformBaseURL_HidesUserInfo(t *testing.T) {
+	for _, tc := range []struct{ value, secret string }{
+		{"https://user:secret@h.example/v1?x=1", "secret"},
+		{"https://user:secret@h.example:99999/v1", "secret"},
+		{"https://user:secret@h.example:abc/v1", "secret"}, // url.Parse failure
+		{"https://tok3n@h.example/v1#", "tok3n"},
+		{"ftp://tok3n@h.example", "tok3n"},
+		{"user:secret@h.example/v1", "secret"},
+		{"https:tok3n@h.example/v1", "tok3n"},
+	} {
+		err := validatePlatformBaseURL(tc.value)
+		if err == nil {
+			t.Errorf("validatePlatformBaseURL(%q) must error", tc.value)
+			continue
+		}
+		if strings.Contains(err.Error(), tc.secret) {
+			t.Errorf("validatePlatformBaseURL(%q) error %q leaks %q", tc.value, err, tc.secret)
 		}
 	}
 }
