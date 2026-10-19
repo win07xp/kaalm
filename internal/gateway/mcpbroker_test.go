@@ -515,6 +515,12 @@ func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
 			if got := string(allowAllToolsList(t, mode, list)); got != list {
 				t.Errorf("reply:\n got %s\nwant %s", got, list)
 			}
+			// Without a cacheScope spelling the answer is not re-encoded, so
+			// the tools rules for a narrowed caller leave it untouched.
+			variants := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"a","Name":"b"}],"Tools":[{"name":"c"}]}}`
+			if got := string(allowAllToolsList(t, mode, variants)); got != variants {
+				t.Errorf("reply:\n got %s\nwant %s", got, variants)
+			}
 			for _, key := range []string{`"cacheScope"`, `"\u0063acheScope"`, `"CacheScope"`, `"cache` + "\u017f" + `cope"`} {
 				upstream := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"a"}],` + key + `:"public"}}`
 				var got struct {
@@ -583,21 +589,37 @@ func TestMCPBroker_ToolsListFilteredRewritesFoldedCacheScope(t *testing.T) {
 	}
 }
 
-// referenceNarrow is the tools/list filter as it was before the single
-// decode: every entry decoded on its own, the kept list re-encoded.
+// referenceNarrow is the tools/list filter built independently of the code
+// under test: every entry decoded on its own, the kept list re-encoded. The
+// source list is the exact tools member, else the one encoding/json reads as
+// tools; every member that folds to tools is dropped, and so is an entry that
+// names name more than once in any letter case.
 func referenceNarrow(result json.RawMessage, filter *toolFilter) json.RawMessage {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(result, &m); err != nil || m == nil {
 		return result
 	}
+	source, ok := m["tools"]
+	if !ok {
+		var folded struct {
+			Tools json.RawMessage `json:"tools"`
+		}
+		_ = json.Unmarshal(result, &folded)
+		source = folded.Tools
+	}
+	for k := range m {
+		if strings.EqualFold(k, "tools") {
+			delete(m, k)
+		}
+	}
 	var tools []json.RawMessage
-	_ = json.Unmarshal(m["tools"], &tools)
+	_ = json.Unmarshal(source, &tools)
 	kept := make([]json.RawMessage, 0, len(tools))
 	for _, raw := range tools {
 		var t struct {
 			Name string `json:"name"`
 		}
-		if json.Unmarshal(raw, &t) == nil && filter.permits(t.Name) {
+		if json.Unmarshal(raw, &t) == nil && filter.permits(t.Name) && referenceNameCount(raw) <= 1 {
 			kept = append(kept, raw)
 		}
 	}
@@ -610,6 +632,30 @@ func referenceNarrow(result json.RawMessage, filter *toolFilter) json.RawMessage
 	}
 	out, _ := json.Marshal(m)
 	return out
+}
+
+// referenceNameCount counts the top-level members of the object raw whose
+// name folds to name; 0 when raw is not an object.
+func referenceNameCount(raw json.RawMessage) int {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return 0
+	}
+	n := 0
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return n
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return n
+		}
+		if k, _ := key.(string); strings.EqualFold(k, "name") {
+			n++
+		}
+	}
+	return n
 }
 
 // The single-decode filter gives the same bytes as the decode-per-entry one.
@@ -625,6 +671,9 @@ func TestNarrowToolsResultMatchesReEncode(t *testing.T) {
 		`{"cacheScope":"public","ttlMs":5,"tools":[{"name":"web_search"}]}`,
 		`{"CacheScope":"public","cache` + "\u017f" + `cope":"public","cacheScope":"public","tools":[]}`,
 		` { "tools" : [ { "name" : "web_search" , "inputSchema" : { "type" : "object" } } ] } `,
+		`{"tools":[{"name":"web_search"}],"Tools":[{"name":"fetch_page"}],"tool` + "\u017f" + `":[]}`,
+		`{"Tools":[{"name":"web_search"},{"name":"fetch_page"}],"TOOLS":[{"name":"x"}]}`,
+		`{"tools":[{"name":"web_search","Name":"fetch_page"},{"name":"web_search"},{"name":"web_search","inputSchema":{"name":1,"Name":2}}]}`,
 	} {
 		for _, f := range filters {
 			want := referenceNarrow(json.RawMessage(result), f)

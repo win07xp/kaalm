@@ -17,6 +17,8 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -126,5 +128,65 @@ func TestRepeatedMCPMember(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: repeated member %q, want %q", tc.body, got, tc.want)
 		}
+	}
+}
+
+// A narrowed tools/list answer carries one filtered tools list under the
+// exact name tools, and no tool entry that names name twice: kept entries
+// are relayed as the upstream bytes, and a client parser that keeps another
+// copy (encoding/json the last case-insensitive match, JavaScript and Python
+// only the exact name) would otherwise see a tool the filter never checked.
+func TestMCPBroker_ToolsListDropsRepeatedMembers(t *testing.T) {
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, tc := range []struct{ name, result, want string }{
+				{"long s variant",
+					`{"tools":[{"name":"web_search"}],"tool` + "\u017f" + `":[{"name":"fetch_page"}]}`,
+					`[{"name":"web_search"}]`},
+				{"upper-case variant first",
+					`{"Tools":[{"name":"fetch_page"}],"tools":[{"name":"web_search"}]}`,
+					`[{"name":"web_search"}]`},
+				{"lone case variant",
+					`{"Tools":[{"name":"web_search"},{"name":"fetch_page"}]}`,
+					`[{"name":"web_search"}]`},
+				{"case-variant name in an entry",
+					`{"tools":[{"name":"admin_reset","Name":"web_search"},{"name":"web_search"}]}`,
+					`[{"name":"web_search"}]`},
+				{"escaped repeat of name",
+					`{"tools":[{"name":"web_search","\u006eame":"web_search"},{"name":"web_search"}]}`,
+					`[{"name":"web_search"}]`},
+				{"lone Name entry",
+					`{"tools":[{"Name":"web_search"},{"Name":"fetch_page"}]}`,
+					`[{"Name":"web_search"}]`},
+				{"nested name",
+					`{"tools":[{"name":"web_search","inputSchema":{"properties":{"name":{},"Name":{}}}}]}`,
+					`[{"name":"web_search","inputSchema":{"properties":{"name":{},"Name":{}}}}]`},
+			} {
+				raw := relayToolsList(t, mode, `{"jsonrpc":"2.0","id":3,"result":`+tc.result+`}`)
+				var reply struct {
+					Result map[string]json.RawMessage `json:"result"`
+				}
+				if err := json.Unmarshal(raw, &reply); err != nil {
+					t.Fatalf("%s: decode %s: %v", tc.name, raw, err)
+				}
+				var keys []string
+				for k := range reply.Result {
+					if strings.EqualFold(k, "tools") {
+						keys = append(keys, k)
+					}
+				}
+				if len(keys) != 1 || keys[0] != "tools" {
+					t.Errorf("%s: tools members %q, want only the exact tools: %s", tc.name, keys, raw)
+				}
+				if got := string(reply.Result["tools"]); got != tc.want {
+					t.Errorf("%s: tools = %s, want %s", tc.name, got, tc.want)
+				}
+				for _, ungranted := range []string{"fetch_page", "admin_reset"} {
+					if bytes.Contains(raw, []byte(ungranted)) {
+						t.Errorf("%s: reply carries %s: %s", tc.name, ungranted, raw)
+					}
+				}
+			}
+		})
 	}
 }
