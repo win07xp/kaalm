@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -418,5 +419,20 @@ func TestClassTaskEgress(t *testing.T) {
 	class.Spec.Network.Egress.AllowedHosts[0] = "evil.example.com"
 	if got.AllowedCIDRs[0] != "10.0.0.0/8" || got.AllowedHosts[0] != "a.example.com" {
 		t.Errorf("record = %+v, changed with the class", got)
+	}
+}
+
+// An artifact name has no length limit in the completion mailbox or the
+// schema. The validation message quotes it bounded.
+func TestValidateArtifactNames_LongNamesQuotedInPart(t *testing.T) {
+	long := strings.Repeat("a", 40000)
+	undeclared := completionPayload{Status: "failure", Artifacts: map[string]string{long: "x"}}
+	if msg := validateArtifactNames(undeclared, nil); !strings.Contains(msg, "(first 256 of 40000 bytes)") {
+		t.Errorf("undeclared: message is %d bytes and does not quote the name in part", len(msg))
+	}
+	missing := completionPayload{Status: "success"}
+	declared := []kaalmv1beta1.AgentTaskArtifact{{Name: long}}
+	if msg := validateArtifactNames(missing, declared); !strings.Contains(msg, "(first 256 of 40000 bytes)") {
+		t.Errorf("missing: message is %d bytes and does not quote the name in part", len(msg))
 	}
 }

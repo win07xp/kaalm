@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,7 +64,7 @@ func TestResolveProviderCredential(t *testing.T) {
 	}{
 		{name: "missing Secret", endpoint: endpoint,
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    "Secret " + testOperatorNamespace + "/cred not found"},
+			wantMsg:    `Secret "` + testOperatorNamespace + `/cred" not found`},
 		{name: "unlabeled, unannotated, no key", endpoint: endpoint,
 			secret:     providerSecret(testOperatorNamespace, nil, nil, nil),
 			wantReason: kaalmv1beta1.ReasonSecretNotOptedIn, wantMsg: notOptedMsg},
@@ -100,16 +102,16 @@ func TestResolveProviderCredential(t *testing.T) {
 		{name: "approved, key missing", endpoint: endpoint,
 			secret:     providerSecret(testOperatorNamespace, optedIn, approved, nil),
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    `key "token" missing or empty in Secret ` + testOperatorNamespace + "/cred"},
+			wantMsg:    `key "token" missing or empty in Secret "` + testOperatorNamespace + `/cred"`},
 		{name: "approved, key empty", endpoint: endpoint,
 			secret: providerSecret(testOperatorNamespace, optedIn, approved,
 				map[string][]byte{"token": {}}),
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    `key "token" missing or empty in Secret ` + testOperatorNamespace + "/cred"},
+			wantMsg:    `key "token" missing or empty in Secret "` + testOperatorNamespace + `/cred"`},
 		{name: "labeled, approved Secret in another namespace", endpoint: endpoint,
 			secret:     providerSecret("tenant", optedIn, approved, token),
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    "Secret " + testOperatorNamespace + "/cred not found"},
+			wantMsg:    `Secret "` + testOperatorNamespace + `/cred" not found`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -130,4 +132,62 @@ func TestResolveProviderCredential(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Secret name, a key, and spec.endpoint have no length limit in the schema.
+// Each message quotes the value bounded, and a read error is cut.
+func TestResolveProviderCredential_LongValuesBounded(t *testing.T) {
+	long := strings.Repeat("a", 40000)
+	optedIn := map[string]string{kaalmv1beta1.LabelProviderCredential: "true"}
+	approved := map[string]string{kaalmv1beta1.AnnotationProviderHosts: "api.example.com"}
+	token := map[string][]byte{"token": []byte("sk-test")}
+	named := func(name string, labels, annotations map[string]string) *corev1.Secret {
+		s := providerSecret(testOperatorNamespace, labels, annotations, token)
+		s.Name = name
+		return s
+	}
+	const endpoint = "https://api.example.com"
+	noHost := "https:///" + strings.Repeat("p", 40000-len("https:///"))
+	cases := []struct {
+		name     string
+		secret   *corev1.Secret
+		endpoint string
+		ref      kaalmv1beta1.SecretKeyReference
+		wantLen  int
+	}{
+		{name: "missing Secret", endpoint: endpoint,
+			ref:     kaalmv1beta1.SecretKeyReference{Name: long, Key: "token"},
+			wantLen: len(testOperatorNamespace) + 1 + len(long)},
+		{name: "unlabeled Secret", endpoint: endpoint, secret: named(long, nil, nil),
+			ref: kaalmv1beta1.SecretKeyReference{Name: long, Key: "token"}, wantLen: len(long)},
+		{name: "endpoint with no hostname", endpoint: noHost, secret: named("cred", optedIn, approved),
+			ref: kaalmv1beta1.SecretKeyReference{Name: "cred", Key: "token"}, wantLen: len(noHost)},
+		{name: "unapproved host", endpoint: "https://" + long, secret: named("cred", optedIn, approved),
+			ref: kaalmv1beta1.SecretKeyReference{Name: "cred", Key: "token"}, wantLen: len(long)},
+		{name: "key missing", endpoint: endpoint, secret: named("cred", optedIn, approved),
+			ref: kaalmv1beta1.SecretKeyReference{Name: "cred", Key: long}, wantLen: len(long)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := fake.NewClientBuilder().WithScheme(testScheme(t))
+			if c.secret != nil {
+				b = b.WithObjects(c.secret)
+			}
+			_, reason, msg := resolveProviderCredential(context.Background(), b.Build(), testOperatorNamespace,
+				c.endpoint, c.ref)
+			want := fmt.Sprintf("(first 256 of %d bytes)", c.wantLen)
+			if !strings.Contains(msg, want) || len(msg) >= 2048 {
+				t.Fatalf("reason %s: message is %d bytes and lacks %q", reason, len(msg), want)
+			}
+		})
+	}
+
+	t.Run("read error", func(t *testing.T) {
+		reader := errReader{err: errors.New(long)}
+		_, _, msg := resolveProviderCredential(context.Background(), reader, testOperatorNamespace, endpoint,
+			kaalmv1beta1.SecretKeyReference{Name: "cred", Key: "token"})
+		if len(msg) > 1024 || !strings.HasSuffix(msg, "... (truncated)") {
+			t.Fatalf("message is %d bytes, want at most 1024 ending with the truncation marker", len(msg))
+		}
+	})
 }

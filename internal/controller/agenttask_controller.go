@@ -179,7 +179,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, types.NamespacedName{Name: task.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
-				fmt.Sprintf("AgentClass %q does not exist", task.Spec.AgentClassRef.Name))
+				fmt.Sprintf("AgentClass %s does not exist", quotedEntry(task.Spec.AgentClassRef.Name)))
 		}
 		return ctrl.Result{}, err
 	}
@@ -219,7 +219,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				types.NamespacedName{Namespace: task.Namespace, Name: ref.Name}, &sec)
 			if apierrors.IsNotFound(err) {
 				if err := r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonImagePullSecretMissing,
-					fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, task.Namespace)); err != nil {
+					fmt.Sprintf("imagePullSecret %s missing in namespace %q", quotedEntry(ref.Name), task.Namespace)); err != nil {
 					return ctrl.Result{}, err
 				}
 				return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
@@ -388,7 +388,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		}
 		switch cs.State.Waiting.Reason {
 		case "InvalidImageName", "ErrImageNeverPull":
-			return ctrl.Result{}, r.failOrRetry(ctx, task, cs.State.Waiting.Reason, cs.State.Waiting.Message)
+			return ctrl.Result{}, r.failOrRetry(ctx, task, cs.State.Waiting.Reason, cutDetail(cs.State.Waiting.Message))
 		}
 	}
 	if time.Since(pod.CreationTimestamp.Time) > r.deadline(task) {
@@ -541,10 +541,9 @@ func (r *AgentTaskReconciler) continueRunning(
 
 // maxAgentMessageBytes bounds the agent's completion message where the task
 // stores it: status.agentReportedMessage and the Completed and Ready
-// condition messages. The gateway accepts a completion body of up to 1 MiB,
-// and a condition message is capped at 32768 characters by its schema, so an
-// unbounded copy could fail every status write and the task would never
-// settle. The completion mailbox keeps the full message for the task's life.
+// condition messages. The gateway accepts a message of up to 32 KiB (the
+// message and artifact values together), so status keeps a short, readable
+// copy. The completion mailbox keeps the full message for the task's life.
 const maxAgentMessageBytes = 4096
 
 // driveCompleting settles the terminal phase. The outcome is re-derived from

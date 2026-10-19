@@ -21,9 +21,12 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // The gateway accepts a completion body of up to 1 MiB, and a condition
@@ -89,4 +92,74 @@ func TestTask_LongImageStillFails(t *testing.T) {
 	})
 	expectTaskFailedBounded(t, "t-long-image", kaalmv1beta1.ReasonClassConstraintViolation,
 		fmt.Sprintf("(first 256 of %d bytes) does not match", len(image)))
+}
+
+// expectTaskReadyMessage waits until the task's Ready condition has reason and
+// a message that holds want.
+func expectTaskReadyMessage(t *testing.T, name, reason, want string) {
+	t.Helper()
+	eventually(t, func() error {
+		var task kaalmv1beta1.AgentTask
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
+			return err
+		}
+		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Reason != reason {
+			return fmt.Errorf("Ready = %+v, want reason %s", c, reason)
+		}
+		if !strings.Contains(c.Message, want) {
+			return fmt.Errorf("Ready message (%d bytes) does not hold %q", len(c.Message), want)
+		}
+		return nil
+	})
+}
+
+// spec.agentClassRef.name has no length limit in the schema. The message
+// quotes it bounded.
+func TestTask_LongClassRefQuotedInPart(t *testing.T) {
+	mkTask(t, "t-long-classref", strings.Repeat("c", 40000), nil)
+	expectTaskReadyMessage(t, "t-long-classref", kaalmv1beta1.ReasonInvalidReference,
+		"AgentClass \"")
+	expectTaskReadyMessage(t, "t-long-classref", kaalmv1beta1.ReasonInvalidReference,
+		"(first 256 of 40000 bytes) does not exist")
+}
+
+func TestTask_LongImagePullSecretQuotedInPart(t *testing.T) {
+	mkWorkloadClass(t, "tc-long-pull", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: strings.Repeat("s", 40000)}}
+	})
+	mkTask(t, "t-long-pull", "tc-long-pull", nil)
+	expectTaskReadyMessage(t, "t-long-pull", kaalmv1beta1.ReasonImagePullSecretMissing,
+		"(first 256 of 40000 bytes) missing")
+}
+
+// The kubelet's waiting message has no length limit, and for InvalidImageName
+// it names the image. The settled message copies it cut at the Event note
+// limit.
+func TestTask_LongInvalidImageMessageCut(t *testing.T) {
+	mkWorkloadClass(t, "tc-long-badimg", nil)
+	mkTask(t, "t-long-badimg", "tc-long-badimg", nil)
+	eventually(t, func() error { return markCertReadyErr("t-long-badimg") })
+	eventually(t, func() error {
+		if taskPod(t, "t-long-badimg") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	pod := taskPod(t, "t-long-badimg")
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "agent",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason: "InvalidImageName", Message: strings.Repeat("m", 40000),
+		}},
+	}}
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-long-badimg", kaalmv1beta1.TaskFailed)
+	c := condition(getTask(t, "t-long-badimg").Status.Conditions, kaalmv1beta1.ConditionCompleted)
+	if c == nil || len(c.Message) > eventrec.MaxNoteBytes || !strings.HasSuffix(c.Message, "... (truncated)") {
+		t.Fatalf("Completed = %+v, want a message of at most %d bytes ending with the truncation marker",
+			c != nil, eventrec.MaxNoteBytes)
+	}
 }

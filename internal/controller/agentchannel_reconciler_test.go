@@ -2201,3 +2201,26 @@ func TestPruneAsyncConfigMaps_ListsThroughChannelIndex(t *testing.T) {
 		}
 	}
 }
+
+// The gateway's failure text has no length limit. PlatformConnected copies it
+// cut at the Event note limit.
+func TestReduceChannelHealth_LongFailureCut(t *testing.T) {
+	r := &AgentChannelReconciler{Health: fakeChannelHealth{
+		total: 1,
+		reachable: []ReplicaChannelHealth{{
+			Channels: map[string]ChannelHealthState{chTestPath: {
+				State:     healthStateFailure,
+				Reason:    strptr("Timeout"),
+				LastError: strptr(strings.Repeat("e", 40000)),
+				Timestamp: strptr("2026-01-01T00:00:00Z"),
+			}},
+		}},
+	}}
+	ch := newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	c := platformCond(ch)
+	if c == nil || len(c.Message) > 1024 || !strings.HasSuffix(c.Message, "... (truncated)") {
+		t.Fatalf("PlatformConnected = %v, want a message of at most 1024 bytes ending with the truncation marker",
+			c != nil)
+	}
+}

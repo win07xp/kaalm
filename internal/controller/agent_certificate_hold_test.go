@@ -422,7 +422,7 @@ func TestConvergePod_CertHeldKeepsDriftedPodWithoutSlot(t *testing.T) {
 	}
 	cond := podUpToDate(agent)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != kaalmv1beta1.ReasonCertificateNotReady ||
-		!strings.Contains(cond.Message, "legacy-tls-0f1e2d3c") || !strings.Contains(cond.Message, "mounts legacy-tls;") {
+		!strings.Contains(cond.Message, "legacy-tls-0f1e2d3c") || !strings.Contains(cond.Message, `mounts "legacy-tls";`) {
 		t.Errorf("PodUpToDate = %+v, want False CertificateNotReady naming both Secrets", cond)
 	}
 	if agent.Status.Phase != kaalmv1beta1.AgentRunning {

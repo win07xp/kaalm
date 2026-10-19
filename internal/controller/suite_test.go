@@ -301,6 +301,9 @@ func runSuite(m *testing.M) int {
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
+		// The production manager client: status writes cut an oversized
+		// condition message.
+		NewClient: NewManagerClient,
 		// The production manager strips managedFields from its cache; tests
 		// run on objects of the same shape.
 		// The AgentClass and Agent transforms add the cacheLag hook.
