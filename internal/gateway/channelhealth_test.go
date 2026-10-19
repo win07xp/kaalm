@@ -121,3 +121,20 @@ func TestChannelHealthStore_CutsLongFailureText(t *testing.T) {
 		}
 	})
 }
+
+func TestChannelHealthStore_KeepsNewest256(t *testing.T) {
+	c := NewChannelHealthStore(0)
+	path := "/channels/team-a/hot"
+	for i := range 300 {
+		c.RecordFailure(path, healthReasonDispatchFailed, fmt.Sprint(i))
+	}
+	c.mu.Lock()
+	list := c.observations[path]
+	c.mu.Unlock()
+	if len(list) != 256 {
+		t.Fatalf("kept %d observations, want 256", len(list))
+	}
+	if first, last := list[0].lastError, list[len(list)-1].lastError; first != "44" || last != "299" {
+		t.Fatalf("kept %q through %q, want the newest 256 (\"44\" through \"299\")", first, last)
+	}
+}
