@@ -87,6 +87,8 @@ The gateway keeps per-channel delivery health in memory, per replica, from inbou
 
 Each replica keeps the in-window observations per registered channel path, at most the newest 256, each `{ result: success | failure, reason, timestamp, lastError? }`. Each `lastError` is cut to 1,024 bytes, so a replica's memory per channel stays bounded whatever an error or a platform reply contains ([the `lastError` field](../api/internal-endpoints.md#get-v1channelshealth)).
 
+A replica keeps a path's entry only while at least one of its observations is inside the window. Once all have aged out, the entry is dropped, so a replica's memory follows the channels with recent traffic, and a deleted or renamed channel leaves nothing behind.
+
 | Reason | Result | Recorded when |
 |---|---|---|
 | `WebhookReady` | success | `POST /v1/message` returned `2xx`, on any channel type |
@@ -104,7 +106,7 @@ From its list, each replica reports one state per channel:
 |---|---|---|
 | `success` | at least one in-window success | the newest success's reason and timestamp, plus the newest failure's `lastError` if any |
 | `failure` | in-window observations exist and all are failures | the newest failure's reason, `lastError`, and timestamp |
-| `empty` | no in-window observations | nothing |
+| `empty` | no in-window observations | no key for the path in the response |
 
 Each response also carries `replicaStartedAt`. A replica younger than the window has not been alive long enough to observe a full one, so its `empty` is not evidence that the channel is silent, only that this replica cannot prove silence. The controller treats it the way the [activity API](activation-and-activity.md#activity-tracking-api) treats a young replica.
 

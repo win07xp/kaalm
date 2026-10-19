@@ -37,7 +37,9 @@ const (
 )
 
 // ChannelHealthStore keeps per-channel-path delivery observations in memory,
-// per replica, over a rolling window. No etcd writes per request. See
+// per replica, over a rolling window. No etcd writes per request. A path's
+// entry is dropped once all its observations age out of the window, so memory
+// and the health response follow the channels with recent traffic. See
 // docs/src/gateways/user/platform-adapters.md.
 type ChannelHealthStore struct {
 	window    time.Duration
@@ -46,6 +48,7 @@ type ChannelHealthStore struct {
 
 	mu           sync.Mutex
 	observations map[string][]healthObservation // key: channel path
+	lastPrune    time.Time                      // last whole-map sweep, by record or Snapshot
 }
 
 // maxChannelObservations is how many observations the store keeps per
@@ -86,8 +89,14 @@ func (c *ChannelHealthStore) RecordFailure(path, reason, lastError string) {
 func (c *ChannelHealthStore) record(path string, obs healthObservation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.now()
+	// Sweep at most once per window, so memory stays bounded when nothing
+	// polls Snapshot without walking the whole map on every request.
+	if now.Sub(c.lastPrune) >= c.window {
+		c.pruneLocked(now)
+	}
 	list := c.observations[path]
-	cutoff := c.now().Add(-c.window)
+	cutoff := now.Add(-c.window)
 	kept := list[:0]
 	for _, o := range list {
 		if o.at.After(cutoff) {
@@ -102,9 +111,34 @@ func (c *ChannelHealthStore) record(path string, obs healthObservation) {
 	c.observations[path] = append(kept, obs)
 }
 
+// pruneLocked drops every path whose observations have all aged out of the
+// window. A deleted or renamed channel never records again, so its entry has
+// to be dropped by age, not by its own next record. Callers hold c.mu.
+func (c *ChannelHealthStore) pruneLocked(now time.Time) {
+	cutoff := now.Add(-c.window)
+	for path, list := range c.observations {
+		if !inWindow(list, cutoff) {
+			delete(c.observations, path)
+		}
+	}
+	c.lastPrune = now
+}
+
+// inWindow reports whether any observation is after cutoff, the same test
+// Snapshot uses. Lists are appended roughly in time order, so the walk from
+// the end usually stops at the last element.
+func inWindow(list []healthObservation, cutoff time.Time) bool {
+	for i := len(list) - 1; i >= 0; i-- {
+		if list[i].at.After(cutoff) {
+			return true
+		}
+	}
+	return false
+}
+
 // channelHealthEntry is the per-channel wire shape.
 type channelHealthEntry struct {
-	State     string  `json:"state"` // success | failure | empty
+	State     string  `json:"state"` // success | failure; a path with no in-window observation has no key
 	Reason    *string `json:"reason"`
 	Timestamp *string `json:"timestamp"`
 	LastError *string `json:"lastError"`
@@ -126,8 +160,10 @@ func (c *ChannelHealthStore) Snapshot(namespace string) channelHealthResponse {
 		ReplicaStartedAt: c.startedAt,
 		Channels:         map[string]channelHealthEntry{},
 	}
+	now := c.now()
+	c.pruneLocked(now)
 	prefix := "/channels/" + namespace + "/"
-	cutoff := c.now().Add(-c.window)
+	cutoff := now.Add(-c.window)
 	for path, list := range c.observations {
 		if !strings.HasPrefix(path, prefix) {
 			continue
@@ -146,7 +182,7 @@ func (c *ChannelHealthStore) Snapshot(namespace string) channelHealthResponse {
 				lastFailure = o
 			}
 		}
-		entry := channelHealthEntry{State: "empty"}
+		var entry channelHealthEntry
 		switch {
 		case lastSuccess != nil:
 			ts := lastSuccess.at.UTC().Format(time.RFC3339)
@@ -155,7 +191,7 @@ func (c *ChannelHealthStore) Snapshot(namespace string) channelHealthResponse {
 				le := lastFailure.lastError
 				entry.LastError = &le
 			}
-		case lastFailure != nil:
+		default: // pruneLocked left only paths with an in-window observation
 			ts := lastFailure.at.UTC().Format(time.RFC3339)
 			le := lastFailure.lastError
 			entry = channelHealthEntry{State: "failure", Reason: &lastFailure.reason, Timestamp: &ts, LastError: &le}

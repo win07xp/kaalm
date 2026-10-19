@@ -71,12 +71,6 @@ GET /v1/channels/health?namespace=team-support
       "reason": "WebhookAuthFailed",
       "timestamp": "2026-04-29T12:46:02Z",
       "lastError": "webhook auth validation failed: 401 Unauthorized"
-    },
-    "/channels/team-support/quiet-channel": {
-      "state": "empty",
-      "reason": null,
-      "timestamp": null,
-      "lastError": null
     }
   }
 }
@@ -85,14 +79,14 @@ GET /v1/channels/health?namespace=team-support
 | Field | Type | Description |
 |---|---|---|
 | `windowSeconds` | int | The rolling window this replica observes, from the Helm value `gateway.channelHealthWindow` (default `5m`, reported as `300`). |
-| `replicaStartedAt` | timestamp | When this replica started. The controller uses it to tell "no in-window traffic" from "the replica has not been up for a full window" when `state` is `empty`. |
-| `channels` | map | Keys are the channel paths this replica has recorded an observation for since it started; values are per-channel records as observed by this replica. The controller reads a path with no key as `empty`. |
-| `state` | string | `success` when any in-window observation succeeded; `failure` when the in-window list is non-empty and holds only failures; `empty` when this replica has no in-window observation |
-| `reason` | string or null | For `success`, the most recent success's reason (`WebhookReady`). For `failure`, the most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. `null` when `empty`. |
-| `timestamp` | timestamp or null | The most recent in-window observation behind `state`. `null` when `empty`. |
+| `replicaStartedAt` | timestamp | When this replica started. The controller uses it to tell "no in-window traffic" from "the replica has not been up for a full window" when a channel has no key. |
+| `channels` | map | Keys are the channel paths with at least one observation inside the window; values are per-channel records as observed by this replica. A path drops out once all its observations age out, so a deleted or renamed channel stops appearing. The controller reads a path with no key as no in-window traffic. |
+| `state` | string | `success` when any in-window observation succeeded; `failure` when every in-window observation failed |
+| `reason` | string | For `success`, the most recent success's reason (`WebhookReady`). For `failure`, the most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. |
+| `timestamp` | timestamp | The most recent in-window observation behind `state`. |
 | `lastError` | string or null | The most recent in-window failure's message, when there is one. It is set on a `success` record too when a failure also fell inside the window. It is at most 1,024 bytes. Longer failure text is cut and ends with `... (truncated)`, so the marker means the gateway shortened the message. |
 
-The third channel in the example shows `state: "empty"`: this replica recorded observations for that path, and all of them have aged out of the window. How the controller turns that into `Unknown` with `reason=NoRecentTraffic`, or keeps the existing condition, is in [Channel health tracking](../user/platform-adapters.md#channel-health-tracking).
+A channel with no in-window observation has no key. How the controller reduces that is in [Channel health tracking](../user/platform-adapters.md#channel-health-tracking).
 
 **Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`. Only channels whose path is under `/channels/{namespace}/` for the requested namespace are returned.
 
