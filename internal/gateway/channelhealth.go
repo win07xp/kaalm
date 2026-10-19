@@ -48,6 +48,10 @@ type ChannelHealthStore struct {
 	observations map[string][]healthObservation // key: channel path
 }
 
+// maxChannelObservations is how many observations the store keeps per
+// channel path: the newest ones.
+const maxChannelObservations = 256
+
 type healthObservation struct {
 	success   bool
 	reason    string
@@ -90,9 +94,10 @@ func (c *ChannelHealthStore) record(path string, obs healthObservation) {
 			kept = append(kept, o)
 		}
 	}
-	// Bound the list so a hot channel cannot grow memory without limit.
-	if len(kept) > 256 {
-		kept = kept[len(kept)-256:]
+	// Bound the list so a hot channel cannot grow memory without limit. Trim
+	// before the append, leaving room for the new observation.
+	if len(kept) >= maxChannelObservations {
+		kept = kept[len(kept)-(maxChannelObservations-1):]
 	}
 	c.observations[path] = append(kept, obs)
 }
