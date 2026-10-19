@@ -48,7 +48,7 @@ type ChannelHealthStore struct {
 
 	mu           sync.Mutex
 	observations map[string][]healthObservation // key: channel path
-	lastPrune    time.Time                      // last whole-map sweep by record
+	lastPrune    time.Time                      // last whole-map sweep, by record or Snapshot
 }
 
 // maxChannelObservations is how many observations the store keeps per
