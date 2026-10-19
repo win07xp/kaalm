@@ -182,7 +182,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
 		if err := r.markChannelNotReady(ctx, &channel, statusBefore, kaalmv1beta1.ReasonAgentNotFound,
-			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace)); err != nil {
+			fmt.Sprintf("Agent %s not found in namespace %q", quotedEntry(channel.Spec.AgentRef.Name), channel.Namespace)); err != nil {
 			return ctrl.Result{}, err
 		}
 		// The Agent watch fires once when the Agent is deleted and never
@@ -335,7 +335,7 @@ func (r *AgentChannelReconciler) validateChannel(
 			if other.CreationTimestamp.Before(&channel.CreationTimestamp) ||
 				(other.CreationTimestamp.Equal(&channel.CreationTimestamp) && other.Name < channel.Name) {
 				return kaalmv1beta1.ReasonPathConflict,
-					fmt.Sprintf("path %q is already registered by the older channel %q", path, other.Name)
+					fmt.Sprintf("path %s is already registered by the older channel %q", quotedEntry(path), other.Name)
 			}
 		}
 	}
@@ -580,8 +580,8 @@ func (r *AgentChannelReconciler) readChannelSecrets(
 // notOptedInMessage words a rule 45 failure. It names the Secret and the label
 // only: nothing about the keys of a Secret that did not opt in.
 func notOptedInMessage(name string) string {
-	return fmt.Sprintf("Secret %q does not carry the label %s: %q; a channel may use only Secrets with that label",
-		name, kaalmv1beta1.LabelChannelCredential, kaalmv1beta1.AnnotationTrue)
+	return fmt.Sprintf("Secret %s does not carry the label %s: %q; a channel may use only Secrets with that label",
+		quotedEntry(name), kaalmv1beta1.LabelChannelCredential, kaalmv1beta1.AnnotationTrue)
 }
 
 // validateSecrets reads every referenced Secret once and checks each
@@ -625,15 +625,15 @@ func checkChannelSecrets(channel *kaalmv1beta1.AgentChannel, reads map[string]ch
 		}
 		if host != "" && !kaalmv1beta1.CallbackHostApproved(read.sec.Annotations, host) {
 			return kaalmv1beta1.ReasonCallbackHostNotApproved,
-				fmt.Sprintf("Secret %q does not list the callbackUrl host %q in its %s annotation",
-					ref.Name, host, kaalmv1beta1.AnnotationCallbackHosts)
+				fmt.Sprintf("Secret %s does not list the callbackUrl host %s in its %s annotation",
+					quotedEntry(ref.Name), quotedEntry(host), kaalmv1beta1.AnnotationCallbackHosts)
 		}
 		v, ok := read.sec.Data[ref.Key]
 		if !ok {
-			return missing, fmt.Sprintf("key %q missing in Secret %q", ref.Key, ref.Name)
+			return missing, fmt.Sprintf("key %s missing in Secret %s", quotedEntry(ref.Key), quotedEntry(ref.Name))
 		}
 		if len(v) == 0 {
-			return empty, fmt.Sprintf("key %q is empty in Secret %q", ref.Key, ref.Name)
+			return empty, fmt.Sprintf("key %s is empty in Secret %s", quotedEntry(ref.Key), quotedEntry(ref.Name))
 		}
 		return "", ""
 	}
@@ -721,9 +721,9 @@ const (
 // an apiserver error) is reported as it is.
 func secretReadMessage(err error, name, namespace string) string {
 	if apierrors.IsNotFound(err) {
-		return fmt.Sprintf("Secret %q not found in namespace %q", name, namespace)
+		return fmt.Sprintf("Secret %s not found in namespace %q", quotedEntry(name), namespace)
 	}
-	return fmt.Sprintf("Secret %q in namespace %q is not readable: %v", name, namespace, err)
+	return fmt.Sprintf("Secret %s in namespace %q is not readable: %s", quotedEntry(name), namespace, cutDetail(err.Error()))
 }
 
 // validatePlatformSecret is rules 45 and 40 for one platform channel: the
@@ -746,12 +746,12 @@ func validatePlatformSecret(
 	for _, key := range required {
 		if v, ok := sec.Data[key]; !ok || len(v) == 0 {
 			return kaalmv1beta1.ReasonCredentialsMissing,
-				fmt.Sprintf("key %q missing in Secret %q", key, name)
+				fmt.Sprintf("key %q missing in Secret %s", key, quotedEntry(name))
 		}
 	}
 	if shape != nil {
 		if msg := shape(sec.Data); msg != "" {
-			return kaalmv1beta1.ReasonCredentialsInvalid, fmt.Sprintf("Secret %q: %s", name, msg)
+			return kaalmv1beta1.ReasonCredentialsInvalid, fmt.Sprintf("Secret %s: %s", quotedEntry(name), msg)
 		}
 	}
 	return "", ""
@@ -841,7 +841,7 @@ func (r *AgentChannelReconciler) reduceChannelHealth(ctx context.Context, channe
 	case lastFailure != nil: // rule 2
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = deref(lastFailure.Reason, "DispatchFailed")
-		cond.Message = deref(lastFailure.LastError, "delivery failed")
+		cond.Message = cutDetail(deref(lastFailure.LastError, "delivery failed"))
 	case fullWindow && allEmpty: // rule 3
 		cond.Status = metav1.ConditionUnknown
 		cond.Reason = kaalmv1beta1.ReasonNoRecentTraffic

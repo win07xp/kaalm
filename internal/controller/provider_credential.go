@@ -44,29 +44,29 @@ func resolveProviderCredential(
 	key := types.NamespacedName{Namespace: namespace, Name: ref.Name}
 	if err := c.Get(ctx, key, &sec); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", kaalmv1beta1.ReasonCredentialsMissing, fmt.Sprintf("Secret %s not found", key)
+			return "", kaalmv1beta1.ReasonCredentialsMissing, fmt.Sprintf("Secret %s not found", quotedEntry(key.String()))
 		}
-		return "", kaalmv1beta1.ReasonCredentialsMissing, err.Error()
+		return "", kaalmv1beta1.ReasonCredentialsMissing, cutDetail(err.Error())
 	}
 	if !kaalmv1beta1.ProviderCredentialOptedIn(sec.Labels) {
 		return "", kaalmv1beta1.ReasonSecretNotOptedIn, fmt.Sprintf(
-			"Secret %q does not carry the label %s: %q; a provider may use only Secrets with that label",
-			ref.Name, kaalmv1beta1.LabelProviderCredential, kaalmv1beta1.AnnotationTrue)
+			"Secret %s does not carry the label %s: %q; a provider may use only Secrets with that label",
+			quotedEntry(ref.Name), kaalmv1beta1.LabelProviderCredential, kaalmv1beta1.AnnotationTrue)
 	}
 	host := kaalmv1beta1.EndpointHost(endpoint)
 	if host == "" {
 		return "", kaalmv1beta1.ReasonEndpointHostNotApproved, fmt.Sprintf(
-			"spec.endpoint %q has no hostname that Secret %q could approve", endpoint, ref.Name)
+			"spec.endpoint %s has no hostname that Secret %s could approve", quotedEntry(endpoint), quotedEntry(ref.Name))
 	}
 	if !kaalmv1beta1.ProviderHostApproved(sec.Annotations, host) {
 		return "", kaalmv1beta1.ReasonEndpointHostNotApproved, fmt.Sprintf(
-			"Secret %q does not list the endpoint host %q in its %s annotation",
-			ref.Name, host, kaalmv1beta1.AnnotationProviderHosts)
+			"Secret %s does not list the endpoint host %s in its %s annotation",
+			quotedEntry(ref.Name), quotedEntry(host), kaalmv1beta1.AnnotationProviderHosts)
 	}
 	val, ok := sec.Data[ref.Key]
 	if !ok || len(val) == 0 {
 		return "", kaalmv1beta1.ReasonCredentialsMissing,
-			fmt.Sprintf("key %q missing or empty in Secret %s", ref.Key, key)
+			fmt.Sprintf("key %s missing or empty in Secret %s", quotedEntry(ref.Key), quotedEntry(key.String()))
 	}
 	return string(val), kaalmv1beta1.ReasonCredentialsValid, ""
 }

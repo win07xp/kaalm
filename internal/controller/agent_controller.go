@@ -189,7 +189,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.markAgentNotReady(&agent, kaalmv1beta1.ReasonInvalidReference,
-				fmt.Sprintf("AgentClass %q does not exist", agent.Spec.AgentClassRef.Name))
+				fmt.Sprintf("AgentClass %s does not exist", quotedEntry(agent.Spec.AgentClassRef.Name)))
 			return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 		}
 		return ctrl.Result{}, err
@@ -639,7 +639,7 @@ func (r *AgentReconciler) podCreationBlocked(
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.ExistingClaim}, &pvc)
 		if apierrors.IsNotFound(err) {
 			r.markAgentNotReady(agent, kaalmv1beta1.ReasonExistingClaimNotFound,
-				fmt.Sprintf("existingClaim %q not found in namespace %q", eff.ExistingClaim, agent.Namespace))
+				fmt.Sprintf("existingClaim %s not found in namespace %q", quotedEntry(eff.ExistingClaim), agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
@@ -657,7 +657,7 @@ func (r *AgentReconciler) podCreationBlocked(
 			types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}, &sec)
 		if apierrors.IsNotFound(err) {
 			r.markAgentNotReady(agent, kaalmv1beta1.ReasonImagePullSecretMissing,
-				fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, agent.Namespace))
+				fmt.Sprintf("imagePullSecret %s missing in namespace %q", quotedEntry(ref.Name), agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
@@ -688,7 +688,7 @@ func (r *AgentReconciler) podCreationBlocked(
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.HandlerConfigMap}, &cm)
 		if apierrors.IsNotFound(err) {
 			r.markAgentNotReady(agent, kaalmv1beta1.ReasonHandlerConfigMapNotFound,
-				fmt.Sprintf("handler ConfigMap %q not found in namespace %q", eff.HandlerConfigMap, agent.Namespace))
+				fmt.Sprintf("handler ConfigMap %s not found in namespace %q", quotedEntry(eff.HandlerConfigMap), agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
@@ -830,9 +830,11 @@ func (r *AgentReconciler) enterOrStayDegraded(
 // BudgetExhausted Warning event is emitted, so `kubectl describe agent` shows
 // it. Provider Get errors are tolerated (a missing or unreadable provider is
 // the degrade path's concern, not this one): the condition reflects what could
-// be read.
+// be read. The message names each blocking provider once, in spec order, up
+// to maxListedEntries, and counts the rest. The names are unquoted: each
+// names an existing ModelProvider, so the API bounds it.
 func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *kaalmv1beta1.Agent) {
-	var blocking []string
+	var blocking entryList
 	// related is the blocking provider when exactly one blocks.
 	var related runtime.Object
 	for _, p := range agent.Spec.Providers {
@@ -842,23 +844,24 @@ func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *k
 		}
 		for _, u := range mp.Status.BudgetUsage {
 			if u.Namespace == agent.Namespace && u.State == kaalmv1beta1.BudgetStateBlocked {
-				blocking = append(blocking, mp.Name)
+				blocking.add(mp.Name, mp.Name)
 				related = mp.DeepCopy()
 				break
 			}
 		}
 	}
-	if len(blocking) == 0 {
+	if len(blocking.listed) == 0 {
 		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionDegraded)
 		return
 	}
-	msg := fmt.Sprintf("namespace %q budget exhausted on provider %s", agent.Namespace, strings.Join(blocking, ", "))
+	msg := fmt.Sprintf("namespace %q budget exhausted on provider %s", agent.Namespace,
+		strings.Join(blocking.messages("1 more provider, not listed", "%d more providers, not listed"), ", "))
 	// The Warning fires on the transition into the condition only: a
 	// blocked namespace stays blocked until the period resets, and every
 	// pass in between re-reads the same state.
 	if prev := apimeta.FindStatusCondition(agent.Status.Conditions, kaalmv1beta1.ConditionDegraded); prev == nil ||
 		prev.Status != metav1.ConditionTrue || prev.Reason != kaalmv1beta1.ReasonBudgetExhausted {
-		if len(blocking) > 1 {
+		if len(blocking.listed) > 1 || blocking.more > 0 {
 			related = nil
 		}
 		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonBudgetExhausted, kaalmv1beta1.ActionCheckBudget, related, msg)
@@ -1217,7 +1220,7 @@ func (r *AgentReconciler) convergePod(
 			r.setPhase(agent, kaalmv1beta1.AgentFailed,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Reason))
 			ready(false, cs.State.Waiting.Reason,
-				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Message))
+				fmt.Sprintf("container %s: %s", cs.Name, cutDetail(cs.State.Waiting.Message)))
 			return waiting, false, nil
 		}
 	}
@@ -1236,7 +1239,7 @@ func (r *AgentReconciler) convergePod(
 			// when the TLS check compared one.
 			msg := "agent Pod matches the derived spec"
 			if mounted != "" && mounted == tlsSecret {
-				msg += " and mounts the Certificate's TLS Secret " + tlsSecret
+				msg += " and mounts the Certificate's TLS Secret " + quotedEntry(tlsSecret)
 			}
 			r.setPodUpToDate(agent, metav1.ConditionTrue, kaalmv1beta1.ReasonPodCurrent, msg)
 		}
@@ -1257,7 +1260,8 @@ func podDriftCause(pod *corev1.Pod, eff effectiveAgentSpec, tlsSecret string) (c
 	case pod.Annotations[annotationPodSpecHash] != podSpecHash(eff):
 		return "derived Pod spec changed", mounted
 	case mounted != "" && tlsSecret != "" && mounted != tlsSecret:
-		return fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted), mounted
+		return fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s",
+			quotedEntry(tlsSecret), quotedEntry(mounted)), mounted
 	}
 	return "", mounted
 }

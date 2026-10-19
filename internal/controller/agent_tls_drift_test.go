@@ -112,7 +112,7 @@ func TestConvergePod_TLSSecretMismatchReplacesPod(t *testing.T) {
 	found := false
 	for _, ev := range events {
 		if strings.HasPrefix(ev, "Normal SpecDrift ") &&
-			strings.Contains(ev, "legacy-tls-0f1e2d3c") && strings.Contains(ev, "mounts legacy-tls;") {
+			strings.Contains(ev, "legacy-tls-0f1e2d3c") && strings.Contains(ev, `mounts "legacy-tls";`) {
 			found = true
 		}
 	}
@@ -170,7 +170,7 @@ func TestConvergePod_TLSSecretMatchKeepsPod(t *testing.T) {
 		mutate  func(*corev1.Pod)
 		wantMsg string
 	}{
-		{"same Secret", nil, "agent Pod matches the derived spec and mounts the Certificate's TLS Secret legacy-tls"},
+		{"same Secret", nil, `agent Pod matches the derived spec and mounts the Certificate's TLS Secret "legacy-tls"`},
 		{"no TLS volume", func(p *corev1.Pod) {
 			vols := p.Spec.Volumes[:0]
 			for _, v := range p.Spec.Volumes {

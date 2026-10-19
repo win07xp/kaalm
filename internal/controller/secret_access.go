@@ -96,8 +96,9 @@ func envSecretRefs(env []corev1.EnvVar) []corev1.LocalObjectReference {
 // and an unlabeled one read the same, so status never tells a developer
 // whether a Secret name exists, and it names no key or value.
 func envSecretNotUsableMessage(envName, secretName string) string {
-	return fmt.Sprintf("env %q: Secret %q is not usable: a workload may use only a Secret in its namespace "+
-		"that carries the label %s: %q", envName, secretName, kaalmv1beta1.LabelWorkloadSecret, kaalmv1beta1.AnnotationTrue)
+	return fmt.Sprintf("env %s: Secret %s is not usable: a workload may use only a Secret in its namespace "+
+		"that carries the label %s: %q", quotedEntry(envName), quotedEntry(secretName),
+		kaalmv1beta1.LabelWorkloadSecret, kaalmv1beta1.AnnotationTrue)
 }
 
 // checkEnvSecrets enforces rule 48 on a workload's env: every Secret a
@@ -117,7 +118,7 @@ func checkEnvSecrets(
 		}
 		name := e.ValueFrom.SecretKeyRef.Name
 		if name == "" {
-			return kaalmv1beta1.ReasonInvalidReference, fmt.Sprintf("env %q: secretKeyRef names no Secret", e.Name), nil
+			return kaalmv1beta1.ReasonInvalidReference, fmt.Sprintf("env %s: secretKeyRef names no Secret", quotedEntry(e.Name)), nil
 		}
 		if checked[name] {
 			continue

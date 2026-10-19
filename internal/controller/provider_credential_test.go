@@ -64,7 +64,7 @@ func TestResolveProviderCredential(t *testing.T) {
 	}{
 		{name: "missing Secret", endpoint: endpoint,
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    "Secret " + testOperatorNamespace + "/cred not found"},
+			wantMsg:    `Secret "` + testOperatorNamespace + `/cred" not found`},
 		{name: "unlabeled, unannotated, no key", endpoint: endpoint,
 			secret:     providerSecret(testOperatorNamespace, nil, nil, nil),
 			wantReason: kaalmv1beta1.ReasonSecretNotOptedIn, wantMsg: notOptedMsg},
@@ -102,16 +102,16 @@ func TestResolveProviderCredential(t *testing.T) {
 		{name: "approved, key missing", endpoint: endpoint,
 			secret:     providerSecret(testOperatorNamespace, optedIn, approved, nil),
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    `key "token" missing or empty in Secret ` + testOperatorNamespace + "/cred"},
+			wantMsg:    `key "token" missing or empty in Secret "` + testOperatorNamespace + `/cred"`},
 		{name: "approved, key empty", endpoint: endpoint,
 			secret: providerSecret(testOperatorNamespace, optedIn, approved,
 				map[string][]byte{"token": {}}),
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    `key "token" missing or empty in Secret ` + testOperatorNamespace + "/cred"},
+			wantMsg:    `key "token" missing or empty in Secret "` + testOperatorNamespace + `/cred"`},
 		{name: "labeled, approved Secret in another namespace", endpoint: endpoint,
 			secret:     providerSecret("tenant", optedIn, approved, token),
 			wantReason: kaalmv1beta1.ReasonCredentialsMissing,
-			wantMsg:    "Secret " + testOperatorNamespace + "/cred not found"},
+			wantMsg:    `Secret "` + testOperatorNamespace + `/cred" not found`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

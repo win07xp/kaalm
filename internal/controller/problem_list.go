@@ -25,20 +25,31 @@ import (
 	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
-// The helpers here bound the per-entry problem lists the AgentClass,
-// ModelProvider, and ToolProvider reconcilers report on Ready, the lists in
-// the advisory ModelProvider conditions, AgentClass SecurityBaseline, and
-// Agent ProvidersReady, and the rule 38 list of granted tools a ToolProvider's
-// catalog lacks. Each list names up to maxListedEntries distinct entries,
-// each spec value quoted up to maxQuotedEntryBytes, and counts the rest in
-// one message. The Agent and AgentTask class-mismatch messages quote their
-// single image and provider names the same way. In the worst case (%q writes
-// a control byte as four bytes) one list is about 11 KiB, so several lists
-// together can still pass the condition message limit; cutConditionMessage
-// cuts the joined message there.
+// The helpers here bound what a condition message copies. Every
+// spec-supplied or externally supplied value a message names is quoted with
+// quotedEntry, a list of them is built with entryList, and free text copied
+// whole is cut with cutDetail.
+//
+// The per-entry problem lists the AgentClass, ModelProvider, and ToolProvider
+// reconcilers report on Ready, the lists in the advisory ModelProvider
+// conditions, AgentClass SecurityBaseline, Agent ProvidersReady and
+// BudgetExhausted, and the rule 38 list of granted tools a ToolProvider's
+// catalog lacks each name up to maxListedEntries distinct entries, each spec
+// value quoted up to maxQuotedEntryBytes, and count the rest in one message.
+// In the worst case (%q writes a control byte as four bytes) one list is
+// about 11 KiB, so several lists together can still pass the condition
+// message limit; cutConditionMessage cuts the joined message there. The
+// manager client (status_write_bound.go) cuts any message still past the
+// limit, so no message ever fails a status write.
 const (
 	maxQuotedEntryBytes = 256
 	maxListedEntries    = 10
+
+	// maxDetailBytes bounds free text a condition message copies whole: an
+	// API error, a kubelet message, the gateway's failure text. None has a
+	// length limit, so each is cut at the Event note limit, as probe errors
+	// and write rejections are.
+	maxDetailBytes = eventrec.MaxNoteBytes
 
 	// maxConditionMessageBytes is the condition schema's maxLength for
 	// status.conditions[].message. A longer message fails the whole status
@@ -116,4 +127,10 @@ func joinProblems(msgs []string) string {
 // a condition message. A list joined in its own order, not sorted, ends here.
 func cutConditionMessage(s string) string {
 	return eventrec.Truncate(s, maxConditionMessageBytes)
+}
+
+// cutDetail cuts free text a condition message copies whole at
+// maxDetailBytes.
+func cutDetail(s string) string {
+	return eventrec.Truncate(s, maxDetailBytes)
 }

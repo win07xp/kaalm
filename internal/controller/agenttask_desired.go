@@ -465,13 +465,13 @@ func validateArtifactNames(p completionPayload, declared []kaalmv1beta1.AgentTas
 	}
 	for k := range p.Artifacts {
 		if !names[k] {
-			return "undeclared artifact in payload: " + k
+			return "undeclared artifact in payload: " + quotedEntry(k)
 		}
 	}
 	if p.Status == completionStatusSuccess {
 		for _, a := range declared {
 			if _, ok := p.Artifacts[a.Name]; !ok {
-				return "missing declared artifact: " + a.Name
+				return "missing declared artifact: " + quotedEntry(a.Name)
 			}
 		}
 	}
