@@ -44,11 +44,12 @@ import (
 // never list, so an ordinary informer would hang on a forbidden LIST. Each
 // referenced Secret therefore gets its own list-watch whose "list" is a GET
 // wrapped as a one-item list and whose watch is filtered to metadata.name and
-// starts at the API server's most recent version. A read is then a cache hit and a rotation lands on the watch event, which is
-// the contract docs/src/security/credentials.md describes. Without a watcher
-// every read is a live GET through the client's rate limiter, which is what
-// capped every gateway replica at 20 requests per second and
-// throttled the controller's per-minute channel validation.
+// starts at the API server's most recent version. A read is then a cache hit
+// and a rotation lands on the watch event, which is the contract
+// docs/src/security/credentials.md describes. Without a watcher every read is
+// a live GET through the client's rate limiter, which is what capped every
+// gateway replica at 20 requests per second and throttled the controller's
+// per-minute channel validation.
 //
 // An informer whose GET is refused as Forbidden stops: the process may no
 // longer read that Secret, and a later read starts a fresh informer.
@@ -267,8 +268,8 @@ func (w *Watcher) notify(key types.NamespacedName) {
 
 // changeHandler reports changes to the Secret at key. It skips the initial
 // list (and a late handler's replay), relists and watch openings that bring
-// back an unchanged object, and any other object: the API server filters the watch by name,
-// but a fake clientset does not.
+// back an unchanged object, and any other object: the API server filters the
+// watch by name, but a fake clientset does not.
 func (w *Watcher) changeHandler(key types.NamespacedName) cache.ResourceEventHandlerDetailedFuncs {
 	matches := func(obj interface{}) bool {
 		m, err := apimeta.Accessor(obj)
