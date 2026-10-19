@@ -50,6 +50,9 @@ import (
 // capped every gateway replica at 20 requests per second and
 // throttled the controller's per-minute channel validation.
 //
+// An informer whose GET is refused as Forbidden stops: the process may no
+// longer read that Secret, and a later read starts a fresh informer.
+//
 // Subscribers learn when a watched Secret changes, so a caller can act on a
 // change instead of waiting for its next read. A watcher with no subscriber
 // (the gateway's) attaches no handler to its informers.
@@ -66,12 +69,14 @@ type Watcher struct {
 	// Channel Secrets come and go with their channels; the janitor keeps the
 	// watch count bounded by the Secrets still in use.
 	IdleTTL time.Duration
-	// ErrorTTL is how long reads of a Secret whose informer has not synced
-	// return that informer's last failed GET before the next read replaces
-	// it with a fresh informer. 0, the default, retries on every read, which
-	// the controller relies on to retry a Forbidden while a new Role reaches
-	// the authorizer. The informer's own list retry can pick up a grant
-	// sooner.
+	// ErrorTTL is how long reads of a Secret whose informer has not synced,
+	// or whose GET was refused as Forbidden, return that informer's last
+	// failed GET before the next read replaces it with a fresh informer. An
+	// informer whose GET is refused as Forbidden stops at once instead of
+	// retrying on its own, so a Secret the process may no longer read costs
+	// nothing until it is read again. 0, the default, retries on every read,
+	// which the controller relies on to retry a Forbidden while a new Role
+	// reaches the authorizer.
 	ErrorTTL time.Duration
 
 	mu        sync.Mutex
@@ -94,7 +99,17 @@ type secretInformer struct {
 	// failure is the informer's last failed list, or nil when its last list
 	// succeeded or none has finished.
 	failure atomic.Pointer[listFailure]
+	// revoked is set when the informer's GET was refused as Forbidden and
+	// the informer was stopped for it. Reads answer failure until ErrorTTL,
+	// then the next read replaces the entry.
+	revoked atomic.Bool
+	// stopOnce makes halt idempotent: the watch error handler, entryFor's
+	// replacement, the janitor, and shutdown can each stop the same entry.
+	stopOnce sync.Once
 }
+
+// halt stops the informer; later calls do nothing.
+func (e *secretInformer) halt() { e.stopOnce.Do(func() { close(e.stop) }) }
 
 // listFailure is a failed informer GET and when it failed.
 type listFailure struct {
@@ -118,8 +133,9 @@ func New(ctx context.Context, client kubernetes.Interface) *Watcher {
 // Get returns the current Secret from its informer, starting the informer on
 // first use. A failed informer GET is returned as its API error, so the
 // caller sees the same error a direct read would; see ErrorTTL for when the
-// next read tries again. If the informer's GET neither succeeds nor fails
-// within SyncTimeout the read goes live.
+// next read tries again. A read refused as Forbidden is answered from the
+// stopped informer until ErrorTTL, never from its cache. If the informer's
+// GET neither succeeds nor fails within SyncTimeout the read goes live.
 func (w *Watcher) Get(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
 	entry := w.entryFor(namespace, name)
 	synced, err := waitSynced(ctx, entry, w.SyncTimeout)
@@ -149,14 +165,16 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 	key := types.NamespacedName{Namespace: namespace, Name: name}
 	if entry, ok := w.informers[key]; ok {
 		failure := entry.failure.Load()
-		if entry.informer.HasSynced() || failure == nil || time.Since(failure.at) < w.ErrorTTL {
+		revoked := entry.revoked.Load()
+		if (!revoked && (entry.informer.HasSynced() || failure == nil)) ||
+			(failure != nil && time.Since(failure.at) < w.ErrorTTL) {
 			entry.lastUsed = time.Now()
 			return entry
 		}
-		// The informer never synced and its last GET failed ErrorTTL ago:
-		// replace it, so this read issues one fresh GET. Concurrent readers
-		// share the replacement.
-		close(entry.stop)
+		// The informer never synced, or was stopped for a refused GET, and
+		// its last GET failed ErrorTTL ago: replace it, so this read issues
+		// one fresh GET. Concurrent readers share the replacement.
+		entry.halt()
 	}
 	entry := &secretInformer{
 		stop:     make(chan struct{}),
@@ -187,6 +205,8 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 		},
 	}
 	entry.informer = cache.NewSharedInformer(getThenWatch{lw}, &corev1.Secret{}, 0)
+	// A handler set before Run cannot fail.
+	_ = entry.informer.SetWatchErrorHandlerWithContext(stopOnForbidden(entry))
 	if w.hasSubscribers() {
 		// Subscribers live on the watcher, so an informer the janitor
 		// stopped and a later read restarted gets the handler again. A
@@ -214,8 +234,8 @@ func (w *Watcher) Subscribe(fn func(types.NamespacedName)) {
 		if entry.changes != nil {
 			continue
 		}
-		// An error means the informer is stopping; the janitor is about
-		// to drop it.
+		// An error means the informer has stopped: the janitor drops it,
+		// or the next read replaces it.
 		if reg, err := entry.informer.AddEventHandler(w.changeHandler(key)); err == nil {
 			entry.changes = reg
 		}
@@ -281,12 +301,36 @@ func (w *Watcher) changeHandler(key types.NamespacedName) cache.ResourceEventHan
 	}
 }
 
+// stopOnForbidden is the informer's watch error handler. It logs as the
+// default handler does, then stops the informer when its latest GET was
+// refused as Forbidden: the process may no longer read the Secret (its Role
+// was deleted with its channel or workload, or shrank), so retrying until
+// IdleTTL only costs a forbidden GET and a log line per backoff. A refused
+// watch alone is left to the reflector's relist, whose GET decides. It takes
+// no watcher lock: the entry stays in the map for entryFor to replace.
+func stopOnForbidden(entry *secretInformer) cache.WatchErrorHandlerWithContext {
+	return func(ctx context.Context, r *cache.Reflector, err error) {
+		cache.DefaultWatchErrorHandler(ctx, r, err)
+		if f := entry.failure.Load(); f != nil && apierrors.IsForbidden(f.err) {
+			entry.revoked.Store(true)
+			entry.halt()
+		}
+	}
+}
+
 // waitSynced polls HasSynced closely (the standard helper polls at 100 ms,
 // which would tax the very first read) until synced, a failed GET (returned
-// as err), the timeout, or ctx.
+// as err), the timeout, or ctx. A revoked informer answers its refusal even
+// if it had synced, so its stale cache is never served.
 func waitSynced(ctx context.Context, entry *secretInformer, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
-	for !entry.informer.HasSynced() {
+	for {
+		if entry.revoked.Load() {
+			return false, entry.failure.Load().err
+		}
+		if entry.informer.HasSynced() {
+			return true, nil
+		}
 		if failure := entry.failure.Load(); failure != nil {
 			return false, failure.err
 		}
@@ -295,7 +339,6 @@ func waitSynced(ctx context.Context, entry *secretInformer, timeout time.Duratio
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return true, nil
 }
 
 // janitor stops informers idle past IdleTTL and every informer when the
@@ -308,7 +351,7 @@ func (w *Watcher) janitor() {
 		case <-w.ctx.Done():
 			w.mu.Lock()
 			for key, entry := range w.informers {
-				close(entry.stop)
+				entry.halt()
 				delete(w.informers, key)
 			}
 			w.mu.Unlock()
@@ -317,7 +360,7 @@ func (w *Watcher) janitor() {
 			w.mu.Lock()
 			for key, entry := range w.informers {
 				if time.Since(entry.lastUsed) > w.IdleTTL {
-					close(entry.stop)
+					entry.halt()
 					delete(w.informers, key)
 				}
 			}

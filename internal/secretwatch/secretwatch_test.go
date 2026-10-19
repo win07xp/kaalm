@@ -172,9 +172,9 @@ func TestWatcherAnswersAFailedSyncAtOnce(t *testing.T) {
 			t.Fatalf("read %d: err = %v, want Forbidden", i, err)
 		}
 	}
-	// The first list, plus at most one reflector retry.
-	if got := g.gets.Load(); got > 2 {
-		t.Errorf("20 reads of a forbidden Secret cost %d GETs, want at most 2", got)
+	// The first list only: the refused informer stops instead of retrying.
+	if got := g.gets.Load(); got != 1 {
+		t.Errorf("20 reads of a forbidden Secret cost %d GETs, want 1", got)
 	}
 }
 
@@ -631,7 +631,7 @@ func TestWatcherStopsIdleInformers(t *testing.T) {
 	w.mu.Lock()
 	for key, e := range w.informers {
 		if time.Since(e.lastUsed) > w.IdleTTL {
-			close(e.stop)
+			e.halt()
 			delete(w.informers, key)
 		}
 	}
@@ -801,7 +801,7 @@ func TestWatcherNotificationsSurviveIdleEviction(t *testing.T) {
 	eventually(t, func() bool { return watches() == 1 })
 	// Evict by hand, as the janitor does.
 	w.mu.Lock()
-	close(w.informers[key].stop)
+	w.informers[key].halt()
 	delete(w.informers, key)
 	w.mu.Unlock()
 
