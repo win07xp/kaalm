@@ -541,8 +541,9 @@ func (r *AgentTaskReconciler) continueRunning(
 
 // maxAgentMessageBytes bounds the agent's completion message where the task
 // stores it: status.agentReportedMessage and the Completed and Ready
-// condition messages. The gateway accepts a completion body of up to 1 MiB,
-// so status keeps a short, readable copy. The completion mailbox keeps the
+// condition messages. The gateway accepts a message of up to 32 KiB (the
+// message and artifact values together), so status keeps a short, readable
+// copy. The completion mailbox keeps the
 // full message for the task's life.
 const maxAgentMessageBytes = 4096
 
