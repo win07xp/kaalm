@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // Channel health observation reasons.
@@ -69,9 +71,12 @@ func (c *ChannelHealthStore) RecordSuccess(path string) {
 	c.record(path, healthObservation{success: true, reason: healthReasonWebhookReady, at: c.now()})
 }
 
-// RecordFailure notes a failed observation with its reason.
+// RecordFailure notes a failed observation with its reason. The failure text
+// is cut to eventrec.MaxNoteBytes, so a replica's memory and the health
+// response stay bounded whatever text a caller passes (a spec-supplied name,
+// an upstream error, a platform reply).
 func (c *ChannelHealthStore) RecordFailure(path, reason, lastError string) {
-	c.record(path, healthObservation{reason: reason, lastError: lastError, at: c.now()})
+	c.record(path, healthObservation{reason: reason, lastError: eventrec.Truncate(lastError, eventrec.MaxNoteBytes), at: c.now()})
 }
 
 func (c *ChannelHealthStore) record(path string, obs healthObservation) {
