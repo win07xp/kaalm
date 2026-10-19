@@ -404,3 +404,32 @@ func TestEnsureControllerSecretAccess_RoleDeleteRejected(t *testing.T) {
 	err := ensureControllerSecretAccess(ctxT(), c, scheme, owner, role.Name, "kaalm-system", nil)
 	expectWriteRejected(t, err, "deleting", "Role")
 }
+
+// An env var name and a secretKeyRef name have no length limit in the Pod
+// schema. The rule 48 messages quote both bounded.
+func TestCheckEnvSecrets_LongNamesQuotedInPart(t *testing.T) {
+	ctx := context.Background()
+	long := strings.Repeat("e", 40000)
+	envRef := func(envName, secretName string) corev1.EnvVar {
+		return corev1.EnvVar{Name: envName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "k",
+		}}}
+	}
+	notFound := errReader{err: apierrors.NewNotFound(corev1.Resource("secrets"), long)}
+
+	reason, msg, err := checkEnvSecrets(ctx, notFound, "team-a", []corev1.EnvVar{envRef(long, "")})
+	if err != nil || reason != kaalmv1beta1.ReasonInvalidReference ||
+		!strings.Contains(msg, "(first 256 of 40000 bytes)") {
+		t.Errorf("empty name: reason=%q msg is %d bytes err=%v, want InvalidReference quoting the env name in part",
+			reason, len(msg), err)
+	}
+
+	reason, msg, err = checkEnvSecrets(ctx, notFound, "team-a", []corev1.EnvVar{envRef(long, long)})
+	if err != nil || reason != kaalmv1beta1.ReasonSecretNotOptedIn {
+		t.Fatalf("missing Secret: reason=%q err=%v, want SecretNotOptedIn", reason, err)
+	}
+	if n := strings.Count(msg, "(first 256 of 40000 bytes)"); n != 2 || len(msg) >= 1024 {
+		t.Errorf("missing Secret: msg is %d bytes with %d names quoted in part, want under 1024 with 2",
+			len(msg), n)
+	}
+}

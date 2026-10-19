@@ -17,14 +17,19 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
@@ -268,4 +273,78 @@ func TestAgent_BudgetConditionClearsWhenBudgetTurnedOff(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// budgetReconciler builds an AgentReconciler over a fake client holding one
+// ModelProvider per name, each reporting the "team-a" namespace Blocked, and
+// an Agent in team-a whose spec.providers lists refs in order.
+func budgetReconciler(t *testing.T, names, refs []string) (*AgentReconciler, *kaalmv1beta1.Agent) {
+	t.Helper()
+	var objs []client.Object
+	for _, n := range names {
+		objs = append(objs, &kaalmv1beta1.ModelProvider{
+			ObjectMeta: metav1.ObjectMeta{Name: n},
+			Status: kaalmv1beta1.ModelProviderStatus{BudgetUsage: []kaalmv1beta1.ModelProviderBudgetUsage{{
+				Namespace: "team-a", State: kaalmv1beta1.BudgetStateBlocked,
+			}}},
+		})
+	}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "team-a"}}
+	for _, r := range refs {
+		agent.Spec.Providers = append(agent.Spec.Providers,
+			kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: r}})
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	return &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}, agent
+}
+
+// The BudgetExhausted message names each blocking provider once, up to ten,
+// and counts the rest.
+func TestAgent_BudgetExhaustedListsProvidersBounded(t *testing.T) {
+	var names []string
+	for i := range 12 {
+		names = append(names, fmt.Sprintf("p%02d", i))
+	}
+	refs := append([]string{names[0], names[0], names[0]}, names[1:]...)
+	r, agent := budgetReconciler(t, names, refs)
+	r.reconcileBudgetCondition(context.Background(), agent)
+	c := apimeta.FindStatusCondition(agent.Status.Conditions, kaalmv1beta1.ConditionDegraded)
+	if c == nil || c.Reason != kaalmv1beta1.ReasonBudgetExhausted {
+		t.Fatalf("Degraded = %+v, want BudgetExhausted", c)
+	}
+	if n := strings.Count(c.Message, "p00"); n != 1 {
+		t.Errorf("message names p00 %d times, want once: %q", n, c.Message)
+	}
+	for _, n := range names[:10] {
+		if !strings.Contains(c.Message, n) {
+			t.Errorf("message lacks %s: %q", n, c.Message)
+		}
+	}
+	for _, n := range names[10:] {
+		if strings.Contains(c.Message, n) {
+			t.Errorf("message names %s past the first ten: %q", n, c.Message)
+		}
+	}
+	if !strings.HasSuffix(c.Message, "2 more providers, not listed") {
+		t.Errorf("message does not count the rest: %q", c.Message)
+	}
+}
+
+// One provider listed several times is one blocking provider: it is named
+// once, and the event names it as the related object.
+func TestAgent_BudgetExhaustedRepeatedProviderNamedOnce(t *testing.T) {
+	r, agent := budgetReconciler(t, []string{"solo"}, []string{"solo", "solo", "solo"})
+	r.reconcileBudgetCondition(context.Background(), agent)
+	c := apimeta.FindStatusCondition(agent.Status.Conditions, kaalmv1beta1.ConditionDegraded)
+	if c == nil || strings.Count(c.Message, "solo") != 1 {
+		t.Fatalf("Degraded = %+v, want a message naming solo once", c)
+	}
+	evs := r.events.take(agent)
+	if len(evs) != 1 {
+		t.Fatalf("held events = %d, want 1", len(evs))
+	}
+	mp, ok := evs[0].related.(*kaalmv1beta1.ModelProvider)
+	if !ok || mp.Name != "solo" {
+		t.Errorf("related = %#v, want the ModelProvider solo", evs[0].related)
+	}
 }

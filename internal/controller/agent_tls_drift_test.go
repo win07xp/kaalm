@@ -267,3 +267,34 @@ func TestAgent_CertificateSecretNameChangeReplacesPod(t *testing.T) {
 	expectDriftReason(t, "tls-drift", kaalmv1beta1.ReasonPodCurrent)
 	expectAgentPhase(t, "tls-drift", kaalmv1beta1.AgentRunning)
 }
+
+// A Certificate's spec.secretName has no length limit, and anyone who can
+// edit the Certificate sets it. The PodUpToDate messages quote it bounded.
+func TestConvergePod_LongTLSSecretQuotedInPart(t *testing.T) {
+	long := strings.Repeat("s", 40000)
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Annotations: map[string]string{annotationPodSpecHash: podSpecHash(tlsDriftEff)},
+	}}
+	pod.Spec.Volumes = []corev1.Volume{{Name: tlsVolumeName, VolumeSource: corev1.VolumeSource{
+		Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{
+			Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "short-tls"}},
+		}}},
+	}}}
+	cause, _ := podDriftCause(pod, tlsDriftEff, long)
+	if !strings.Contains(cause, "(first 256 of 40000 bytes)") || len(cause) >= 1024 {
+		t.Errorf("drift cause is %d bytes and does not quote the Secret name in part", len(cause))
+	}
+
+	agent := tlsDriftAgent()
+	c := slotClient(t, agent)
+	mkReadyPod(t, c, agent, tlsDriftEff, long, nil)
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+	if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff, long, false); err != nil {
+		t.Fatalf("convergePod: %v", err)
+	}
+	if cond := podUpToDate(agent); cond == nil || cond.Reason != kaalmv1beta1.ReasonPodCurrent ||
+		!strings.Contains(cond.Message, "(first 256 of 40000 bytes)") {
+		t.Errorf("PodUpToDate = %v, want PodCurrent quoting the Secret name in part", cond != nil)
+	}
+}
