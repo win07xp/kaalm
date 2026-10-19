@@ -103,6 +103,8 @@ The checks in step 3, in the order the broker runs them. The workload grant, cla
 
 The broker checks the values it decodes but forwards the caller's bytes unchanged. A tool server whose JSON parser keeps a different copy of a repeated member (the first instead of the last, or only the exact-case name) would run a method or tool the broker never checked. Go's `encoding/json` matches member names case-insensitively, so a case variant is a second copy.
 
+The same holds for the response. A narrowed `tools/list` answer carries one tools list, under the exact name `tools`. The broker drops every other member whose name differs from `tools` only in letter case. It also drops a tool entry that names `name` more than once, ignoring letter case, as the Single message check does for `params.name`. The broker relays each kept entry's bytes, and client parsers keep different copies of a repeated member: Go's `encoding/json` the last case-insensitive match, JavaScript and Python only the exact name. Without this rule, a second copy could show the model a tool the caller is not granted.
+
 Every denial fires before the credential is read, so a rejected call never touches the Secret and never dials the tool server. After the checks the broker reads the credential, forwards, and relays. Step 7 narrows a `tools/list` answer to what the caller may call, and step 8 wraps a legacy session id so that only its owner can resume it.
 
 ### Transport
