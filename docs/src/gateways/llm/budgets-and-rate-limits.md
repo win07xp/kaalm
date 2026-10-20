@@ -17,7 +17,7 @@ Five data movements make up the exchange. The first four run in every replica; t
 | Seed | replica | Startup, once | Starts its in-memory counter from `_canonical` |
 | Count | replica | Every LLM call | Adds the call's cost to its in-memory counter |
 | Publish | replica | Every 10s, immediately on settle inside the hard-mode boundary region, and once when the replica stops | Writes its own key. The 10s publish is skipped when the key already holds the same partial, so spend that has not changed costs no write |
-| Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired`. The tick reads every budget and agent-spend ConfigMap with one labeled list per replica, so its cost does not grow with the number of budgeted providers |
+| Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired`. The tick reads every budget and agent-spend ConfigMap with one labeled list per replica, so a provider with no ConfigMap, or one whose spend has not changed, costs no request of its own. A ConfigMap that changed since the list, such as after a peer's publish, is read again live instead of folded from the older listed copy |
 | Reduce | reconciler | Every reconcile pass, including a pass where the provider fails a check. Passes are event-driven plus timed requeues ([ModelProviderReconciler Timing](../../controller/reconcilers/modelprovider.md#timing)) | Writes `_retired`, `_canonical`, `_previous`, and `status.budgetUsage` from every key |
 
 ![Sequence diagram of the replica side of the exchange. At startup a replica reads _canonical to seed its counter. On every LLM call it increments the in-memory counter. Every 10 seconds each replica server-side-applies its own key. On every ConfigMap watch event a replica folds its peers' partials plus _retired into its enforcement view.](../../diagrams/budget-exchange-publish.svg)
@@ -42,9 +42,11 @@ The ConfigMap holds four kinds of key:
 
 ### The spend label
 
-Both `kaalm-budget-{providerName}` and `kaalm-agentspend-{providerName}` carry the label `kaalm.io/spend`, with the value `budget` or `agent-spend`. `kubectl get configmap -n kaalm-system -l kaalm.io/spend` lists every spend ConfigMap. The replica's tick uses the same selector for its list.
+`kaalm-budget-{providerName}` and `kaalm-agentspend-{providerName}` carry the label `kaalm.io/spend`, with the value `budget` or `agent-spend`. `kubectl get configmap -n kaalm-system -l kaalm.io/spend` lists the ones that have it. The replica's tick uses the same selector for its list.
 
-Every writer sets the label: each replica's apply, and the reducer when it is missing. A ConfigMap without the label is still read by name, so a ConfigMap that lost it never drops out of the enforcement view, and it gains the label on its next write.
+Every writer sets the label: each replica's apply, and the reducer when it is missing. A ConfigMap gets the label the next time it is written, so one that is never written again stays unlabeled and the `kubectl` selector does not list it. That is the case for the ConfigMaps of a provider that tracks no budget (`budget.period` is `none`, or `budget` is removed): neither the replicas nor the reducer write them.
+
+For a provider that tracks a budget, a ConfigMap without the label is still read by name, so it never drops out of the enforcement view, and it gains the label on its next write.
 
 ### Cross-replica enforcement view
 
