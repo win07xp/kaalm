@@ -19,6 +19,7 @@ package secretwatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -282,15 +283,19 @@ func currentEntry(w *Watcher, key types.NamespacedName) *secretInformer {
 // revocable is a clientset holding team-a/hook (token "v", resourceVersion
 // 1) whose GETs and watches can be made to fail. Every watch it opens is a
 // fake the test drives: endWatch ends the newest one, as an API server does
-// when a watch times out, and latestWatch delivers events through it.
+// when a watch times out, and latestWatch delivers events through it. After
+// expireOldVersions, a watch from a given resourceVersion ends at once with
+// 410 Expired and is not counted as open.
 type revocable struct {
 	cs      *fake.Clientset
 	gets    atomic.Int32 // every GET
 	refused atomic.Int32 // GETs answered with getErr
+	expired atomic.Int32 // watches answered with 410 Expired
 
 	mu       sync.Mutex
 	getErr   error
 	watchErr error
+	expire   bool
 	watches  []*watch.RaceFreeFakeWatcher
 }
 
@@ -309,11 +314,18 @@ func newRevocable() *revocable {
 		}
 		return false, nil, nil
 	})
-	r.cs.PrependWatchReactor("secrets", func(k8stesting.Action) (bool, watch.Interface, error) {
+	r.cs.PrependWatchReactor("secrets", func(action k8stesting.Action) (bool, watch.Interface, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if r.watchErr != nil {
 			return true, nil, r.watchErr
+		}
+		if rv := action.(k8stesting.WatchAction).GetWatchRestrictions().ResourceVersion; r.expire && rv != "" {
+			r.expired.Add(1)
+			fw := watch.NewRaceFreeFake()
+			st := apierrors.NewResourceExpired(fmt.Sprintf("too old resource version: %s (100)", rv)).ErrStatus
+			fw.Error(&st)
+			return true, fw, nil
 		}
 		fw := watch.NewRaceFreeFake()
 		r.watches = append(r.watches, fw)
@@ -335,6 +347,16 @@ func (r *revocable) fail(getErr, watchErr error) {
 func (r *revocable) revoke() {
 	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("role deleted"))
 	r.fail(forbidden, forbidden)
+}
+
+// expireOldVersions makes later watches from a given resourceVersion end at
+// once with 410 Expired, as the API server answers once its watch cache has
+// dropped that version. A watch from "" (the most recent version) still
+// opens.
+func (r *revocable) expireOldVersions() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.expire = true
 }
 
 func (r *revocable) watchCount() int {
@@ -522,6 +544,98 @@ func TestWatcherKeepsRunningWhenOnlyTheWatchIsForbidden(t *testing.T) {
 	if err != nil || string(sec.Data["token"]) != "v" {
 		t.Fatalf("read: sec = %v, err = %v, want the Secret", sec, err)
 	}
+}
+
+// A Secret whose own resourceVersion the API server no longer holds still
+// gets an open watch that delivers later changes, at the cost of one GET and
+// one watch.
+func TestWatcherOpensAWatchWhenTheSecretVersionHasExpired(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	r.expireOldVersions()
+	w := New(ctx, r.cs)
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil || string(sec.Data["token"]) != "v" {
+		t.Fatalf("first read: sec = %v, err = %v, want token v", sec, err)
+	}
+	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 1 })
+
+	// The API server opens a watch from the most recent version by
+	// replaying the Secret's current state.
+	replay := secretObj("team-a", "hook", "v")
+	replay.ResourceVersion = "1"
+	r.latestWatch().Add(replay)
+	// Longer than the reflector's first retry, so a relist loop would show.
+	rec.expectNone(t, 2*time.Second)
+	if got := r.gets.Load(); got != 1 {
+		t.Errorf("GETs = %d, want 1", got)
+	}
+	if got := r.watchCount(); got != 1 {
+		t.Errorf("open watches = %d, want 1", got)
+	}
+	if r.latestWatch().IsStopped() {
+		t.Fatal("the watch closed")
+	}
+
+	changed := secretObj("team-a", "hook", "v2")
+	changed.ResourceVersion = "2"
+	r.latestWatch().Modify(changed)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 200*time.Millisecond)
+	eventually(t, func() bool {
+		sec, err := w.Get(ctx, "team-a", "hook")
+		return err == nil && string(sec.Data["token"]) == "v2"
+	})
+	if got := r.gets.Load(); got != 1 {
+		t.Errorf("GETs after the change = %d, want 1", got)
+	}
+}
+
+// A running informer whose resumed watch expires lists again once and goes
+// back to an open watch, instead of relisting the same expired version.
+func TestWatcherRecoversWhenItsWatchExpires(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	// A bookmark moves the reflector to version 50; the next watch resumes
+	// from there, and the API server has dropped it by then.
+	r.latestWatch().Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "50"}})
+	r.expireOldVersions()
+	r.endWatch()
+	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 2 })
+	if r.expired.Load() < 1 {
+		t.Fatal("no watch expired, so the test did not exercise the relist")
+	}
+
+	gets := r.gets.Load()
+	replay := secretObj("team-a", "hook", "v")
+	replay.ResourceVersion = "1"
+	r.latestWatch().Add(replay)
+	rec.expectNone(t, 2*time.Second)
+	if got := r.gets.Load(); got != gets {
+		t.Errorf("GETs on the open watch = %d, want %d", got, gets)
+	}
+	if got := r.watchCount(); got != 2 {
+		t.Errorf("open watches = %d, want 2", got)
+	}
+
+	changed := secretObj("team-a", "hook", "v2")
+	changed.ResourceVersion = "2"
+	r.latestWatch().Modify(changed)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 200*time.Millisecond)
 }
 
 // hangingClient blocks the first Secret GET until release is closed, so the

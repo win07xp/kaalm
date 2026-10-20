@@ -43,12 +43,13 @@ import (
 // outright, user-namespace Secrets through resourceNames-scoped grants) but
 // never list, so an ordinary informer would hang on a forbidden LIST. Each
 // referenced Secret therefore gets its own list-watch whose "list" is a GET
-// wrapped as a one-item list and whose watch is filtered to metadata.name. A
-// read is then a cache hit and a rotation lands on the watch event, which is
-// the contract docs/src/security/credentials.md describes. Without a watcher
-// every read is a live GET through the client's rate limiter, which is what
-// capped every gateway replica at 20 requests per second and
-// throttled the controller's per-minute channel validation.
+// wrapped as a one-item list and whose watch is filtered to metadata.name and
+// starts at the API server's most recent version. A read is then a cache hit
+// and a rotation lands on the watch event, which is the contract
+// docs/src/security/credentials.md describes. Without a watcher every read is
+// a live GET through the client's rate limiter, which is what capped every
+// gateway replica at 20 requests per second and throttled the controller's
+// per-minute channel validation.
 //
 // An informer whose GET is refused as Forbidden stops: the process may no
 // longer read that Secret, and a later read starts a fresh informer.
@@ -194,10 +195,16 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 				return nil, err
 			}
 			entry.failure.Store(nil)
-			return &corev1.SecretList{
-				ListMeta: metav1.ListMeta{ResourceVersion: sec.ResourceVersion},
-				Items:    []corev1.Secret{*sec},
-			}, nil
+			// A GET returns the Secret's own resourceVersion, the version
+			// of its last write. Once enough writes anywhere in the cluster
+			// push that version out of the API server's watch cache, a
+			// watch from it ends at once with 410 Expired, and every relist
+			// GETs the same version again. So the list reports no version
+			// and the watch starts at the most recent one. It opens by
+			// replaying the Secret, which the store takes as an update to
+			// the same resourceVersion, as the absent-Secret branch above
+			// already does.
+			return &corev1.SecretList{Items: []corev1.Secret{*sec}}, nil
 		},
 		WatchFuncWithContext: func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 			opts.FieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
@@ -221,7 +228,8 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 // Subscribe registers fn to learn when a watched Secret changes: it is
 // created, updated to a new resourceVersion, or deleted after its watch's
 // first sync. The informer's initial read is never reported, nor is the
-// replay a running informer gives a newly added handler. fn runs on the
+// replay a running informer gives a newly added handler, nor the watch's
+// opening replay of a Secret unchanged since the read. fn runs on the
 // informer's handler goroutine and must not block for long.
 func (w *Watcher) Subscribe(fn func(types.NamespacedName)) {
 	w.subMu.Lock()
@@ -259,9 +267,9 @@ func (w *Watcher) notify(key types.NamespacedName) {
 }
 
 // changeHandler reports changes to the Secret at key. It skips the initial
-// list (and a late handler's replay), relists that bring back an unchanged
-// object, and any other object: the API server filters the watch by name,
-// but a fake clientset does not.
+// list (and a late handler's replay), relists and watch openings that bring
+// back an unchanged object, and any other object: the API server filters the
+// watch by name, but a fake clientset does not.
 func (w *Watcher) changeHandler(key types.NamespacedName) cache.ResourceEventHandlerDetailedFuncs {
 	matches := func(obj interface{}) bool {
 		m, err := apimeta.Accessor(obj)
