@@ -572,7 +572,9 @@ func withRV(cm *corev1.ConfigMap, rv string) *corev1.ConfigMap {
 // watch folds it. The tick must not then fold prov from the older listed
 // copy: the watch cache's resourceVersion differs from the listed one, so
 // the tick reads prov's ConfigMap live. The peer's publish happens during
-// the apply of an earlier provider, aaa.
+// the tick's attempt to apply an earlier provider, aaa. The fake clientset
+// rejects that apply (kaalm-budget-aaa does not exist), but the patch
+// reactor runs first, which is all this test needs.
 func TestBudgetPublisher_TickNeverFoldsAStaleListedCopy(t *testing.T) {
 	first := hardProvider(blockAt100())
 	first.Name = "aaa"
@@ -581,7 +583,7 @@ func TestBudgetPublisher_TickNeverFoldsAStaleListedCopy(t *testing.T) {
 	client := k8sfake.NewSimpleClientset(withRV(spendCM(name, SpendLabelBudget,
 		map[string]string{"gw-1": partialRaw(t, "team-a", "50.00")}), "1"))
 	ledger := NewBudgetLedger()
-	ledger.Add(first, "team-a", "agent/test", 1) // so aaa's partial is applied
+	ledger.Add(first, "team-a", "agent/test", 1) // so the tick attempts aaa's apply
 	done := false
 	client.PrependReactor("patch", "configmaps", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if done || a.(k8stesting.PatchAction).GetName() != BudgetConfigMapName("aaa") {
@@ -601,7 +603,7 @@ func TestBudgetPublisher_TickNeverFoldsAStaleListedCopy(t *testing.T) {
 
 	pub.tick(context.Background())
 	if !done {
-		t.Fatal("aaa's partial was not applied; the peer publish never ran")
+		t.Fatal("the tick never attempted aaa's apply; the peer publish never ran")
 	}
 	foldOK, _, peers, _ := foldState(ledger, "prov")
 	if foldOK.IsZero() || peers["team-a"] != 99 {
