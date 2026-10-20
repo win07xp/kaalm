@@ -515,9 +515,13 @@ func TestWatcherKeepsRunningOnANotFoundSecret(t *testing.T) {
 	if entry.informer.IsStopped() {
 		t.Fatal("a NotFound GET stopped the informer")
 	}
-	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsNotFound(err) {
-		t.Fatalf("read of the deleted Secret: err = %v, want NotFound", err)
-	}
+	// The relist queues the deletion and opens the next watch at once; the
+	// informer drops the Secret from its store a moment later, on its own
+	// goroutine.
+	eventually(t, func() bool {
+		_, err := w.Get(ctx, "team-a", "hook")
+		return apierrors.IsNotFound(err)
+	})
 }
 
 // Only a refused GET stops an informer. A refused watch alone (a get-only
