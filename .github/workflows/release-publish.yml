@@ -183,6 +183,8 @@ jobs:
           else
             args=(--generate-notes)
           fi
+          # A pre-release must not become the repository's latest release.
+          case "$VERSION" in *-*) args+=(--prerelease) ;; esac
           gh release create "$VERSION" --verify-tag \
             --title "Kaalm ${VERSION}" \
             "${args[@]}" \
