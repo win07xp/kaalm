@@ -68,16 +68,43 @@ kaalm-system` shows the new revision as `deployed`.
 
 Kaalm 2.0.0 installs fresh. It has no upgrade path from 1.x or 0.x, so the two
 steps above do not apply to those releases. Moving a cluster means removing
-Kaalm completely and installing 2.0.0. **Removing Kaalm deletes every Kaalm
-resource in the cluster.**
+Kaalm completely, installing 2.0.0, and reapplying your manifests. If you run
+0.x, first upgrade to 1.0.0 with the
+[1.0.0 upgrade guide](https://github.com/win07xp/kaalm/blob/v1.0.0/guide/src/getting-started/upgrading.md),
+because 0.5.0 and earlier serve only `kaalm.io/v1alpha1`, which 2.0.0 does
+not serve. Then follow these steps.
 
-1. Keep a copy of your manifests:
+**Removing Kaalm deletes every Kaalm resource in the cluster. It also deletes
+each agent's PVC and the data on it, unless the agent's class sets
+`persistence.pvcRetention: Retain`. Step 2 sets it.**
+
+1. Keep a copy of your manifests. The selector leaves out the `standard`
+   class that the chart installed, because reapplying it fails with a
+   conflict and 2.0.0 creates its own:
 
    ```bash
-   kubectl get agentchannels,agentclasses,agents,agenttasks,modelproviders,toolproviders -A -o yaml > kaalm-backup.yaml
+   kubectl get agentchannels,agentclasses,agents,agenttasks,modelproviders,toolproviders -A \
+     -l 'app.kubernetes.io/managed-by!=Helm' -o yaml > kaalm-backup.yaml
    ```
 
-2. Delete the Kaalm resources while the old controller is still running. The
+   The copy holds no Secrets, and no step deletes them. If you changed
+   `standard`, the 2.0.0 chart takes `allowedProviders` and
+   `allowedNamespaces` from the `standardAgentClass` values at install. Edit
+   any other field on the new class afterward.
+
+2. For each class that has agents with persistence, including `standard`, set
+   `pvcRetention` to `Retain`:
+
+   ```bash
+   kubectl patch agentclass CLASS_NAME --type merge -p '{"spec":{"persistence":{"pvcRetention":"Retain"}}}'
+   ```
+
+   Replace `CLASS_NAME` with the class name. An agent that you reapply with
+   the same name in the same namespace mounts the kept PVC and its data. The
+   copy from step 1 still holds each class's original policy, so a reapplied
+   class returns to it.
+
+3. Delete the Kaalm resources while the old controller is still running. The
    controller holds a finalizer on each one and removes it when the object is
    deleted, so deleting after the uninstall leaves objects stuck in
    `Terminating`:
@@ -87,13 +114,14 @@ resource in the cluster.**
    kubectl delete agentclasses,modelproviders,toolproviders --all
    ```
 
-3. Uninstall the release:
+4. Uninstall the release. Keep the `kaalm-system` namespace: it holds your
+   provider credential Secrets.
 
    ```bash
    helm uninstall kaalm --namespace kaalm-system
    ```
 
-4. Delete the six CRDs. Helm never deletes the `crds/` directory on uninstall,
+5. Delete the six CRDs. Helm never deletes the `crds/` directory on uninstall,
    so the old CRDs stay behind until you delete them:
 
    ```bash
@@ -101,8 +129,43 @@ resource in the cluster.**
      agenttasks.kaalm.io modelproviders.kaalm.io toolproviders.kaalm.io
    ```
 
-5. Install 2.0.0 as described in [Installation](installation.md), then
-   reapply your manifests.
+6. Edit `kaalm-backup.yaml`:
+
+   - Remove `allowHostNetwork` from `spec.network` in each AgentClass. 2.0.0
+     rejects the field, even when it is `false`.
+   - Remove each finished AgentTask you do not want to run again. Reapplying
+     creates a new object, so the task runs again.
+
+7. Install 2.0.0 as described in [Installation](installation.md). If you reuse
+   values from 1.x, such as the output of `helm get values kaalm --all`,
+   remove `controller.trustClusterCAForProbes` and `controller.probeCA` first.
+   The install fails while either is set. Set `gateway.trustClusterCAForUpstream`
+   and `gateway.upstreamCA` instead, which provider health probes also trust.
+
+8. Opt your Secrets in. 2.0.0 uses a Secret only when it carries the label or
+   annotation for that use, so label the existing Secrets before you reapply:
+
+   - Channel credentials: the `kaalm.io/channel-credential` label, and for a
+     bearer `callbackAuth` token the `kaalm.io/callback-hosts` annotation. See
+     [Keep channel credentials in team namespaces](../platform/managing-access.md#keep-channel-credentials-in-team-namespaces).
+   - ModelProvider and ToolProvider credentials in `kaalm-system`: the
+     `kaalm.io/provider-credential` label and the `kaalm.io/provider-hosts`
+     annotation. See
+     [Label provider Secrets](../platform/managing-access.md#label-provider-secrets).
+   - Secrets that an Agent or AgentTask reads through `spec.env`: the
+     `kaalm.io/workload-secret` label. See
+     [Label the Secrets a workload reads](../platform/managing-access.md#label-the-secrets-a-workload-reads).
+
+9. Reapply your manifests and check that everything is `Ready`:
+
+   ```bash
+   kubectl apply -f kaalm-backup.yaml
+   kubectl get agentchannels,modelproviders,toolproviders,agents -A \
+     -o custom-columns='KIND:.kind,NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,REASON:.status.conditions[?(@.type=="Ready")].reason'
+   ```
+
+   A resource with `SecretNotOptedIn` or `EndpointHostNotApproved` is missing
+   a label or annotation from step 8. See [Troubleshooting](../reference/troubleshooting.md).
 
 ---
 
