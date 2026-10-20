@@ -52,7 +52,11 @@ One case is not a conflict: a per-Agent PVC with no controller at all, which is 
 | `KAALM_HANDLER_PATH` | when `spec.handler` is set | `/opt/kaalm/handler`, where the handler ConfigMap is mounted read-only; absent otherwise, which is how a base image knows to serve its default handler |
 | `KAALM_MEMORY_DIR` | when `spec.persistence.enabled` is set | `spec.persistence.mountPath` (default `/var/agent/memory`), the directory the PVC is mounted at, so the state the runtime writes lands on the volume under any mount path; absent otherwise, and the runtime keeps its own default |
 
-The controller also injects liveness and readiness probes over HTTPS on `GET /livez` and `GET /readyz` at `KAALM_HEALTH_PORT`, the paths pinned by [The runtime contract](../../runtime/contract.md) item 1.
+The controller also injects startup, liveness, and readiness probes over HTTPS at `KAALM_HEALTH_PORT`. The startup and liveness probes use `GET /livez` and the readiness probe uses `GET /readyz`, the paths pinned by [The runtime contract](../../runtime/contract.md) item 1.
+
+The startup probe checks once a second and allows 30 failures. Liveness and readiness do not run until it passes, and the kubelet runs the readiness check as soon as it passes. A new or woken Pod is therefore Ready about a second after the agent starts answering, so a message that triggered a wake does not wait for a readiness period. An agent that does not answer `/livez` within about 30 seconds of its container start is restarted, so an image with a slow start has that long to begin listening.
+
+Liveness and readiness keep the Kubernetes defaults, including a 10-second period. An image that answers `/livez` before it can accept a message waits up to one readiness period for the next check. The startup probe uses `/livez`, not `/readyz`, so a container that is listening but not ready, such as one holding an expired certificate, stays unready and is not restarted.
 
 ## What it checks
 
