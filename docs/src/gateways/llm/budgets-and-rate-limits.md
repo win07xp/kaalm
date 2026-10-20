@@ -16,8 +16,8 @@ Five data movements make up the exchange. The first four run in every replica; t
 |---|---|---|---|
 | Seed | replica | Startup, once | Starts its in-memory counter from `_canonical` |
 | Count | replica | Every LLM call | Adds the call's cost to its in-memory counter |
-| Publish | replica | Every 10s, immediately on settle inside the hard-mode boundary region, and once when the replica stops | Writes its own key |
-| Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired` |
+| Publish | replica | Every 10s, immediately on settle inside the hard-mode boundary region, and once when the replica stops | Writes its own key. The 10s publish is skipped when the key already holds the same partial, so spend that has not changed costs no write |
+| Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired`. The tick reads every budget and agent-spend ConfigMap with one labeled list per replica, so its cost does not grow with the number of budgeted providers |
 | Reduce | reconciler | Every reconcile pass, including a pass where the provider fails a check. Passes are event-driven plus timed requeues ([ModelProviderReconciler Timing](../../controller/reconcilers/modelprovider.md#timing)) | Writes `_retired`, `_canonical`, `_previous`, and `status.budgetUsage` from every key |
 
 ![Sequence diagram of the replica side of the exchange. At startup a replica reads _canonical to seed its counter. On every LLM call it increments the in-memory counter. Every 10 seconds each replica server-side-applies its own key. On every ConfigMap watch event a replica folds its peers' partials plus _retired into its enforcement view.](../../diagrams/budget-exchange-publish.svg)
@@ -39,6 +39,12 @@ The ConfigMap holds four kinds of key:
 - **`_retired`** is written only by the reconciler. When it prunes the current-period key of a replica whose Pod is gone, that key's totals fold into this period-tagged accumulator first, so spend a stopped replica already published is never erased. Replicas fold `_retired` into their enforcement view like a peer partial.
 - **`_canonical`** is written only by the reconciler. It is the durable roll-up, including `_retired`.
 - **`_previous`** is written only by the reconciler. It holds the previous period's spend per source (each replica key and `_retired`) under `sources`, with the archived `period` and the period it was written in (`archivedIn`). Replicas never fold it, because the gateway enforces only the current period. Its value is a nested object, so no parser reads it as a namespace total, including an older replica's.
+
+### The spend label
+
+Both `kaalm-budget-{providerName}` and `kaalm-agentspend-{providerName}` carry the label `kaalm.io/spend`, with the value `budget` or `agent-spend`. `kubectl get configmap -n kaalm-system -l kaalm.io/spend` lists every spend ConfigMap. The replica's tick uses the same selector for its list.
+
+Every writer sets the label: each replica's apply, and the reducer when it is missing. A ConfigMap without the label is still read by name, so a ConfigMap that lost it never drops out of the enforcement view, and it gains the label on its next write.
 
 ### Cross-replica enforcement view
 
@@ -157,7 +163,7 @@ Three limits are part of the guarantee:
 Hard mode fails closed, but only where the guarantee is live. Below the boundary region, apiserver unavailability degrades hard enforcement to exactly the soft bound: counters keep counting, publishes retry on the tick, requests flow. Inside the boundary region, a replica rejects requests with `503 budget_state_unavailable` when either staleness signal trips:
 
 - **Write path**: it holds settled spend older than the staleness window that it has been unable to publish, so peers may be admitting against a stale view of this replica.
-- **Read path**: it has not successfully refreshed its peer view within the staleness window. A dead watch with quiet peers looks like silence, so the exchange tick doubles as the liveness probe.
+- **Read path**: it has not successfully refreshed its peer view within the staleness window. A dead watch with quiet peers looks like silence, so the exchange tick doubles as the liveness probe: its list is a live read from the API server, a successful list refreshes the peer view, and a failed one does not.
 
 The staleness window is not configurable: it is three publish intervals, 30 seconds. Recovery is automatic on the first successful publish or fold. A cap that fails open is not a cap, and a cap that fails closed everywhere is an availability hazard, so the design fails closed only inside the region where the ceiling is at stake.
 

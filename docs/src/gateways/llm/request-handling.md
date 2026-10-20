@@ -56,7 +56,7 @@ Step 7 rewrites the request headers under four rules:
 
 | Rule | Headers | Why |
 |---|---|---|
-| Strip inbound authentication material before injecting the provider credential | `Authorization`, `x-api-key`, `api-key` | Anthropic authenticates with `x-api-key`, while a gateway-only-tier caller arrives with `Authorization: Bearer <SA-token>`. Injecting the Anthropic key alone would leave the bearer token in place and forward a live, audience-bound Kubernetes credential into third-party provider logs. |
+| Strip inbound authentication material before injecting the provider credential | `Authorization`, `x-api-key`, `api-key`, `x-goog-api-key` | Anthropic authenticates with `x-api-key`, while a gateway-only-tier caller arrives with `Authorization: Bearer <SA-token>`. Injecting the Anthropic key alone would leave the bearer token in place and forward a live, audience-bound Kubernetes credential into third-party provider logs. Google's Gemini API reads `x-goog-api-key`, so an agent's own key in that header would otherwise reach the provider next to the injected credential. |
 | Drop hop-by-hop headers (RFC 7230 §6.1) | `Connection`, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-Authorization`, and any header the `Connection` header names | They are scoped to a single connection and must not be relayed across a proxy hop. |
 | Pin `Accept-Encoding` to `identity` | `Accept-Encoding` | Relaying a caller's `Accept-Encoding: gzip` would make every response body opaque to usage extraction and silently zero all spend accounting. |
 | Reset per-hop framing | `Host`, `Content-Length` | The upstream `Host` comes from the provider's endpoint, and the length from the rewritten body. |
