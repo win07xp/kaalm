@@ -206,8 +206,9 @@ type Server struct {
 	// carried no usage, per ModelProvider.
 	usageMissingLog logThrottle
 
-	// AgentResolver resolves agent Service names for delivery dials; nil
-	// means net.DefaultResolver. Tests inject a counting fake.
+	// AgentResolver resolves agent Service names for delivery dials and
+	// the Pod wait; nil means net.DefaultResolver. Tests inject a counting
+	// fake.
 	AgentResolver ipResolver
 
 	// Informers are the caches the request path depends on; /readyz fails
@@ -222,7 +223,8 @@ type Server struct {
 	pipelines sync.WaitGroup
 }
 
-// ipResolver is the slice of net.Resolver the delivery dialer uses.
+// ipResolver is the slice of net.Resolver the delivery dialer and the Pod
+// wait use.
 type ipResolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
