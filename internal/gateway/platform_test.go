@@ -111,7 +111,7 @@ func TestReplyRefused_BoundsEventDetail(t *testing.T) {
 	}
 
 	s.ChannelHealth.mu.Lock()
-	obs := s.ChannelHealth.observations[channel.Spec.Path()]
+	obs := s.ChannelHealth.observations[channel.Spec.Path()].failures
 	s.ChannelHealth.mu.Unlock()
 	if len(obs) != 1 {
 		t.Fatalf("observations = %d, want 1", len(obs))

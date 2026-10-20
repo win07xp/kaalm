@@ -190,12 +190,18 @@ func decodeDiscordResponse(t *testing.T, resp *http.Response) map[string]any {
 func healthReason(h *userHarness, path string) (string, bool) {
 	h.server.ChannelHealth.mu.Lock()
 	defer h.server.ChannelHealth.mu.Unlock()
-	obs := h.server.ChannelHealth.observations[path]
-	if len(obs) == 0 {
+	p := h.server.ChannelHealth.observations[path]
+	if p == nil {
 		return "", false
 	}
-	last := obs[len(obs)-1]
-	return last.reason, last.success
+	// The newest observation: the success, or the last failure after it.
+	if n := len(p.failures); n > 0 && (p.success == nil || p.failures[n-1].at.After(p.success.at)) {
+		return p.failures[n-1].reason, false
+	}
+	if p.success == nil {
+		return "", false
+	}
+	return p.success.reason, true
 }
 
 func TestDiscord_PingPong(t *testing.T) {

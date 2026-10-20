@@ -47,12 +47,21 @@ type ChannelHealthStore struct {
 	now       func() time.Time
 
 	mu           sync.Mutex
-	observations map[string][]healthObservation // key: channel path
-	lastPrune    time.Time                      // last whole-map sweep, by record or Snapshot
+	observations map[string]*pathObservations // key: channel path
+	lastPrune    time.Time                    // last whole-map sweep, by record or Snapshot
 }
 
-// maxChannelObservations is how many observations the store keeps per
-// channel path: the newest ones.
+// pathObservations is one channel path's record. The newest success is kept
+// apart from the failures, so a flood of failures (anyone who knows a path
+// can send badly authenticated requests) never pushes it out.
+type pathObservations struct {
+	success  *healthObservation
+	failures []healthObservation
+}
+
+// maxChannelObservations is how many failures the store keeps per channel
+// path: the newest ones. The newest success is kept apart and does not
+// count.
 const maxChannelObservations = 256
 
 type healthObservation struct {
@@ -69,7 +78,7 @@ func NewChannelHealthStore(window time.Duration) *ChannelHealthStore {
 	}
 	return &ChannelHealthStore{
 		window: window, startedAt: time.Now(), now: time.Now,
-		observations: map[string][]healthObservation{},
+		observations: map[string]*pathObservations{},
 	}
 }
 
@@ -95,10 +104,25 @@ func (c *ChannelHealthStore) record(path string, obs healthObservation) {
 	if now.Sub(c.lastPrune) >= c.window {
 		c.pruneLocked(now)
 	}
-	list := c.observations[path]
+	p := c.observations[path]
+	if p == nil {
+		p = &pathObservations{}
+		c.observations[path] = p
+	}
 	cutoff := now.Add(-c.window)
-	kept := list[:0]
-	for _, o := range list {
+	if p.success != nil && !p.success.at.After(cutoff) {
+		p.success = nil
+	}
+	if obs.success {
+		// Keep the newer one: at is read before the lock, so two successes
+		// can arrive out of order.
+		if p.success == nil || !obs.at.Before(p.success.at) {
+			p.success = &obs
+		}
+		return
+	}
+	kept := p.failures[:0]
+	for _, o := range p.failures {
 		if o.at.After(cutoff) {
 			kept = append(kept, o)
 		}
@@ -108,7 +132,7 @@ func (c *ChannelHealthStore) record(path string, obs healthObservation) {
 	if len(kept) >= maxChannelObservations {
 		kept = kept[len(kept)-(maxChannelObservations-1):]
 	}
-	c.observations[path] = append(kept, obs)
+	p.failures = append(kept, obs)
 }
 
 // pruneLocked drops every path whose observations have all aged out of the
@@ -116,20 +140,23 @@ func (c *ChannelHealthStore) record(path string, obs healthObservation) {
 // to be dropped by age, not by its own next record. Callers hold c.mu.
 func (c *ChannelHealthStore) pruneLocked(now time.Time) {
 	cutoff := now.Add(-c.window)
-	for path, list := range c.observations {
-		if !inWindow(list, cutoff) {
+	for path, p := range c.observations {
+		if !inWindow(p, cutoff) {
 			delete(c.observations, path)
 		}
 	}
 	c.lastPrune = now
 }
 
-// inWindow reports whether any observation is after cutoff, the same test
-// Snapshot uses. Lists are appended roughly in time order, so the walk from
-// the end usually stops at the last element.
-func inWindow(list []healthObservation, cutoff time.Time) bool {
-	for i := len(list) - 1; i >= 0; i-- {
-		if list[i].at.After(cutoff) {
+// inWindow reports whether the success or any failure is after cutoff, the
+// same test Snapshot uses. Failures are appended roughly in time order, so
+// the walk from the end usually stops at the last element.
+func inWindow(p *pathObservations, cutoff time.Time) bool {
+	if p.success != nil && p.success.at.After(cutoff) {
+		return true
+	}
+	for i := len(p.failures) - 1; i >= 0; i-- {
+		if p.failures[i].at.After(cutoff) {
 			return true
 		}
 	}
@@ -164,21 +191,17 @@ func (c *ChannelHealthStore) Snapshot(namespace string) channelHealthResponse {
 	c.pruneLocked(now)
 	prefix := "/channels/" + namespace + "/"
 	cutoff := now.Add(-c.window)
-	for path, list := range c.observations {
+	for path, p := range c.observations {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
 		var lastSuccess, lastFailure *healthObservation
-		for i := range list {
-			o := &list[i]
-			if !o.at.After(cutoff) {
-				continue
-			}
-			if o.success {
-				if lastSuccess == nil || o.at.After(lastSuccess.at) {
-					lastSuccess = o
-				}
-			} else if lastFailure == nil || o.at.After(lastFailure.at) {
+		if p.success != nil && p.success.at.After(cutoff) {
+			lastSuccess = p.success
+		}
+		for i := range p.failures {
+			o := &p.failures[i]
+			if o.at.After(cutoff) && (lastFailure == nil || o.at.After(lastFailure.at)) {
 				lastFailure = o
 			}
 		}
