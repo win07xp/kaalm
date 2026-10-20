@@ -1,0 +1,189 @@
+name: Publish release
+
+# Publishes one release: the multi-arch controller, gateway, console, and
+# agent base images (agent-python, agent-go) and the Helm chart to ghcr, the
+# agentruntime/vX.Y.Z sub-module tag so the Go runtime module resolves at that
+# version, and the GitHub release with the chart attached. The notes come from
+# releases/<version>.md when it exists, and are generated otherwise.
+#
+# Called by release-merge.yml (a merged release PR) and release.yml (a v* tag
+# pushed by hand), with the version and the commit the version tag points at.
+# Every job is safe to rerun. See RELEASING.md.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The release tag, such as v2.1.0 or v2.1.0-rc.1.
+        type: string
+        required: true
+      sha:
+        description: The commit the release tag points at.
+        type: string
+        required: true
+
+permissions:
+  contents: write # create the GitHub release and the sub-module tag
+  packages: write # push images and the chart to ghcr
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  images:
+    runs-on: ubuntu-26.04
+    strategy:
+      matrix:
+        include:
+          - component: controller
+            binary: manager
+            context: .
+            dockerfile: Dockerfile
+          - component: gateway
+            binary: gateway
+            context: .
+            dockerfile: Dockerfile
+          - component: console
+            binary: console
+            context: .
+            dockerfile: Dockerfile
+          - component: agent-python
+            binary: unused # the Python Dockerfile declares but ignores BINARY
+            context: images/agent-python
+            dockerfile: images/agent-python/Dockerfile
+          - component: agent-go
+            binary: unused # compiled in-Dockerfile from the agentruntime module
+            context: .
+            dockerfile: images/agent-go/Dockerfile
+    steps:
+      # The release commit, not the event's default ref: under pull_request
+      # that is refs/pull/N/merge.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      - uses: docker/setup-qemu-action@v4 # arm64 emulation for the cross build
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # value= makes the semver tag resolve outside a tag push, and the
+      # revision label names the release commit instead of github.sha. A
+      # pre-release version never gets the latest tag.
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/kaalm-${{ matrix.component }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.sha }}
+
+      - name: Build and push ${{ matrix.component }}
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          build-args: BINARY=${{ matrix.binary }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+
+  # go get github.com/win07xp/kaalm/agentruntime/v2@vX.Y.Z resolves through the
+  # sub-module tag agentruntime/vX.Y.Z; publish it alongside the release tag.
+  # A tag pushed with GITHUB_TOKEN starts no workflow, and the v* trigger does
+  # not match agentruntime/v* anyway, so this cannot recurse.
+  module-tag:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+      - name: Push the agentruntime sub-module tag
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          tag="agentruntime/${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "tag ${tag} already exists; leaving it as is"
+            exit 0
+          fi
+          git tag "${tag}" "${SHA}"
+          git push origin "refs/tags/${tag}"
+
+  chart:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+
+      - name: Package the chart at the release version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          CHART_VERSION="${VERSION#v}"
+          make chart-sync
+          helm package charts/kaalm --version "$CHART_VERSION" --app-version "$CHART_VERSION" --destination dist
+
+      - name: Push the chart to ghcr as OCI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "$REGISTRY" \
+            --username "${{ github.actor }}" --password-stdin
+          helm push dist/kaalm-*.tgz "oci://${REGISTRY}/${{ github.repository_owner }}/charts"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chart
+          path: dist/kaalm-*.tgz
+
+  release:
+    runs-on: ubuntu-26.04
+    needs: [images, chart]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: chart
+          path: dist
+
+      # A rerun finds the release from the first attempt and attaches the
+      # chart again. --verify-tag stops gh from creating a missing tag at the
+      # default branch head.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "release ${VERSION} already exists; attaching the chart again"
+            gh release upload "$VERSION" dist/kaalm-*.tgz --clobber
+            exit 0
+          fi
+          notes="releases/${VERSION}.md"
+          if [ -s "$notes" ]; then
+            args=(--notes-file "$notes")
+          else
+            args=(--generate-notes)
+          fi
+          gh release create "$VERSION" --verify-tag \
+            --title "Kaalm ${VERSION}" \
+            "${args[@]}" \
+            dist/kaalm-*.tgz

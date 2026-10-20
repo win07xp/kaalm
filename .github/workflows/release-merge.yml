@@ -1,0 +1,110 @@
+name: Release on merge
+
+# Merging a release PR publishes the release. The PR comes from a branch
+# named release/vX.Y.Z (or release/vX.Y.Z-rc.N for a pre-release) and adds
+# the notes as releases/vX.Y.Z.md. The version comes from the branch name.
+#
+# The tag job creates the version tag at the commit the merge put on main,
+# then the publish jobs (release-publish.yml) and the upgrade e2e run in this
+# same run: a tag pushed with GITHUB_TOKEN starts no other workflow, so
+# release.yml does not run for it and nothing publishes twice.
+#
+# Only a branch in this repository releases: a run for a fork's PR gets no
+# write token. A rerun accepts a tag that already points at the merge
+# commit, and fails when the tag points anywhere else. See RELEASING.md.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write # push the version tag
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      # A malformed release branch fails the run instead of skipping the
+      # release without notice.
+      - name: Read the version from the branch name
+        id: version
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          if [[ ! "$HEAD_REF" =~ ^release/(v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$ ]]; then
+            echo "::error::branch ${HEAD_REF} is not release/vX.Y.Z or release/vX.Y.Z-rc.N"
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Check the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ ! -s "releases/${VERSION}.md" ]; then
+            echo "::error::releases/${VERSION}.md is missing or empty; the release PR adds the release notes"
+            exit 1
+          fi
+
+      # The last ls-remote line is the peeled ^{} entry when the tag is
+      # annotated, so it names the commit either way.
+      - name: Tag the merge commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          status=0
+          remote=$(git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" "refs/tags/${VERSION}^{}") || status=$?
+          case "$status" in
+            0)
+              existing=$(tail -n1 <<<"$remote" | cut -f1)
+              if [ "$existing" != "$SHA" ]; then
+                echo "::error::tag ${VERSION} already exists at ${existing}, not at the merge commit ${SHA}"
+                exit 1
+              fi
+              echo "tag ${VERSION} already points at the merge commit ${SHA}"
+              ;;
+            2)
+              git tag "$VERSION" "$SHA"
+              git push origin "refs/tags/${VERSION}"
+              ;;
+            *)
+              echo "::error::git ls-remote failed with status ${status}"
+              exit 1
+              ;;
+          esac
+
+  publish:
+    needs: tag
+    permissions:
+      contents: write # create the GitHub release and the sub-module tag
+      packages: write # push images and the chart to ghcr
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      version: ${{ needs.tag.outputs.version }}
+      sha: ${{ needs.tag.outputs.sha }}
+
+  # Runs next to publish; a failure here does not stop the release.
+  upgrade:
+    needs: tag
+    permissions:
+      contents: read
+    uses: ./.github/workflows/upgrade.yml
+    with:
+      ref: ${{ needs.tag.outputs.sha }}
