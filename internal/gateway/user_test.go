@@ -1175,3 +1175,24 @@ func TestDeliverToAgentWaitsOnceForARefusedConnect(t *testing.T) {
 		t.Errorf("without podWait the schedule took %s; it must not wait", d)
 	}
 }
+
+// A wake that runs out reports the channel as DispatchFailed: the message
+// was accepted and never reached the agent.
+func TestWakeAndDeliver_WakeTimeoutRecordsChannelHealth(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("sync")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = kaalmv1beta1.AgentHibernated
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 80 * time.Millisecond}
+	h.server.Activator = &fakeActivator{}
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if got := errType(t, resp); got != errWakeTimeout {
+		t.Fatalf("error type = %q, want %q", got, errWakeTimeout)
+	}
+	if reason, ok := healthReason(h, "/channels/team-a/support"); ok || reason != healthReasonDispatchFailed {
+		t.Errorf("health = %q ok=%v, want %q", reason, ok, healthReasonDispatchFailed)
+	}
+}
