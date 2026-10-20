@@ -267,3 +267,44 @@ func TestHandleAsyncAccept_PipelineIsPendingUntilDone(t *testing.T) {
 		t.Fatal("the pending count never dropped after the pipeline ended")
 	}
 }
+
+// An async message for an Agent whose Pod is being created is delivered once
+// the Pod is back, not stored as delivery_failed.
+func TestRunAsyncPipeline_DeliversWhenThePodReturns(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"back"}`))
+	})
+	h.seedChannel("async")
+	h.store.agents["team-a/sup"].Status.Phase = kaalmv1beta1.AgentProvisioning
+	startAgentLater(t, h, 300*time.Millisecond)
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("accept = %d", resp.StatusCode)
+	}
+	var accept asyncAcceptResponse
+	_ = decodeJSON(resp, &accept)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		rec, ok, _ := h.async.Get(context.Background(), accept.RequestID)
+		if ok && rec.Payload != nil {
+			var payload struct {
+				Response *struct {
+					Content string `json:"content"`
+				} `json:"response"`
+				Error any `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Error != nil || payload.Response == nil || payload.Response.Content != "back" {
+				t.Fatalf("stored payload = %s, want the agent's reply", rec.Payload)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("payload never stored")
+}

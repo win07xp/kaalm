@@ -697,3 +697,21 @@ func TestDiscordReplyRequests(t *testing.T) {
 		}
 	}
 }
+
+// A platform message sent while the Agent's Pod is being replaced reaches the
+// new Pod, and the chat gets the agent's reply rather than the error text.
+func TestDiscord_PipelineWaitsForTheAgentPod(t *testing.T) {
+	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"back"}`))
+	})
+	startAgentLater(t, h.userHarness, 300*time.Millisecond)
+	h.send(t, discordCommand("123456789012345678", "9", "5", "hi"), nil, "")
+	got := h.fake.next(t)
+	if c, _ := got.Body["content"].(string); c != "back" {
+		t.Errorf("reply = %q, want the agent's content", c)
+	}
+	if reason, ok := healthReason(h.userHarness, h.channel.Spec.Discord.Path); !ok || reason != healthReasonWebhookReady {
+		t.Errorf("health = %q ok=%v, want %q", reason, ok, healthReasonWebhookReady)
+	}
+}

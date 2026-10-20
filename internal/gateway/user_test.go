@@ -997,3 +997,119 @@ func TestWakeAndDeliver_PipelineDeadlineBeforeWakeTimeout(t *testing.T) {
 		t.Errorf("message %q does not name the wakeTimeout it fell short of", err)
 	}
 }
+
+// startAgentLater points agent delivery at a free port where nothing listens
+// yet, then starts the harness agent backend there after delay: the Service
+// of an Agent whose Pod is being replaced or resumed. It returns the port.
+func startAgentLater(t *testing.T, h *userHarness, delay time.Duration) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	h.server.Config.AgentServicePortOverride = int32(port)
+
+	srv := httptest.NewUnstartedServer(h.agentSrv.Config.Handler)
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		time.Sleep(delay)
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Errorf("agent backend could not listen on %d: %v", port, err)
+			return
+		}
+		srv.Listener = ln
+		srv.StartTLS()
+	}()
+	t.Cleanup(func() {
+		<-started
+		srv.Close()
+	})
+	return port
+}
+
+// A message for an Agent whose Pod is being created or resumed waits for the
+// Pod instead of spending its retry schedule against a Service with no
+// endpoints, and does not call the activator: no wake is needed.
+func TestWakeAndDeliver_WaitsForAPendingPod(t *testing.T) {
+	for _, phase := range []kaalmv1beta1.AgentPhase{kaalmv1beta1.AgentProvisioning, kaalmv1beta1.AgentResuming} {
+		t.Run(string(phase), func(t *testing.T) {
+			h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"content":"back"}`))
+			})
+			h.seedChannel("sync")
+			h.store.agents["team-a/sup"].Status.Phase = phase
+			act := &fakeActivator{}
+			h.server.Activator = act
+			startAgentLater(t, h, 300*time.Millisecond)
+
+			resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200 once the Pod is back", resp.StatusCode)
+			}
+			var reply ResponseEnvelope
+			if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil || reply.Content == nil || *reply.Content != "back" {
+				t.Fatalf("reply = %+v err=%v", reply, err)
+			}
+			if n := len(h.agentHits); n != 1 {
+				t.Errorf("agent hits = %d, want 1", n)
+			}
+			if len(act.calls) != 0 {
+				t.Errorf("activator calls = %v, want none", act.calls)
+			}
+		})
+	}
+}
+
+// The cached phase can still read Running after the controller deleted the
+// Pod. A refused connect then starts the Pod wait, and the message reaches the
+// new Pod exactly once.
+func TestWakeAndDeliver_WaitsAfterARefusedConnect(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"back"}`))
+	})
+	h.seedChannel("sync")
+	h.server.Metrics = NewMetrics(prometheus.NewRegistry())
+	startAgentLater(t, h, 300*time.Millisecond)
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 once the Pod is back", resp.StatusCode)
+	}
+	if n := len(h.agentHits); n != 1 {
+		t.Errorf("agent hits = %d, want 1", n)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 1 {
+		t.Errorf("connect attempts = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeOK)); got != 1 {
+		t.Errorf("ok attempts = %v, want 1", got)
+	}
+}
+
+// The sync deadline ends a Pod wait that would otherwise run to wakeTimeout.
+func TestWakeAndDeliver_SyncDeadlineBoundsThePodWait(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("sync")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = kaalmv1beta1.AgentProvisioning
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: time.Hour}
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+	h.server.Config.SyncDeliveryDeadline = 300 * time.Millisecond
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Errorf("status = %d, want 504", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errSyncDeadline {
+		t.Errorf("error type = %q, want %q", got, errSyncDeadline)
+	}
+}
