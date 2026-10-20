@@ -304,7 +304,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 				return ctrl.Result{}, err
 			}
 			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonPodCreateRejected,
-				"Pod create rejected", rejectionMessage(err))
+				"Pod create rejected", err)
 		}
 		r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 		r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
@@ -442,9 +442,11 @@ func (r *AgentTaskReconciler) writeStatusIfChanged(ctx context.Context, task *ka
 // deadline counts from the attempt's first rejection, recorded in status so
 // a controller restart keeps it; past the deadline the attempt fails or
 // retries like a Pod that never became Ready, with a message of what and
-// msg.
+// the rejection. That message is composed whole and cut once, so the Event
+// and the conditions carry the same text.
 func (r *AgentTaskReconciler) createRejected(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, reason, what, msg string,
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, reason, what string,
+	rejection error,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
 	if task.Status.CreateRejectedTime == nil {
@@ -458,10 +460,10 @@ func (r *AgentTaskReconciler) createRejected(
 			task.Status.ClassBounds = classTaskBounds(class)
 		}
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
-			fmt.Sprintf("%s for longer than %s: %s", what, r.deadline(task), msg))
+			cutDetail(fmt.Sprintf("%s for longer than %s: %v", what, r.deadline(task), rejection)))
 	}
 	r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
-	if err := r.markTaskNotReady(ctx, task, reason, msg); err != nil {
+	if err := r.markTaskNotReady(ctx, task, reason, rejectionMessage(rejection)); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
@@ -627,7 +629,10 @@ func (r *AgentTaskReconciler) failOrRetry(
 // partway. The clear-before-reset ordering is load-bearing: resetting the
 // mailbox first would let an in-flight stale write land on the fresh mailbox.
 func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string) error {
-	retrying := fmt.Sprintf("%s; retrying (%d/%d)", msg, task.Status.Retries+1, task.Spec.Completion.BackoffLimit)
+	// The Event note has a size limit: cut msg, not the attempt count, so
+	// the Warning always says which attempt this is.
+	suffix := fmt.Sprintf("; retrying (%d/%d)", task.Status.Retries+1, task.Spec.Completion.BackoffLimit)
+	retrying := eventrec.Truncate(msg, eventrec.MaxNoteBytes-len(suffix)) + suffix
 
 	// Steps 1 and 2 in one status write: the counter moves and the old Pod's
 	// completions are rejected from here on.
@@ -1073,7 +1078,7 @@ func (r *AgentTaskReconciler) childBlocked(
 	if cr, ok := asChildWriteRejected(err); ok {
 		if prePod && task.Status.Phase != kaalmv1beta1.TaskFailed {
 			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonChildWriteRejected,
-				"child write rejected", rejectionMessage(cr))
+				"child write rejected", cr)
 		}
 		if err := r.markTaskNotReady(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, rejectionMessage(cr)); err != nil {
 			return ctrl.Result{}, err

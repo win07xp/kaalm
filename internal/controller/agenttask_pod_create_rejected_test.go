@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
 // A class naming a RuntimeClass the cluster lacks: the API server rejects
@@ -383,4 +384,83 @@ func TestTask_PodCreateRejectedCutsLongDenial(t *testing.T) {
 	if evs := drainEvents(rec); len(evs) != 1 || evs[0] != "Warning "+kaalmv1beta1.ReasonPodCreateRejected+" "+ready.Message {
 		t.Errorf("events = %d, want one PodCreateRejected Warning with the Ready message", len(evs))
 	}
+}
+
+// A Pod create denied with a long text past the provisioning deadline
+// composes "Pod create rejected for longer than <d>: <denial>" and cuts it
+// once. The retry Warning keeps its attempt count whole, and a settled
+// task's Event equals its condition message.
+func TestTask_PodCreateRejectedDeadlineCutsOnce(t *testing.T) {
+	const prefix = `Pod create rejected for longer than 5m0s: pods is forbidden: admission webhook`
+	expectCutOnce := func(t *testing.T, what, msg string) {
+		t.Helper()
+		if len(msg) > eventrec.MaxNoteBytes {
+			t.Errorf("%s is %d bytes, want at most %d", what, len(msg), eventrec.MaxNoteBytes)
+		}
+		if !strings.HasPrefix(msg, prefix) {
+			t.Errorf("%s starts %q, want prefix %q", what, msg[:min(len(msg), len(prefix)+20)], prefix)
+		}
+		if n := strings.Count(msg, "... (truncated)"); n != 1 || !strings.HasSuffix(msg, "... (truncated)") {
+			t.Errorf("%s holds the truncation marker %d times (want once, at the end)", what, n)
+		}
+	}
+	run := func(t *testing.T, backoffLimit int32) (*kaalmv1beta1.AgentTask, []string) {
+		t.Helper()
+		ctx := context.Background()
+		task := restoreTask("long-denial-deadline", kaalmv1beta1.TaskProvisioning, false, kaalmv1beta1.ReasonPodCreateRejected)
+		task.Status.PodName, task.Status.StartTime = "", nil
+		task.Spec.Completion.BackoffLimit = backoffLimit
+		rejected := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+		task.Status.CreateRejectedTime = &rejected
+		c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, readyTaskCert(t, task)).
+			WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*corev1.Pod); ok {
+						return longDenial("pods", obj.GetName())
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			}).Build()
+		rec := events.NewFakeRecorder(16)
+		r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: eventrec.Bounded(rec)}
+		if _, err := r.driveProvisioning(ctx, storedTask(t, c, task), &kaalmv1beta1.AgentClass{},
+			effectiveTaskSpec{Image: "x"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		return storedTask(t, c, task), drainEvents(rec)
+	}
+
+	t.Run("retry", func(t *testing.T) {
+		task, evs := run(t, 1)
+		ready := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ProvisioningDeadlineExceeded" {
+			t.Fatalf("Ready = %+v, want False ProvisioningDeadlineExceeded", ready)
+		}
+		expectCutOnce(t, "Ready message", ready.Message)
+		head := "Warning ProvisioningDeadlineExceeded "
+		if len(evs) != 1 || !strings.HasPrefix(evs[0], head) {
+			t.Fatalf("events = %q, want one ProvisioningDeadlineExceeded Warning", evs)
+		}
+		note := strings.TrimPrefix(evs[0], head)
+		const suffix = "; retrying (1/1)"
+		if len(note) > eventrec.MaxNoteBytes || !strings.HasSuffix(note, suffix) {
+			t.Fatalf("note is %d bytes and ends %q, want at most %d bytes ending %q",
+				len(note), note[max(0, len(note)-40):], eventrec.MaxNoteBytes, suffix)
+		}
+		expectCutOnce(t, "note", strings.TrimSuffix(note, suffix))
+	})
+
+	t.Run("settle", func(t *testing.T) {
+		task, evs := run(t, 0)
+		completed := condition(task.Status.Conditions, kaalmv1beta1.ConditionCompleted)
+		ready := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if completed == nil || ready == nil || completed.Message != ready.Message {
+			t.Fatalf("Completed = %+v, Ready = %+v, want equal messages", completed, ready)
+		}
+		expectCutOnce(t, "Ready message", ready.Message)
+		if want := "Warning ProvisioningDeadlineExceeded " + ready.Message; len(evs) != 1 || evs[0] != want {
+			t.Errorf("events = %d, want one Warning whose note is the Ready message", len(evs))
+		}
+	})
 }
