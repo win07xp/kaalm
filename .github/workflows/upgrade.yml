@@ -6,9 +6,9 @@
 #
 # Deliberately not part of ci.yml: most PRs cannot affect the upgrade path,
 # so this runs only when a PR touches the API, the shipped CRDs, the storage
-# migrator, the spec itself, or this file, plus on every release tag. The
-# release checklist in RELEASING.md also runs make e2e-upgrade locally
-# before tagging.
+# migrator, the spec itself, or this file, plus on every release, which the
+# release workflows call it for. The release checklist in RELEASING.md also
+# runs make e2e-upgrade locally before merging the release PR.
 name: upgrade
 
 on:
@@ -19,8 +19,13 @@ on:
       - "internal/storagemigration/**"
       - "test/upgrade/**"
       - ".github/workflows/upgrade.yml"
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to test; empty means the event's commit.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -34,6 +39,7 @@ jobs:
       # release tag.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - uses: actions/setup-go@v7

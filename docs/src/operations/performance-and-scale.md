@@ -51,7 +51,7 @@ make perf-down                  # delete the cluster
 
 The harness checks one host prerequisite before it starts: `fs.inotify.max_user_instances` of at least 512 and `fs.inotify.max_user_watches` of at least 524288. The k3d nodes share the host kernel, and a few hundred Pods exhaust the defaults with confusing symptoms. It also records the node count, allocatable Pods, and kubelet version without enforcing them; `make perf-up` creates one server and two agents at 250 Pods each, because the kubelet default of 110 caps a fleet long before memory does.
 
-The harness is a local check you run at release time, listed in the [release checklist](https://github.com/win07xp/kaalm/blob/main/RELEASING.md#before-you-tag), not a CI job: its numbers mean something only against the baseline on the same environment, which shared CI runners cannot reproduce.
+The harness is a local check you run at release time, listed in the [release checklist](https://github.com/win07xp/kaalm/blob/main/RELEASING.md#before-you-merge-the-release-pr), not a CI job: its numbers mean something only against the baseline on the same environment, which shared CI runners cannot reproduce.
 
 ## The baseline environment
 

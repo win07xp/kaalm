@@ -90,7 +90,7 @@ make e2e     # full suite on a throwaway k3d cluster
 
 - **Roadmap:** [docs/src/ROADMAP.md](docs/src/ROADMAP.md), which is where the
   project's direction is recorded.
-- **Releasing:** [RELEASING.md](RELEASING.md). It is one tag push.
+- **Releasing:** [RELEASING.md](RELEASING.md). Merging a release PR publishes the release.
 
 ## License
 

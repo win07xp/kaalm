@@ -25,7 +25,7 @@ Coverage is one of three kinds:
   Kata release and a containerd drop-in into the nodes and enlarges the
   nodes' `/dev/shm`.
 
-The e2e column is the acceptance surface: every scenario names the spec that proves it on a cluster, and every spec passes. S1 to S20 and S22 to S25 run in `test/e2e/` (build tag `e2e`) against the locally built chart and images. S21 runs in `test/upgrade/` (build tag `upgrade`, `make e2e-upgrade`), which starts from the previous released chart; its CI workflow runs on release tags and on pull requests that touch the API, the CRDs, the migrator, or the suite itself. The LLM scenarios run against an in-cluster mock provider that speaks both the Anthropic and the OpenAI formats, and the channel scenarios against a mock of each platform's API.
+The e2e column is the acceptance surface: every scenario names the spec that proves it on a cluster, and every spec passes. S1 to S20 and S22 to S25 run in `test/e2e/` (build tag `e2e`) against the locally built chart and images. S21 runs in `test/upgrade/` (build tag `upgrade`, `make e2e-upgrade`), which starts from the previous released chart; its CI workflow runs on every release (the release workflows call it) and on pull requests that touch the API, the CRDs, the migrator, or the suite itself. The LLM scenarios run against an in-cluster mock provider that speaks both the Anthropic and the OpenAI formats, and the channel scenarios against a mock of each platform's API.
 
 | Scenario | e2e spec | Also covered by |
 |---|---|---|
