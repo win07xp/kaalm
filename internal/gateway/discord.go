@@ -385,12 +385,14 @@ func writeDiscordEphemeral(w http.ResponseWriter, text string) {
 	})
 }
 
-// apiBaseURL is the operator-set base URL replies go to.
+// apiBaseURL is the operator-set base URL replies go to, with one trailing
+// slash dropped so the reply path appended to it has no doubled slash.
 func (d *discordAdapter) apiBaseURL() string {
-	if d.s.Config.DiscordAPIBaseURL != "" {
-		return d.s.Config.DiscordAPIBaseURL
+	base := d.s.Config.DiscordAPIBaseURL
+	if base == "" {
+		base = DefaultDiscordAPIBaseURL
 	}
-	return DefaultDiscordAPIBaseURL
+	return strings.TrimSuffix(base, "/")
 }
 
 // The reply-context values below travel from the interaction body into

@@ -432,3 +432,22 @@ func TestWhatsAppReplyRequests(t *testing.T) {
 		}
 	}
 }
+
+// A base URL set with one trailing slash builds the reply URL with no
+// doubled slash.
+func TestWhatsApp_BaseURLTrailingSlashTrimmed(t *testing.T) {
+	h := newWhatsAppHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"ok","attachments":[],"metadata":{}}`))
+	})
+	h.server.Config.WhatsAppAPIBaseURL = h.fake.srv.URL + "/"
+	resp := h.post(t, waEvent(waTestNumber, []string{waText("wamid.1", "hi")}, nil), waTestSecret)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("event status %d", resp.StatusCode)
+	}
+	<-h.agentHits
+	if got := h.fake.next(t); got.Path != "/"+waTestNumber+"/messages" {
+		t.Errorf("reply path = %q, want no doubled slash", got.Path)
+	}
+}

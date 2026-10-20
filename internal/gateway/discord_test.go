@@ -721,3 +721,22 @@ func TestDiscord_PipelineWaitsForTheAgentPod(t *testing.T) {
 		t.Errorf("health = %q ok=%v, want %q", reason, ok, healthReasonWebhookReady)
 	}
 }
+
+// A base URL set with one trailing slash builds reply URLs with no doubled
+// slash.
+func TestDiscord_BaseURLTrailingSlashTrimmed(t *testing.T) {
+	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"ok","attachments":[],"metadata":{}}`))
+	})
+	h.server.Config.DiscordAPIBaseURL = h.fake.srv.URL + "/"
+	resp := h.send(t, discordCommand("123456789012345678", "987654321098765432", "555555555555555555", "hi"), nil, "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("command status %d", resp.StatusCode)
+	}
+	<-h.agentHits
+	if got := h.fake.next(t); got.Path != "/webhooks/1230000000000000000/tok-abc/messages/@original" {
+		t.Errorf("reply path = %q, want no doubled slash", got.Path)
+	}
+}
