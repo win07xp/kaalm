@@ -46,7 +46,11 @@ Across the repository, outside the books:
   `kubectl explain` shows, so a comment is held to the book's link rules. Name
   a section with its `#anchor`, because a section named in prose after the
   path is not checked. Renaming a heading means updating these citations as
-  well as the in-book links;
+  well as the in-book links. A citation inside a GitHub URL pinned to a ref
+  other than main (`blob/v2.0.0/...`) is not checked, because it points at
+  that version's file;
+- release notes under releases/ have no em or en dash and none of the words
+  the prose rules ban (see WORDING_PATTERNS) outside code;
 - no code comment, build file, script, or workflow cites an issue or PR
   number (a `#` followed by digits): it states the reason instead, and git history keeps the
   link. Tracked files under docs/, guide/, and learn/ are exempt, and so are
@@ -94,6 +98,11 @@ CITED_PATH = re.compile(r"\b((?:config/samples|test/e2e/testdata)/[\w./-]+\.ya?m
 # A book page cited from a file outside the books: group 1 is the
 # repo-relative page, group 2 the optional anchor.
 BOOK_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
+# The GitHub URL prefix right before a BOOK_REF match: group 1 is the ref. A
+# link pinned to a tag or commit points at that version's file, which the
+# current tree need not have, so only blob/main citations are checked, as
+# BLOB_URL does for in-book links.
+PINNED_BLOB = re.compile(r"https://github\.com/win07xp/kaalm/blob/([^/\s)]+)/$")
 DASHES = re.compile("[–—]")
 # An issue or PR number: a '#' followed by digits, not an HTML entity
 # ('&#' and digits), a URL fragment ('/#' and digits), or part of a word or
@@ -512,12 +521,31 @@ class Checker:
             except UnicodeDecodeError:
                 continue
             for m in BOOK_REF.finditer(text):
+                pm = PINNED_BLOB.search(text[max(0, m.start() - 120) : m.start()])
+                if pm and pm.group(1) != "main":
+                    continue
                 n = text.count("\n", 0, m.start()) + 1
                 dest = ROOT / m.group(1)
                 if not dest.is_file():
                     self.problems.append(f"{rel}:{n}: link target does not exist: {m.group(0)}")
                 elif m.group(2) and m.group(2) not in self.anchors(dest):
                     self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
+
+    def check_release_notes(self) -> None:
+        """Release notes under releases/ follow the books' dash and wording
+        rules. The time-wording check does not apply: a release note is about
+        its release."""
+        for rel in self.tracked_outside_books():
+            if not (rel.startswith("releases/") and rel.endswith(".md")):
+                continue
+            f = ROOT / rel
+            if not f.is_file():
+                continue
+            raw = f.read_text(encoding="utf-8")
+            for n, line in enumerate(raw.splitlines(), 1):
+                if DASHES.search(line):
+                    self.problems.append(f"{rel}:{n}: em or en dash")
+            self.check_wording(rel, strip_fences(raw.splitlines()))
 
     def check_issue_refs(self) -> None:
         """No code comment, build file, script, or workflow cites an issue or
@@ -620,6 +648,7 @@ def main(argv: list[str]) -> int:
         checker.check_book(book)
     checker.check_guide_figures()
     checker.check_book_refs()
+    checker.check_release_notes()
     checker.check_issue_refs()
     checker.check_banned_word()
     checker.check_coverage_map()
