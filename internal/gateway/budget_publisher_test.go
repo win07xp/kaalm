@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -379,8 +380,8 @@ func TestBudgetPublisher_TickReadsWithOneList(t *testing.T) {
 	other := budgetProvider()
 	other.Name = "other"
 	objs := []*corev1.ConfigMap{
-		spendCM(BudgetConfigMapName("prov"), SpendLabelBudget, map[string]string{"gw-1": partialRaw(t, "team-a", "70.00")}),
-		spendCM(AgentSpendConfigMapName("prov"), SpendLabelAgentSpend, map[string]string{"gw-1": partialRaw(t, "team-a/agent/x", "5.00")}),
+		withRV(spendCM(BudgetConfigMapName("prov"), SpendLabelBudget, map[string]string{"gw-1": partialRaw(t, "team-a", "70.00")}), "3"),
+		withRV(spendCM(AgentSpendConfigMapName("prov"), SpendLabelAgentSpend, map[string]string{"gw-1": partialRaw(t, "team-a/agent/x", "5.00")}), "4"),
 	}
 	client := k8sfake.NewSimpleClientset(objs[0], objs[1])
 	cache := crfake.NewClientBuilder().WithObjects(objs[0].DeepCopy(), objs[1].DeepCopy()).Build()
@@ -526,7 +527,7 @@ func TestBudgetPublisher_TickReadsUnlabeledConfigMapLive(t *testing.T) {
 func TestBudgetPublisher_SeedFromCanonicalReadsTheList(t *testing.T) {
 	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	canonical, _ := json.Marshal(map[string]string{"team-a": "130"})
-	cm := spendCM(BudgetConfigMapName("prov"), SpendLabelBudget, map[string]string{CanonicalKey: string(canonical)})
+	cm := withRV(spendCM(BudgetConfigMapName("prov"), SpendLabelBudget, map[string]string{CanonicalKey: string(canonical)}), "3")
 	client := k8sfake.NewSimpleClientset(cm)
 	ledger := NewBudgetLedger()
 	pub := &BudgetPublisher{Client: client, Cache: crfake.NewClientBuilder().WithObjects(cm.DeepCopy()).Build(),
@@ -541,5 +542,107 @@ func TestBudgetPublisher_SeedFromCanonicalReadsTheList(t *testing.T) {
 			t.Errorf("ConfigMap requests = %q, want no GET", configMapActions(client))
 			break
 		}
+	}
+}
+
+// trackerCache is a ConfigMap watch cache that is always caught up: Get
+// reads the fake clientset's current object, resourceVersion included.
+type trackerCache struct {
+	client.Reader
+	clientset *k8sfake.Clientset
+}
+
+func (c trackerCache) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	got, err := c.clientset.Tracker().Get(corev1.SchemeGroupVersion.WithResource("configmaps"), key.Namespace, key.Name)
+	if err != nil {
+		return err
+	}
+	got.(*corev1.ConfigMap).DeepCopyInto(obj.(*corev1.ConfigMap))
+	return nil
+}
+
+// withRV sets a ConfigMap's resourceVersion; the fake clientset stores it
+// as given.
+func withRV(cm *corev1.ConfigMap, rv string) *corev1.ConfigMap {
+	cm.ResourceVersion = rv
+	return cm
+}
+
+// A peer publishes provider prov's partial after the tick's list and the
+// watch folds it. The tick must not then fold prov from the older listed
+// copy: the watch cache's resourceVersion differs from the listed one, so
+// the tick reads prov's ConfigMap live. The peer's publish happens during
+// the apply of an earlier provider, aaa.
+func TestBudgetPublisher_TickNeverFoldsAStaleListedCopy(t *testing.T) {
+	first := hardProvider(blockAt100())
+	first.Name = "aaa"
+	p := hardProvider(blockAt100())
+	name := BudgetConfigMapName("prov")
+	client := k8sfake.NewSimpleClientset(withRV(spendCM(name, SpendLabelBudget,
+		map[string]string{"gw-1": partialRaw(t, "team-a", "50.00")}), "1"))
+	ledger := NewBudgetLedger()
+	ledger.Add(first, "team-a", "agent/test", 1) // so aaa's partial is applied
+	done := false
+	client.PrependReactor("patch", "configmaps", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if done || a.(k8stesting.PatchAction).GetName() != BudgetConfigMapName("aaa") {
+			return false, nil, nil
+		}
+		done = true
+		// The peer settles and publishes 99 for prov; the watch folds it.
+		peer := withRV(spendCM(name, SpendLabelBudget, map[string]string{"gw-1": partialRaw(t, "team-a", "99.00")}), "2")
+		if err := client.Tracker().Update(a.GetResource(), peer, "kaalm-system"); err != nil {
+			t.Fatal(err)
+		}
+		ledger.FoldPeers(p, map[string]float64{"team-a": 99})
+		return false, nil, nil
+	})
+	pub := &BudgetPublisher{Client: client, Cache: trackerCache{clientset: client}, Ledger: ledger,
+		OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(first, p)}
+
+	pub.tick(context.Background())
+	if !done {
+		t.Fatal("aaa's partial was not applied; the peer publish never ran")
+	}
+	foldOK, _, peers, _ := foldState(ledger, "prov")
+	if foldOK.IsZero() || peers["team-a"] != 99 {
+		t.Errorf("prov: lastFoldOK %v, peers %v; want stamped with the newer 99, not the listed 50", foldOK, peers)
+	}
+}
+
+// A listed ConfigMap is folded from the list only when the watch cache
+// holds the same resourceVersion. A different resourceVersion, or a
+// ConfigMap the cache does not hold yet, is read live.
+func TestBudgetPublisher_TickChecksListedCopyAgainstCache(t *testing.T) {
+	cases := []struct {
+		name    string
+		cached  *corev1.ConfigMap // nil: the cache does not hold it
+		wantGet bool
+	}{
+		{"same resourceVersion", withRV(spendCM(BudgetConfigMapName("prov"), SpendLabelBudget, nil), "7"), false},
+		{"different resourceVersion", withRV(spendCM(BudgetConfigMapName("prov"), SpendLabelBudget, nil), "6"), true},
+		{"not in the cache", nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := budgetProvider()
+			name := BudgetConfigMapName("prov")
+			client := k8sfake.NewSimpleClientset(withRV(spendCM(name, SpendLabelBudget,
+				map[string]string{"gw-1": partialRaw(t, "team-a", "70.00")}), "7"))
+			builder := crfake.NewClientBuilder()
+			if tc.cached != nil {
+				builder = builder.WithObjects(tc.cached)
+			}
+			ledger := NewBudgetLedger()
+			pub := &BudgetPublisher{Client: client, Cache: builder.Build(), Ledger: ledger,
+				OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
+
+			pub.tick(context.Background())
+			if got := slices.Contains(configMapActions(client), "get "+name); got != tc.wantGet {
+				t.Errorf("live GET of %s = %v, want %v (requests %q)", name, got, tc.wantGet, configMapActions(client))
+			}
+			if foldOK, _, peers, _ := foldState(ledger, "prov"); foldOK.IsZero() || peers["team-a"] != 70 {
+				t.Errorf("lastFoldOK %v, peers %v; want stamped, 70", foldOK, peers)
+			}
+		})
 	}
 }

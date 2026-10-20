@@ -629,10 +629,11 @@ type BudgetPublisher struct {
 	OperatorNamespace string
 	PodName           string
 	Interval          time.Duration
-	// Cache is the gateway's ConfigMap watch cache. It is used only to tell
-	// a ConfigMap that lacks the spend label (written before the label
-	// existed) from one that does not exist; its content is never folded.
-	// nil means every name the list misses is read live.
+	// Cache is the gateway's ConfigMap watch cache, a hint only: its
+	// resourceVersion tells whether a listed ConfigMap changed since the
+	// list, and it tells a ConfigMap without the spend label from one that
+	// does not exist. Its content is never folded (see readSpendConfigMap).
+	// nil means no watch fold runs; every name the list misses is read live.
 	Cache client.Reader
 	// Providers enumerates the ModelProviders to exchange for.
 	Providers func(ctx context.Context) []*kaalmv1beta1.ModelProvider
@@ -746,35 +747,49 @@ func (p *BudgetPublisher) listSpendConfigMaps(ctx context.Context) (map[string]*
 	return out, nil
 }
 
-// readSpendConfigMap returns the named spend ConfigMap: from listed when the
-// list holds it, otherwise with a live GET. Before the GET, the watch cache
-// tells whether the name exists at all: a name missing from the cache too is
-// treated as absent without a request. Only a ConfigMap without the label
-// (written before it existed, or stripped by hand) costs a GET, so hard
-// enforcement never counts less peer spend than a GET would. (nil, nil)
-// means the ConfigMap does not exist. listed == nil means no list was made.
+// readSpendConfigMap returns the named spend ConfigMap, from listed or with
+// a live GET. The watch cache is a hint only, never a source of content:
+//   - A listed ConfigMap is returned when the cache holds the same
+//     resourceVersion. A different one, or none, means it changed after the
+//     list (a peer's publish the watch may already have folded), so it is
+//     read live: folding the older listed copy would erase that newer fold.
+//     resourceVersions are compared for equality only, never ordered.
+//   - A name the list misses and the cache does not hold is absent, with no
+//     request. One the cache holds has no spend label (written before it
+//     existed, or stripped by hand) and is read live, so hard enforcement
+//     never counts less peer spend than a GET would.
+//
+// With no cache there is no watch fold either, so a listed copy is returned
+// as is and every name the list misses is read live. (nil, nil) means the
+// ConfigMap does not exist. listed == nil means no list was made.
 func (p *BudgetPublisher) readSpendConfigMap(
 	ctx context.Context, listed map[string]*corev1.ConfigMap, name string,
 ) (*corev1.ConfigMap, error) {
-	if cm, ok := listed[name]; ok {
-		return cm, nil
-	}
-	if p.Cache != nil {
+	cm, inList := listed[name]
+	if p.Cache == nil {
+		if inList {
+			return cm, nil
+		}
+	} else {
 		var cached corev1.ConfigMap
 		err := p.Cache.Get(ctx, client.ObjectKey{Namespace: p.OperatorNamespace, Name: name}, &cached)
-		if apierrors.IsNotFound(err) {
+		switch {
+		case inList && err == nil && cached.ResourceVersion == cm.ResourceVersion:
+			return cm, nil
+		case !inList && apierrors.IsNotFound(err):
 			return nil, nil
 		}
-		// A cache hit, or a cache error: read live.
+		// Changed since the list, not yet cached, unlabeled, or a cache
+		// error: read live.
 	}
-	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, name, metav1.GetOptions{})
+	live, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return cm, nil
+	return live, nil
 }
 
 // alreadyStored reports whether listed shows name holding raw under this

@@ -382,10 +382,10 @@ func main() {
 		},
 	}
 	// The ConfigMap watch cache, scoped to the operator namespace (see the
-	// cache options below). The tick's labeled list misses a spend
-	// ConfigMap written before the label existed; the cache tells such a
-	// ConfigMap from one that does not exist, so only the first costs a
-	// live GET.
+	// cache options below), is the tick's hint for which spend ConfigMaps
+	// need a live GET: a listed one whose resourceVersion changed since the
+	// list, and one the labeled list misses because it was written before
+	// the label existed.
 	cmInformer, cmErr := cl.GetCache().GetInformer(runCtx, &corev1.ConfigMap{})
 	if cmErr == nil {
 		publisher.Cache = cl.GetCache()
