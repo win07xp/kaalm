@@ -26,11 +26,13 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -615,16 +617,23 @@ func (b *BudgetLedger) Enforce(provider *kaalmv1beta1.ModelProvider, namespace s
 }
 
 // BudgetPublisher runs the replica side of the budget counter exchange: every
-// interval it server-side-applies this replica's partials (field manager =
-// Pod name, so simultaneous writes never conflict) and folds peers' current-
-// period partials into the enforcement view. The read-on-tick fold has the
-// same staleness bound as a watch-driven fold: at most one publish interval.
+// interval it reads every spend ConfigMap with one live, labeled list,
+// server-side-applies this replica's partials (field manager = Pod name, so
+// simultaneous writes never conflict; a partial the list shows already
+// stored is not re-applied), and folds peers' current-period partials into
+// the enforcement view. The read-on-tick fold has the same staleness bound
+// as a watch-driven fold: at most one publish interval.
 type BudgetPublisher struct {
 	Client            kubernetes.Interface
 	Ledger            *BudgetLedger
 	OperatorNamespace string
 	PodName           string
 	Interval          time.Duration
+	// Cache is the gateway's ConfigMap watch cache. It is used only to tell
+	// a ConfigMap that lacks the spend label (written before the label
+	// existed) from one that does not exist; its content is never folded.
+	// nil means every name the list misses is read live.
+	Cache client.Reader
 	// Providers enumerates the ModelProviders to exchange for.
 	Providers func(ctx context.Context) []*kaalmv1beta1.ModelProvider
 	// now is the clock, overridable in tests; nil means time.Now.
@@ -677,7 +686,7 @@ func (p *BudgetPublisher) Run(ctx context.Context) {
 func (p *BudgetPublisher) publishByName(ctx context.Context, name string) {
 	for _, provider := range p.Providers(ctx) {
 		if provider.Name == name {
-			p.publish(ctx, provider)
+			p.publish(ctx, provider, nil)
 			return
 		}
 	}
@@ -693,21 +702,97 @@ func (p *BudgetPublisher) publishFinal(ctx context.Context) {
 		if PeriodKey(provider.Spec.Budget.Period, p.clock()) == "" {
 			continue
 		}
-		p.publish(ctx, provider)
+		p.publish(ctx, provider, nil)
 	}
 }
 
+// tick lists every spend ConfigMap once, then publishes and folds each
+// budgeted provider. Publish comes before fold: a fold in a new period
+// rolls the ledger over and resets own spend, so the old period's last
+// partial must be written first. A failed list folds nothing, so the
+// read-path liveness stays unstamped and hard admission fails closed; the
+// publishes still apply.
 func (p *BudgetPublisher) tick(ctx context.Context) {
+	listed, err := p.listSpendConfigMaps(ctx)
+	if err != nil {
+		slog.Warn("budget fold list failed", "error", err)
+		listed = nil
+	}
 	for _, provider := range p.Providers(ctx) {
 		if PeriodKey(provider.Spec.Budget.Period, p.clock()) == "" {
 			continue
 		}
-		p.publish(ctx, provider)
-		p.fold(ctx, provider)
+		p.publish(ctx, provider, listed)
+		if listed != nil {
+			p.fold(ctx, provider, listed)
+		}
 	}
 }
 
-func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
+// listSpendConfigMaps reads every labeled spend ConfigMap in the operator
+// namespace with one list, by name. The list sets no ResourceVersion, so
+// the API server answers from its current state, never from a stale cache.
+// On success the map is non-nil, even when empty.
+func (p *BudgetPublisher) listSpendConfigMaps(ctx context.Context) (map[string]*corev1.ConfigMap, error) {
+	list, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).List(ctx,
+		metav1.ListOptions{LabelSelector: SpendConfigMapLabel})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*corev1.ConfigMap, len(list.Items))
+	for i := range list.Items {
+		out[list.Items[i].Name] = &list.Items[i]
+	}
+	return out, nil
+}
+
+// readSpendConfigMap returns the named spend ConfigMap: from listed when the
+// list holds it, otherwise with a live GET. Before the GET, the watch cache
+// tells whether the name exists at all: a name missing from the cache too is
+// treated as absent without a request. Only a ConfigMap without the label
+// (written before it existed, or stripped by hand) costs a GET, so hard
+// enforcement never counts less peer spend than a GET would. (nil, nil)
+// means the ConfigMap does not exist. listed == nil means no list was made.
+func (p *BudgetPublisher) readSpendConfigMap(
+	ctx context.Context, listed map[string]*corev1.ConfigMap, name string,
+) (*corev1.ConfigMap, error) {
+	if cm, ok := listed[name]; ok {
+		return cm, nil
+	}
+	if p.Cache != nil {
+		var cached corev1.ConfigMap
+		err := p.Cache.Get(ctx, client.ObjectKey{Namespace: p.OperatorNamespace, Name: name}, &cached)
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		// A cache hit, or a cache error: read live.
+	}
+	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return cm, nil
+}
+
+// alreadyStored reports whether listed shows name holding raw under this
+// replica's key with the expected label, so an apply would change nothing.
+func (p *BudgetPublisher) alreadyStored(listed map[string]*corev1.ConfigMap, name, label, raw string) bool {
+	cm, ok := listed[name]
+	if !ok {
+		return false
+	}
+	stored, ok := cm.Data[p.PodName]
+	return ok && stored == raw && cm.Labels[SpendConfigMapLabel] == label
+}
+
+// publish applies this replica's partial for provider, then its workload
+// partial. With listed from this tick's list, a partial already stored is
+// not re-applied; listed == nil (a kick, the final publish, a failed list)
+// always applies.
+func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.ModelProvider, listed map[string]*corev1.ConfigMap) {
 	snapshot := p.clock()
 	period, spend, marginRaised, ok := p.Ledger.OwnPartial(provider)
 	if !ok {
@@ -716,6 +801,14 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.Mo
 	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend, MarginExceeded: marginRaised,
 		ProviderUID: string(provider.UID)})
 	if err != nil {
+		return
+	}
+	if p.alreadyStored(listed, BudgetConfigMapName(provider.Name), SpendLabelBudget, string(raw)) {
+		// Partials are written to the cent, so a settle can leave the
+		// stored text unchanged; it is published all the same, and the
+		// write-path signal must clear.
+		p.Ledger.MarkPublished(provider, snapshot)
+		p.publishWorkloads(ctx, provider, listed)
 		return
 	}
 	apply := applycorev1.ConfigMap(BudgetConfigMapName(provider.Name), p.OperatorNamespace).
@@ -728,7 +821,7 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.Mo
 		return
 	}
 	p.Ledger.MarkPublished(provider, snapshot)
-	p.publishWorkloads(ctx, provider)
+	p.publishWorkloads(ctx, provider, listed)
 }
 
 // publishWorkloads publishes this replica's per-workload partial into the
@@ -736,13 +829,18 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.Mo
 // deliberately outside the budget ConfigMap so the enforcement fold never
 // sees workload keys. Best-effort: workload spend is visibility, not
 // enforcement, so a failed publish only logs.
-func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
+func (p *BudgetPublisher) publishWorkloads(
+	ctx context.Context, provider *kaalmv1beta1.ModelProvider, listed map[string]*corev1.ConfigMap,
+) {
 	period, spend, ok := p.Ledger.OwnWorkloadPartial(provider)
 	if !ok {
 		return
 	}
 	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend, ProviderUID: string(provider.UID)})
 	if err != nil {
+		return
+	}
+	if p.alreadyStored(listed, AgentSpendConfigMapName(provider.Name), SpendLabelAgentSpend, string(raw)) {
 		return
 	}
 	apply := applycorev1.ConfigMap(AgentSpendConfigMapName(provider.Name), p.OperatorNamespace).
@@ -754,32 +852,35 @@ func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv
 	}
 }
 
-func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
-	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, BudgetConfigMapName(provider.Name), metav1.GetOptions{})
+// fold refreshes the provider's peer view from its budget ConfigMap, read
+// through listed (see readSpendConfigMap).
+func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1beta1.ModelProvider, listed map[string]*corev1.ConfigMap) {
+	cm, err := p.readSpendConfigMap(ctx, listed, BudgetConfigMapName(provider.Name))
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			// No ConfigMap means no peer has published yet: an empty,
-			// healthy peer view, not a read failure. Folding it keeps the
-			// read-path staleness signal honest for a provider with no
-			// spend anywhere.
-			p.Ledger.FoldPeers(provider, map[string]float64{})
-			return
-		}
 		slog.Warn("budget fold read failed", "provider", provider.Name, "error", err)
 		return
 	}
+	if cm == nil {
+		// No ConfigMap means no peer has published yet: an empty,
+		// healthy peer view, not a read failure. Folding it keeps the
+		// read-path staleness signal honest for a provider with no
+		// spend anywhere.
+		p.Ledger.FoldPeers(provider, map[string]float64{})
+		return
+	}
 	p.Ledger.FoldPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock()), string(provider.UID)))
-	p.foldWorkloads(ctx, provider)
+	p.foldWorkloads(ctx, provider, listed)
 }
 
 // foldWorkloads refreshes the per-workload peer view from the agent-spend
 // ConfigMap, so any single replica serves the folded union on GET /v1/spend.
-func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
-	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, AgentSpendConfigMapName(provider.Name), metav1.GetOptions{})
+func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1beta1.ModelProvider, listed map[string]*corev1.ConfigMap) {
+	cm, err := p.readSpendConfigMap(ctx, listed, AgentSpendConfigMapName(provider.Name))
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			p.Ledger.FoldWorkloadPeers(provider, map[string]float64{})
-		}
+		return
+	}
+	if cm == nil {
+		p.Ledger.FoldWorkloadPeers(provider, map[string]float64{})
 		return
 	}
 	p.Ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock()), string(provider.UID)))
@@ -808,11 +909,17 @@ func FoldPartials(data map[string]string, ownPodName, currentPeriod, providerUID
 }
 
 // SeedFromCanonical initializes the ledger from each provider's _canonical
-// key, called once at startup.
+// key, called once at startup. It reads the ConfigMaps with one list, and
+// by name when the list fails or misses one.
 func (p *BudgetPublisher) SeedFromCanonical(ctx context.Context) {
+	listed, err := p.listSpendConfigMaps(ctx)
+	if err != nil {
+		slog.Warn("budget seed list failed", "error", err)
+		listed = nil
+	}
 	for _, provider := range p.Providers(ctx) {
-		cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, BudgetConfigMapName(provider.Name), metav1.GetOptions{})
-		if err != nil {
+		cm, err := p.readSpendConfigMap(ctx, listed, BudgetConfigMapName(provider.Name))
+		if err != nil || cm == nil {
 			continue
 		}
 		raw, ok := cm.Data[CanonicalKey]
@@ -831,16 +938,16 @@ func (p *BudgetPublisher) SeedFromCanonical(ctx context.Context) {
 		}
 		p.Ledger.InitCanonical(provider, canonical)
 	}
-	p.seedWorkloadsFromCanonical(ctx)
+	p.seedWorkloadsFromCanonical(ctx, listed)
 }
 
 // seedWorkloadsFromCanonical initializes the per-workload peer view from each
 // provider's agent-spend _canonical key at startup, so a restarted replica
 // serves the full current-period breakdown immediately.
-func (p *BudgetPublisher) seedWorkloadsFromCanonical(ctx context.Context) {
+func (p *BudgetPublisher) seedWorkloadsFromCanonical(ctx context.Context, listed map[string]*corev1.ConfigMap) {
 	for _, provider := range p.Providers(ctx) {
-		cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, AgentSpendConfigMapName(provider.Name), metav1.GetOptions{})
-		if err != nil {
+		cm, err := p.readSpendConfigMap(ctx, listed, AgentSpendConfigMapName(provider.Name))
+		if err != nil || cm == nil {
 			continue
 		}
 		raw, ok := cm.Data[CanonicalKey]

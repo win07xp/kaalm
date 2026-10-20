@@ -140,7 +140,7 @@ func TestBudgetPublisher_WorkloadExchange(t *testing.T) {
 	}
 
 	// publish writes the workload partial beside the budget partial.
-	pub.publish(ctx, p)
+	pub.publish(ctx, p, nil)
 	cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, AgentSpendConfigMapName("prov"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("agent-spend ConfigMap missing: %v", err)
@@ -165,7 +165,7 @@ func TestBudgetPublisher_WorkloadExchange(t *testing.T) {
 	peerRaw, _ := json.Marshal(budgetPartial{Period: period, Spend: map[string]string{"team-a/agent/sup": "2.50"}})
 	cm.Data["gw-1"] = string(peerRaw)
 	_, _ = client.CoreV1().ConfigMaps("kaalm-system").Update(ctx, cm, metav1.UpdateOptions{})
-	pub.foldWorkloads(ctx, p)
+	pub.foldWorkloads(ctx, p, nil)
 	if got := ledger.WorkloadSpend("team-a")["prov"].Workloads["agent/sup"]; got != "15.00" {
 		t.Errorf("folded view = %q, want 15.00", got)
 	}

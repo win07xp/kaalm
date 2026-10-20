@@ -381,6 +381,15 @@ func main() {
 			return out
 		},
 	}
+	// The ConfigMap watch cache, scoped to the operator namespace (see the
+	// cache options below). The tick's labeled list misses a spend
+	// ConfigMap written before the label existed; the cache tells such a
+	// ConfigMap from one that does not exist, so only the first costs a
+	// live GET.
+	cmInformer, cmErr := cl.GetCache().GetInformer(runCtx, &corev1.ConfigMap{})
+	if cmErr == nil {
+		publisher.Cache = cl.GetCache()
+	}
 	publisher.SeedFromCanonical(runCtx)
 	// The publisher stops after the drain, before the cache: its last
 	// publish lists the providers through the cache.
@@ -400,9 +409,10 @@ func main() {
 	// The watch-driven half of the budget fold: peer partials land in the
 	// enforcement view one watch propagation after they are published, which
 	// hard enforcement's boundary region depends on (the tick remains the
-	// backstop). The cache scopes ConfigMaps to the operator namespace above.
-	if informer, err := cl.GetCache().GetInformer(runCtx, &corev1.ConfigMap{}); err == nil {
-		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+	// backstop). The handler is added after the seed, so the seed never
+	// overwrites a fold the handler already made.
+	if cmErr == nil {
+		_, _ = cmInformer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj any) {
 				gateway.FoldBudgetConfigMapEvent(runCtx, obj, podName, store, server.Budget)
 			},
@@ -411,7 +421,7 @@ func main() {
 			},
 		})
 	} else {
-		logger.Warn("budget ConfigMap informer unavailable; folds ride the tick only", "error", err)
+		logger.Warn("budget ConfigMap informer unavailable; folds ride the tick only", "error", cmErr)
 	}
 
 	// The gateway's half of the channel-delete handshake (Add and Update).
@@ -662,7 +672,8 @@ func clusterOptions(scheme *runtime.Scheme, operatorNamespace string) func(*clus
 		o.Cache.DefaultTransform = cache.TransformStripManagedFields()
 		noDeepCopy := true
 		readOnly := cache.ByObject{UnsafeDisableDeepCopy: &noDeepCopy}
-		// The ConfigMap informer (budget watch-fold) must be scoped to the
+		// The ConfigMap informer (budget watch-fold, and the budget tick's
+		// lookup for unlabeled spend ConfigMaps) must be scoped to the
 		// operator namespace: the gateway's Role grants list/watch there
 		// only, and an unscoped informer would issue a forbidden
 		// cluster-wide LIST and hang, the same failure mode the Secret
