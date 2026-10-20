@@ -1121,12 +1121,15 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // error returns without a phase change, so the pass retries with backoff. It
 // reports whether the Agent has drifted and waits for a slot, and whether the
 // create was rejected, so the caller can schedule a retry. A Pod it creates
-// mounts tlsSecret, the Secret the Agent's Certificate names. Drift is a spec
-// hash mismatch or a TLS volume that names a Secret other than tlsSecret; both
-// kinds share the maxUnavailableOnDrift slots. The Secret name stays out of
-// the hash: the TLS volume check compares it on its own. While the Certificate is not Ready (certHeld), it reads the Pod as
-// usual but never creates or replaces one, takes no drift slot, and reports
-// Ready=False CertificateNotReady.
+// mounts tlsSecret, the Secret the Agent's Certificate names. When a woken
+// (Resuming) or drift-replacement (Replacing) Pod turns Ready, it sets
+// lastActivityTime to that time, so the new Pod gets a full idleTimeout. Drift
+// is a spec hash mismatch or a TLS volume that names a Secret other than
+// tlsSecret; both kinds share the maxUnavailableOnDrift slots. The Secret name
+// stays out of the hash: the TLS volume check compares it on its own. While
+// the Certificate is not Ready (certHeld), it reads the Pod as usual but never
+// creates or replaces one, takes no drift slot, and reports Ready=False
+// CertificateNotReady.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 	tlsSecret string, certHeld bool,
@@ -1135,6 +1138,9 @@ func (r *AgentReconciler) convergePod(
 	if err != nil {
 		return false, false, err
 	}
+	// Read before admitDriftReplacement or the certHeld branch can rewrite
+	// the reason in this pass.
+	replacing := podUpToDateReason(agent) == kaalmv1beta1.ReasonReplacing
 	ready := func(ok bool, reason, msg string) { r.setPodReady(agent, certHeld, ok, reason, msg) }
 
 	if pod == nil {
@@ -1230,6 +1236,18 @@ func (r *AgentReconciler) convergePod(
 		// Idle is a pod-bearing phase: a ready Pod does not promote an Idle
 		// agent back to Running; only fresh activity does.
 		if agent.Status.Phase != kaalmv1beta1.AgentIdle {
+			if agent.Status.Phase != kaalmv1beta1.AgentRunning &&
+				(agent.Status.Phase == kaalmv1beta1.AgentResuming || replacing) {
+				// A woken or drift-replacement Pod is Ready. The gateway may
+				// hold a message for it and records that message only after
+				// delivery, and the activity read is cached, so the silence
+				// before the wake or the change would idle or hibernate the
+				// Pod at once. Floor the activity at Ready rather than at the
+				// wake or the replacement start, so a slow Pod start cannot
+				// use up the idle window.
+				readyAt := metav1.NewTime(r.now())
+				agent.Status.LastActivityTime = &readyAt
+			}
 			r.setPhase(agent, kaalmv1beta1.AgentRunning, "Pod is Ready")
 		}
 		ready(true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")

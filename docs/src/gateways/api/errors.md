@@ -126,7 +126,7 @@ The `:8080` listener raises these on `/channels/*`, in sync mode as the response
 | 401 | `unauthorized` | no | | Auth failed (a WhatsApp verification `GET` with the wrong `hub.verify_token` included), the path is not registered to a `Ready=True` channel, the channel is `Terminating`, or the method is not one the channel type serves |
 | 413 | `request_too_large` | no | | A `POST` body exceeds `gateway.maxMessageBodyBytes` (default 1 MiB) |
 | 413 | `response_too_large` | no | | The agent's reply exceeds `gateway.maxResponseBodyBytes` (default 900 KiB) |
-| 502 | `delivery_failed` | no | | The referenced Agent does not exist, or every delivery attempt failed |
+| 502 | `delivery_failed` | no | | The referenced Agent does not exist, every delivery attempt failed, or the Agent's Pod did not become reachable within `wakeTimeout` while the message waited |
 | 503 | `internal_unavailable` | yes | `5` | Async accept: the channel is at its pending cap, or the polling record could not be created |
 | 503 | `internal_unavailable` | yes | `1` | Polling: the record could not be read |
 | 504 | `wake_timeout` | no | | The hibernated Agent did not become reachable within `wakeTimeout` |
@@ -137,7 +137,7 @@ Notes on the rows:
 
 - **`401 unauthorized`.** Every cause in the row answers with the same status and the same body, message included, so a caller cannot tell a registered path from any other. The listener writes no `403`.
 - **`413 request_too_large`.** The cap is applied to the raw `POST` body before the path is resolved, so an oversized `POST` to any path under `/channels/` answers `413` whether or not the path exists. A `GET` has no body and is not capped.
-- **`502 delivery_failed`.** With an Agent present, all four attempts failed ([What the gateway does with the answer](agent-endpoints.md#what-the-gateway-does-with-the-answer)). With no Agent, no attempt is made.
+- **`502 delivery_failed`.** With an Agent present, all four attempts failed ([What the gateway does with the answer](agent-endpoints.md#what-the-gateway-does-with-the-answer)), or its Pod did not become reachable within `wakeTimeout` while the message waited for it ([Waiting for a Pod that is not reachable yet](../user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)), in which case fewer attempts may have run. With no Agent, no attempt is made.
 - **`503` on async accept.** The pending cap is `spec.webhook.maxPendingAsyncResponses` (default 100).
 - **`504 sync_deadline_exceeded`.** Sync-only: async mode has no sync deadline. Under default settings this fires before `wake_timeout` or `delivery_failed` can ([Sync-mode reachability](async-responses.md#sync-mode-reachability)).
 

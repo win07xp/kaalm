@@ -144,6 +144,26 @@ spec:
         key: token
 ---
 apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: s16-py-async-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s16-py
+  type: webhook
+  webhook:
+    path: /channels/e2e/s16-py-async
+    responseMode: async
+    content:
+      fromBody: content.text
+    auth:
+      type: bearer
+      secretRef:
+        name: s16-hook
+        key: token
+---
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s16-missing

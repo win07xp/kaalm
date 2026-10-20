@@ -99,8 +99,9 @@ kubectl patch agent greeter --type=merge \
 ```
 
 Repointing the reference replaces the Pod, which is an ordinary agent
-restart: persistent state survives on the volume, in-flight delivery retries
-cover the gap. Rolling back is repointing to `-v1`. In production, add
+restart: persistent state survives on the volume, and a message sent during
+the swap waits for the new Pod. A sync channel answers if the Pod is Ready
+within the 30-second deadline. Rolling back is repointing to `-v1`. In production, add
 `immutable: true` to handler ConfigMaps: it closes the edit-then-wake path
 and makes the repoint the only way to change behavior, which is what makes
 rollbacks trustworthy.
