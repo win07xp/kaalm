@@ -170,3 +170,23 @@ func TestForwardOnce_CancelledContextNotLogged(t *testing.T) {
 		t.Errorf("live request after a cancelled one should log once, got %d records", got)
 	}
 }
+
+// Every header a provider reads as a credential is stripped from the
+// agent's request, so only the injected credential reaches the provider.
+func TestCopyForwardedHeaders_StripsEveryCredentialHeader(t *testing.T) {
+	src := http.Header{}
+	for _, h := range []string{"Authorization", "X-Api-Key", "Api-Key", "X-Goog-Api-Key"} {
+		src.Set(h, "agent-own-key")
+	}
+	src.Set("Content-Type", "application/json")
+	dst := http.Header{}
+	copyForwardedHeaders(dst, src)
+	for _, h := range []string{"Authorization", "X-Api-Key", "Api-Key", "X-Goog-Api-Key"} {
+		if v := dst.Get(h); v != "" {
+			t.Errorf("%s forwarded as %q, want stripped", h, v)
+		}
+	}
+	if dst.Get("Content-Type") != "application/json" {
+		t.Error("Content-Type was not forwarded")
+	}
+}

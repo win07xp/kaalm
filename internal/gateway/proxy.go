@@ -77,10 +77,11 @@ func (m *MemorySpend) Total(namespace, provider, model string) Usage {
 var hopByHopHeaders = []string{"Connection", "TE", "Upgrade", "Proxy-Authorization", "Keep-Alive", "Trailer", "Transfer-Encoding"}
 
 // authMaterialHeaders carry inbound authentication material and are stripped
-// before the provider credential is injected. Without the explicit strip, a
-// live audience-bound Kubernetes credential would be forwarded verbatim into
-// third-party provider logs.
-var authMaterialHeaders = []string{"Authorization", "X-Api-Key", "Api-Key"}
+// before the provider credential is injected. The list names every header a
+// provider reads as a credential, so only the injected one reaches it.
+// Without the explicit strip, a live audience-bound Kubernetes credential
+// would be forwarded verbatim into third-party provider logs.
+var authMaterialHeaders = []string{"Authorization", "X-Api-Key", "Api-Key", "X-Goog-Api-Key"}
 
 // workloadKey attributes spend to the attested workload. Token-mode callers
 // (gateway-only tier) carry a namespace but no workload identity and land in
