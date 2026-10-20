@@ -246,6 +246,10 @@ func (s *Server) writeSyncError(w http.ResponseWriter, ctx context.Context, name
 
 // wakeAndDeliver wakes a hibernated or hibernating agent when needed, then runs the bounded
 // delivery pipeline. Returns the raw agent response body on success.
+// Each message gets at most one Pod wait, bounded by the capped wakeTimeout
+// and ctx: after a wake, before delivery when the Agent is Provisioning or
+// Resuming, or after a delivery attempt fails to connect (the cached phase
+// can lag the controller deleting the Pod).
 // healthPath is the channel webhook path for channel-health recording; the
 // test-chat path passes "" so /console/... traffic never enters a channel
 // health report. The delivery outcome and duration are metered here for
@@ -264,6 +268,9 @@ func (s *Server) wakeAndDeliver(
 		s.Metrics.ChannelMessageDuration(env.ChannelType, time.Since(start).Seconds())
 	}()
 
+	// waited is set once the message has had its one Pod wait, so a refused
+	// connect during delivery does not start a second.
+	waited := false
 	// Hibernating counts too: its Pod is going away, and the controller keeps
 	// a wake requested in that window until the Agent settles Hibernated.
 	if agent.Status.Phase == kaalmv1beta1.AgentHibernated || agent.Status.Phase == kaalmv1beta1.AgentHibernating {
@@ -281,31 +288,33 @@ func (s *Server) wakeAndDeliver(
 			return nil, errControllerDown, err
 		}
 		if err := s.waitAgentReachable(ctx, agent); err != nil {
-			waited := time.Since(wakeStart)
-			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", waited.Seconds())
-			if ctx.Err() != nil {
-				// The caller's context ended the wait first (a sync deadline,
-				// a disconnect, or the pipeline bound): name what actually
-				// elapsed, not the full wakeTimeout.
-				return nil, errWakeTimeout, fmt.Errorf(
-					"agent did not become ready: the wait ended after %s, before the %s wakeTimeout elapsed",
-					waited.Round(time.Second), s.wakeTimeout(agent))
-			}
-			if s.wakeTimeout(agent) < s.agentWakeTimeout(agent) {
-				return nil, errWakeTimeout, fmt.Errorf(
-					"agent did not become ready within %s, the gateway's maxWakeTimeout, which caps the Agent's %s wakeTimeout",
-					s.wakeTimeout(agent), s.agentWakeTimeout(agent))
-			}
-			return nil, errWakeTimeout, fmt.Errorf(
-				"agent did not become ready within wakeTimeout (%s)", s.wakeTimeout(agent))
+			elapsed := time.Since(wakeStart)
+			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", elapsed.Seconds())
+			return nil, errWakeTimeout, s.podWaitError(ctx, agent, elapsed)
 		}
 		s.Metrics.ChannelWakeDuration(agent.Namespace, "ready", time.Since(wakeStart).Seconds())
+		waited = true
+	}
+	// A Pod being created (first start or a replacement after a spec change)
+	// or resumed has no endpoints yet: wait for it rather than spend the
+	// retry schedule against an empty Service. No wake is needed, so the
+	// activator is not called.
+	if phase := agent.Status.Phase; phase == kaalmv1beta1.AgentProvisioning || phase == kaalmv1beta1.AgentResuming {
+		slog.Info("agent Pod not ready; waiting for it before delivery",
+			"namespace", agent.Namespace, "agent", agent.Name, "messageId", env.MessageID, "phase", phase)
+		waitStart := time.Now()
+		if err := s.waitAgentReachable(ctx, agent); err != nil {
+			e := s.podWaitError(ctx, agent, time.Since(waitStart))
+			s.recordChannelFailure(healthPath, healthReasonDispatchFailed, e.Error())
+			return nil, errDeliveryFailed, e
+		}
+		waited = true
 	}
 	dctx, endDeliver := s.Tracing.Start(ctx, "agent.deliver", trace.SpanKindClient,
 		attribute.String("kaalm.namespace", agent.Namespace),
 		attribute.String("kaalm.agent", agent.Name),
 		attribute.String("kaalm.message_id", env.MessageID))
-	respBody, err = s.deliverToAgent(dctx, agent, env)
+	respBody, err = s.deliverToAgent(dctx, agent, env, !waited)
 	endDeliver(err)
 	if err != nil {
 		if strings.Contains(err.Error(), "response body exceeded") {
@@ -332,6 +341,25 @@ func (s *Server) recordChannelFailure(healthPath, reason, message string) {
 		return
 	}
 	s.ChannelHealth.RecordFailure(healthPath, reason, message)
+}
+
+// podWaitError names why a Pod wait ended without the Pod becoming
+// reachable, after waited.
+func (s *Server) podWaitError(ctx context.Context, agent *kaalmv1beta1.Agent, waited time.Duration) error {
+	if ctx.Err() != nil {
+		// The caller's context ended the wait first (a sync deadline, a
+		// disconnect, or the pipeline bound): name what actually elapsed, not
+		// the full wakeTimeout.
+		return fmt.Errorf(
+			"agent did not become ready: the wait ended after %s, before the %s wakeTimeout elapsed",
+			waited.Round(time.Second), s.wakeTimeout(agent))
+	}
+	if s.wakeTimeout(agent) < s.agentWakeTimeout(agent) {
+		return fmt.Errorf(
+			"agent did not become ready within %s, the gateway's maxWakeTimeout, which caps the Agent's %s wakeTimeout",
+			s.wakeTimeout(agent), s.agentWakeTimeout(agent))
+	}
+	return fmt.Errorf("agent did not become ready within wakeTimeout (%s)", s.wakeTimeout(agent))
 }
 
 // defaultMaxWakeTimeout is the gateway cap on any wake wait when
@@ -366,8 +394,9 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 }
 
 // waitAgentReachable polls the agent Service with TCP connects until it
-// accepts, bounded by wakeTimeout. Connect failure is the whole hibernation
-// detection mechanism; connect success is the readiness signal.
+// accepts, bounded by the capped wakeTimeout and ctx. It is the one Pod wait
+// a message gets: after a wake, for a Pod being created or resumed, or after
+// a refused connect. Connect success is the readiness signal.
 func (s *Server) waitAgentReachable(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	deadline := time.Now().Add(s.wakeTimeout(agent))
 	addr := net.JoinHostPort(s.agentServiceHost(agent), fmt.Sprintf("%d", s.agentServicePort(agent)))
@@ -411,8 +440,14 @@ func (s *Server) agentServicePort(agent *kaalmv1beta1.Agent) int32 {
 // attempt bounded by agentReadTimeout. The same messageId is reused across
 // attempts; agents deduplicate. A 200 with a malformed envelope (missing or
 // non-string content) counts as a failed attempt.
+//
+// With podWait set, the first attempt that fails at the TCP connect, while
+// another attempt is left, waits for the Agent's Pod in place of that
+// attempt's backoff delay. A failed connect means the request never reached
+// the agent, so waiting cannot deliver twice, and the wait takes a backoff
+// slot rather than adding an attempt.
 func (s *Server) deliverToAgent(
-	ctx context.Context, agent *kaalmv1beta1.Agent, env MessageEnvelope,
+	ctx context.Context, agent *kaalmv1beta1.Agent, env MessageEnvelope, podWait bool,
 ) ([]byte, error) {
 	payload, err := json.Marshal(env)
 	if err != nil {
@@ -422,14 +457,16 @@ func (s *Server) deliverToAgent(
 
 	var lastErr error
 	backoff := append([]time.Duration{0}, s.Config.DeliveryBackoff...)
+	skipDelay := false
 	for attempt, delay := range backoff {
-		if delay > 0 {
+		if delay > 0 && !skipDelay {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-time.After(delay):
 			}
 		}
+		skipDelay = false
 		respBody, err := s.deliverOnce(ctx, url, payload)
 		if err == nil {
 			s.Metrics.ChannelDeliveryAttempt(agent.Namespace, deliveryOutcomeOK)
@@ -443,6 +480,17 @@ func (s *Server) deliverToAgent(
 			"attempt", attempt+1, "of", len(backoff), "outcome", outcome, "error", err.Error())
 		if outcome == deliveryOutcomeTooLarge {
 			return nil, err // size violations are not retried
+		}
+		var stageErr *dialStageError
+		if podWait && attempt < len(backoff)-1 && errors.As(err, &stageErr) && stageErr.stage == dialStageConnect {
+			podWait = false
+			slog.Info("agent connect failed; waiting for its Pod before the next attempt",
+				"namespace", agent.Namespace, "agent", agent.Name, "messageId", env.MessageID)
+			waitStart := time.Now()
+			if werr := s.waitAgentReachable(ctx, agent); werr != nil {
+				return nil, fmt.Errorf("%w; last attempt: %v", s.podWaitError(ctx, agent, time.Since(waitStart)), lastErr)
+			}
+			skipDelay = true
 		}
 	}
 	return nil, fmt.Errorf("failed to deliver message to agent after %d attempts: %w", len(backoff), lastErr)

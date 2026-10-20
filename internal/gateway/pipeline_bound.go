@@ -22,7 +22,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// wakePollInterval is the wait between readiness connects during a wake.
+// wakePollInterval is the wait between readiness connects during a Pod wait.
 const wakePollInterval = 2 * time.Second
 
 // activatorWorstCase is the longest the activator call can take: one attempt
@@ -56,7 +56,10 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 // for as long as a tenant sets. It sums:
 //
 //   - the activator call and the capped wakeTimeout, plus one readiness
-//     connect and poll interval, which the last poll can overrun;
+//     connect and poll interval, which the last poll can overrun. This leg
+//     covers the one Pod wait any message gets: a wake, a wait for a Pod
+//     being created or resumed, or a wait after a refused connect, which
+//     takes the place of a retry delay;
 //   - the agent-delivery schedule, each attempt at gateway.agentReadTimeout;
 //   - responseRequests runs of the callback schedule, each attempt at
 //     gateway.callbackReadTimeout: the callback and the polling-record patch

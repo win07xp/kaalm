@@ -718,7 +718,7 @@ func TestDeliverToAgentCountsEveryAttemptByOutcome(t *testing.T) {
 
 	// Every attempt answers 503: four attempts, all "status", none "ok".
 	s := deliveryServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
-	if _, err := s.deliverToAgent(context.Background(), agent, env); err == nil {
+	if _, err := s.deliverToAgent(context.Background(), agent, env, false); err == nil {
 		t.Fatal("delivery against a 503 agent must fail")
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeStatus)); got != 4 {
@@ -737,7 +737,7 @@ func TestDeliverToAgentCountsEveryAttemptByOutcome(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"content":"hi"}`))
 	})
-	if _, err := s.deliverToAgent(context.Background(), agent, env); err != nil {
+	if _, err := s.deliverToAgent(context.Background(), agent, env, false); err != nil {
 		t.Fatalf("delivery must succeed on the second attempt: %v", err)
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeStatus)); got != 1 {
@@ -771,7 +771,7 @@ func TestDeliverToAgentReusesTheConnection(t *testing.T) {
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 
 	for i := 0; i < 5; i++ {
-		if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: fmt.Sprintf("m%d", i)}); err != nil {
+		if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: fmt.Sprintf("m%d", i)}, false); err != nil {
 			t.Fatalf("delivery %d: %v", i, err)
 		}
 	}
@@ -796,7 +796,7 @@ func TestDeliverToAgentRedialsWithinTheAttempt(t *testing.T) {
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"})
+	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, false)
 	took := time.Since(start)
 	if err == nil {
 		t.Fatal("delivery to a blackhole must fail")
@@ -849,7 +849,7 @@ func TestDeliverToAgentResolutionTimeoutIsDNS(t *testing.T) {
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 	s.AgentResolver = &stallingResolver{}
 
-	if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}); err == nil {
+	if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, false); err == nil {
 		t.Fatal("delivery with a stalled resolver must fail")
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeDNS)); got != 2 {
@@ -1113,5 +1113,65 @@ func TestWakeAndDeliver_SyncDeadlineBoundsThePodWait(t *testing.T) {
 	}
 	if got := errType(t, resp); got != errSyncDeadline {
 		t.Errorf("error type = %q, want %q", got, errSyncDeadline)
+	}
+}
+
+// A Pod wait that runs out ends as delivery_failed, names wakeTimeout, and
+// records DispatchFailed. It needs no activator and counts no attempt.
+func TestWakeAndDeliver_PendingPodWaitIsBounded(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("async")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = kaalmv1beta1.AgentProvisioning
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 80 * time.Millisecond}
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+	h.server.Metrics = NewMetrics(prometheus.NewRegistry())
+
+	start := time.Now()
+	_, errType, err := h.server.wakeAndDeliver(context.Background(), "/channels/team-a/support", agent, MessageEnvelope{})
+	if errType != errDeliveryFailed || err == nil || !strings.Contains(err.Error(), "within wakeTimeout") {
+		t.Fatalf("wakeAndDeliver = %q, %v; want %q naming wakeTimeout", errType, err, errDeliveryFailed)
+	}
+	// The last poll can overrun wakeTimeout by one poll interval.
+	if d := time.Since(start); d > wakePollInterval+time.Second {
+		t.Errorf("the wait took %s, want it bounded by the 80ms wakeTimeout", d)
+	}
+	if reason, ok := healthReason(h, "/channels/team-a/support"); ok || reason != healthReasonDispatchFailed {
+		t.Errorf("health = %q ok=%v, want %q", reason, ok, healthReasonDispatchFailed)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 0 {
+		t.Errorf("connect attempts = %v, want 0", got)
+	}
+}
+
+// A refused connect starts the Pod wait once. Without podWait, the schedule
+// runs its attempts and does not wait.
+func TestDeliverToAgentWaitsOnceForARefusedConnect(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 80 * time.Millisecond}
+	s := deliveryServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	s.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	s.Config.AgentConnectTimeout = 20 * time.Millisecond
+
+	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, true)
+	if err == nil || !strings.Contains(err.Error(), "wakeTimeout") {
+		t.Fatalf("err = %v, want one naming wakeTimeout", err)
+	}
+	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 1 {
+		t.Errorf("connect attempts with podWait = %v, want 1", got)
+	}
+
+	s.Metrics = NewMetrics(prometheus.NewRegistry())
+	start := time.Now()
+	_, err = s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m2"}, false)
+	if err == nil || strings.Contains(err.Error(), "wakeTimeout") {
+		t.Fatalf("err = %v, want an exhausted schedule", err)
+	}
+	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 4 {
+		t.Errorf("connect attempts without podWait = %v, want 4", got)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("without podWait the schedule took %s; it must not wait", d)
 	}
 }
