@@ -230,10 +230,16 @@ is wrong.
 
 ## Sync webhook returns `504 sync_deadline_exceeded`
 
-The agent was hibernated and a cold wake takes longer than the sync delivery
-deadline (30s default versus a 120s wake budget). Switch the channel to
-`responseMode: async`; this is the recommended mode for any channel backing
-a hibernation-enabled agent.
+Two causes:
+
+- The agent was hibernated and a cold wake takes longer than the sync delivery
+  deadline (30s default versus a 120s wake budget).
+- The agent's Pod was being replaced (a spec or class change) or was resuming,
+  and took longer than the deadline. The message is answered if the Pod is back
+  in time.
+
+In both cases, switch the channel to `responseMode: async`; this is the
+recommended mode for any channel backing a hibernation-enabled agent.
 
 ## LLM call returns `403 access_denied`
 

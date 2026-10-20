@@ -48,7 +48,7 @@ Sync mode (`spec.webhook.responseMode: sync`, the default) answers `200` with th
 | 401 | `unauthorized` | Auth failed, or the path is not routed |
 | 413 | `request_too_large` | The body exceeds `gateway.maxMessageBodyBytes` |
 | 413 | `response_too_large` | The reply exceeds `gateway.maxResponseBodyBytes` (default 900 KiB) |
-| 502 | `delivery_failed` | The Agent does not exist, or every delivery attempt failed |
+| 502 | `delivery_failed` | The Agent does not exist, every delivery attempt failed, or the Agent's Pod did not become reachable within `wakeTimeout` while the message waited |
 | 504 | `wake_timeout` | The hibernated Agent did not become reachable within `wakeTimeout` |
 | 504 | `controller_unavailable` | The Agent is hibernated and the activator is unreachable or not configured; `Retry-After: 5` |
 | 504 | `sync_deadline_exceeded` | The request outlived `gateway.syncDeliveryDeadline` |
@@ -58,6 +58,8 @@ The `401` body is identical on every branch, message included: no channel on the
 ### Reachability under default config
 
 `gateway.syncDeliveryDeadline` (default 30s) is shorter than the delivery retry budget (1s, 5s, and 25s between four attempts) and the default `wakeTimeout` (120s). Under defaults, a sync caller therefore sees `504 sync_deadline_exceeded` before `502 delivery_failed` or `504 wake_timeout` can fire. The arithmetic is drawn on one time axis in [Sync-mode reachability](async-responses.md#sync-mode-reachability).
+
+A sync message sent while the Agent's Pod is being replaced or resumed is answered once the Pod is back within `syncDeliveryDeadline` ([Waiting for a Pod that is not reachable yet](../user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)).
 
 Sync mode suits a `Running` agent that replies within seconds. A channel that backs a hibernated agent, a slow-starting image, or long processing belongs in `responseMode: async`, where no sync deadline applies and `delivery_failed` and `wake_timeout` arrive as [error payloads](async-responses.md#error-payloads) with their causes.
 

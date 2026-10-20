@@ -96,13 +96,15 @@ In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds th
 | `502 delivery_failed` | about 31s | about 71s | unreachable: the deadline fires first | reachable, as an error payload |
 | `504 wake_timeout` | 120s | 120s | unreachable: the deadline fires first | reachable, as an error payload |
 
+The earliest and latest times assume a reachable Agent Service. When the Agent has no reachable Pod, `delivery_failed` comes only after the [Pod wait](../user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet) (up to the capped `wakeTimeout`), so in sync mode the deadline answers first, and a Pod that is back within the deadline is answered normally.
+
 `502 delivery_failed` becomes reachable in sync mode only when `syncDeliveryDeadline` is raised above the delivery budget. `wakeTimeout` is the Agent's own value or the class default, clamped to the class cap, and 120s when neither sets it (see [AgentClass](../../resources/agentclass.md)); the gateway also caps it at `gateway.maxWakeTimeout` ([The activator](../user/activation-and-activity.md#the-activator)). For which channels belong on sync mode, and what a persistent `sync_deadline_exceeded` means, see [Reachability under default config](channel-webhook.md#reachability-under-default-config).
 
 ### Async pipeline bound
 
 The background pipeline of an async webhook message or a platform channel message runs under one wall-clock bound. The gateway sets the bound to the sum of the budgets the run contains, so the bound never cuts a stage short. The wake part uses the same capped `wakeTimeout` as the wake wait. The sum has four parts:
 
-- **Wake.** The activator call, the Agent's effective `wakeTimeout` capped at `gateway.maxWakeTimeout`, and one extra readiness check. The activator call takes up to 20s: two attempts of 10s each. The extra check is `gateway.agentDeliveryConnectTimeout` plus the 2s poll interval, because the last check before the timeout can run past it.
+- **Wake.** The activator call, the Agent's effective `wakeTimeout` capped at `gateway.maxWakeTimeout`, and one extra readiness check. This part covers a message's Pod wait, whether or not it needed a wake; a message gets at most one. The activator call takes up to 20s: two attempts of 10s each. The extra check is `gateway.agentDeliveryConnectTimeout` plus the 2s poll interval, because the last check before the timeout can run past it.
 - **Delivery.** One full agent-delivery schedule, with every attempt at `gateway.agentReadTimeout`.
 - **Response.** Full callback schedules, with every attempt at `gateway.callbackReadTimeout`. An async webhook counts two schedules: one for the callback and one for the polling-record `Patch`, which uses the same schedule. A platform channel counts one schedule per platform API request the reply makes: one per chunk, plus one for Discord's switch to a channel message.
 - **Margin.** A fixed 30s for Secret reads and the DNS lookup before each callback attempt.
@@ -180,14 +182,14 @@ When the agent never replies, the gateway delivers an error payload instead of a
 
 | `error.type` | `retryable` | Fires when | Sync-mode form |
 |---|---|---|---|
-| `delivery_failed` | `false` | The initial attempt and all 3 retries of `POST /v1/message` fail | `502`, but usually pre-empted by `504 sync_deadline_exceeded` (see [Sync-mode reachability](#sync-mode-reachability)) |
+| `delivery_failed` | `false` | The initial attempt and all 3 retries of `POST /v1/message` fail, or the Agent's Pod does not become reachable within `wakeTimeout` while the message waits for it | `502`, but usually pre-empted by `504 sync_deadline_exceeded` (see [Sync-mode reachability](#sync-mode-reachability)) |
 | `wake_timeout` | `false` | The agent is `Hibernated` or `Hibernating` and does not become Ready within `wakeTimeout` | `504`, but pre-empted by `504 sync_deadline_exceeded` under defaults |
 | `controller_unavailable` | `true` | A message arrives for a `Hibernated` agent and the gateway cannot reach the controller's activator endpoint | `504` with `Retry-After: 5` |
 | `response_too_large` | `false` | The agent's response body exceeds `gateway.maxResponseBodyBytes` (default 900 KiB) | `413` |
 
 The sync-mode status codes and envelope are specified in [User Gateway error responses](errors.md#user-gateway-error-responses).
 
-**`delivery_failed`** is not retryable because the gateway has already made all 4 attempts of the [bounded retry schedule](#the-bounded-retry-schedule). A failure that survives that budget is usually structural: a broken image, an agent crash loop, repeated 5xx, or a misconfigured per-Agent NetworkPolicy on the message path. Investigate `AgentChannel.status.conditions[type=PlatformConnected]` and the Agent Pod status rather than retrying at the caller.
+**`delivery_failed`** is not retryable because the gateway has already made all 4 attempts of the [bounded retry schedule](#the-bounded-retry-schedule). A failure that survives that budget is usually structural: a broken image, an agent crash loop, repeated 5xx, or a misconfigured per-Agent NetworkPolicy on the message path. Investigate `AgentChannel.status.conditions[type=PlatformConnected]` and the Agent Pod status rather than retrying at the caller. The other cause is a Pod that does not become reachable while the message waits for it. A Pod that starts slowly after a spec change needs a larger `wakeTimeout`, up to `gateway.maxWakeTimeout`.
 
 **`wake_timeout`** is not retryable because exceeding `wakeTimeout` usually means a Pod-startup problem that repeats on retry: an image pull failure, an init container crash, OOM, or a bad spec. Tenants with transient timeouts should raise `wakeTimeout`, up to `gateway.maxWakeTimeout` (default 15 minutes), instead of retrying. The gateway never waits longer than that cap, so a larger `wakeTimeout` adds nothing past it. Only the platform team can give a wake more time then, by raising `gateway.maxWakeTimeout`; see [The activator](../user/activation-and-activity.md#the-activator).
 
