@@ -71,20 +71,7 @@ const (
 func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	idx := mgr.GetFieldIndexer()
 
-	referrers := []struct {
-		obj client.Object
-		f   fieldIndex
-	}{
-		{&kaalmv1beta1.Agent{}, agentClassRefField},
-		{&kaalmv1beta1.AgentTask{}, agentClassRefField},
-		{&kaalmv1beta1.Agent{}, providerRefField},
-		{&kaalmv1beta1.AgentTask{}, providerRefField},
-		{&kaalmv1beta1.AgentClass{}, allowedProvidersField},
-		{&kaalmv1beta1.Agent{}, toolProviderRefField},
-		{&kaalmv1beta1.AgentTask{}, toolProviderRefField},
-		{&kaalmv1beta1.AgentClass{}, allowedToolProvidersField},
-	}
-	for _, r := range referrers {
+	for _, r := range referrerFieldIndexes {
 		if err := idx.IndexField(ctx, r.obj, r.f.key, r.f.extract); err != nil {
 			return err
 		}
@@ -120,6 +107,23 @@ var (
 	allowedProvidersField     = fieldIndex{IndexAllowedProviders, allowedProvidersIndex}
 	allowedToolProvidersField = fieldIndex{IndexAllowedToolProviders, allowedToolProvidersIndex}
 )
+
+// referrerFieldIndexes lists each referrer index with the kind it indexes. The
+// manager and the test fakes register the same table, so a change to what
+// counts as a referrer reaches both.
+var referrerFieldIndexes = []struct {
+	obj client.Object
+	f   fieldIndex
+}{
+	{&kaalmv1beta1.Agent{}, agentClassRefField},
+	{&kaalmv1beta1.AgentTask{}, agentClassRefField},
+	{&kaalmv1beta1.Agent{}, providerRefField},
+	{&kaalmv1beta1.AgentTask{}, providerRefField},
+	{&kaalmv1beta1.AgentClass{}, allowedProvidersField},
+	{&kaalmv1beta1.Agent{}, toolProviderRefField},
+	{&kaalmv1beta1.AgentTask{}, toolProviderRefField},
+	{&kaalmv1beta1.AgentClass{}, allowedToolProvidersField},
+}
 
 // agentClassRefIndex is the IndexAgentClassRef extractor for Agents and
 // AgentTasks.

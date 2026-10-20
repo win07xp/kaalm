@@ -62,20 +62,9 @@ func eventsProviderReconciler(
 	t *testing.T, conflicts *statusConflicts, health ProviderHealthChecker, objs ...client.Object,
 ) (*ModelProviderReconciler, *events.FakeRecorder) {
 	t.Helper()
-	byProviderRef := func(o client.Object) []string {
-		switch w := o.(type) {
-		case *kaalmv1beta1.Agent:
-			return providerRefNames(w.Spec.Providers)
-		case *kaalmv1beta1.AgentTask:
-			return providerRefNames(w.Spec.Providers)
-		}
-		return nil
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexProviderRef, byProviderRef).
-		WithIndex(&kaalmv1beta1.AgentTask{}, IndexProviderRef, byProviderRef).
 		WithInterceptorFuncs(conflicts.funcs()).
 		Build()
 	rec := events.NewFakeRecorder(32)

@@ -69,10 +69,7 @@ func slotClient(t *testing.T, agents ...*kaalmv1beta1.Agent) client.Client {
 	for _, a := range agents {
 		objs = append(objs, a)
 	}
-	return fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexAgentClassRef, func(o client.Object) []string {
-			return []string{o.(*kaalmv1beta1.Agent).Spec.AgentClassRef.Name}
-		}).
+	return withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithStatusSubresource(&kaalmv1beta1.Agent{}).
 		WithObjects(objs...).Build()
 }

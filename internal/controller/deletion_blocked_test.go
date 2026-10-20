@@ -301,28 +301,8 @@ func heldDeleteClient(t *testing.T, provider string, status client.Object, objs 
 			AllowedToolProviders: []kaalmv1beta1.LocalObjectReference{{Name: provider}},
 		},
 	}
-	none := func(client.Object) []string { return nil }
-	allowed := func(tools bool) client.IndexerFunc {
-		return func(o client.Object) []string {
-			refs := o.(*kaalmv1beta1.AgentClass).Spec.AllowedProviders
-			if tools {
-				refs = o.(*kaalmv1beta1.AgentClass).Spec.AllowedToolProviders
-			}
-			var names []string
-			for _, r := range refs {
-				names = append(names, r.Name)
-			}
-			return names
-		}
-	}
-	return fake.NewClientBuilder().WithScheme(testScheme(t)).
+	return withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithObjects(append(objs, class, status)...).WithStatusSubresource(status).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexProviderRef, none).
-		WithIndex(&kaalmv1beta1.AgentTask{}, IndexProviderRef, none).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexToolProviderRef, none).
-		WithIndex(&kaalmv1beta1.AgentTask{}, IndexToolProviderRef, none).
-		WithIndex(&kaalmv1beta1.AgentClass{}, IndexAllowedProviders, allowed(false)).
-		WithIndex(&kaalmv1beta1.AgentClass{}, IndexAllowedToolProviders, allowed(true)).
 		Build()
 }
 
@@ -398,18 +378,12 @@ func TestModelProvider_HeldDeleteRefreshesStaleHealthy(t *testing.T) {
 }
 
 // indexedReferrerClient is a fake client holding objs, with every referrer
-// index registered from the same field vars SetupIndexers uses.
+// index registered from the same table SetupIndexers uses.
 func indexedReferrerClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
-	b := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
-		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}, &kaalmv1beta1.ToolProvider{}, &kaalmv1beta1.AgentClass{})
-	for _, f := range []fieldIndex{agentClassRefField, providerRefField, toolProviderRefField} {
-		b = b.WithIndex(&kaalmv1beta1.Agent{}, f.key, f.extract).WithIndex(&kaalmv1beta1.AgentTask{}, f.key, f.extract)
-	}
-	for _, f := range []fieldIndex{allowedProvidersField, allowedToolProvidersField} {
-		b = b.WithIndex(&kaalmv1beta1.AgentClass{}, f.key, f.extract)
-	}
-	return b.Build()
+	return withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).
+		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}, &kaalmv1beta1.ToolProvider{}, &kaalmv1beta1.AgentClass{}).
+		Build()
 }
 
 // allowingClass is an AgentClass that allows provider in both allowed lists.
