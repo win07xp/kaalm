@@ -12,8 +12,8 @@ A channel needs a token, because the door has a lock. Kubernetes stores
 credentials in a **Secret**, an object meant for exactly this, kept separate
 from the manifests that refer to it.
 
-The channel is the e2e suite's `s16-py-channel` in
-`test/e2e/testdata/base-image.yaml`, with its own names and a shorter
+The Secret and the channel are the e2e suite's `s16-hook` and `s16-py-channel`
+in `test/e2e/testdata/base-image.yaml`, with their own names and a shorter
 `fromBody`. Put both in `channel.yaml`:
 
 ```yaml
@@ -22,6 +22,8 @@ kind: Secret
 metadata:
   name: webhook-token
   namespace: default
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: tutorial-secret-token
@@ -55,20 +57,35 @@ the HTTP response.
 message, so posting `{"text": "hello"}` sends `hello` to the agent rather than
 the whole blob.
 
+The Secret's `kaalm.io/channel-credential: "true"` label is what lets a
+channel use it. A **label** is a key and value attached to an object so that
+tools can select or check it. A channel can name any Secret in its namespace,
+so Kaalm accepts only Secrets that someone marked for channels. Without the
+label, the channel reports `Ready=False` with reason `SecretNotOptedIn` and
+every request gets a 401. The guide's
+[Connecting a channel](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-a-channel.md)
+covers who sets the label, and rule 45 in the design book's
+[AgentChannel validation rules](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation/channels.md)
+gives the reason.
+
 ```bash
 kubectl apply -f channel.yaml
 kubectl get agentchannels
 ```
 
 ```
+secret/webhook-token created
+agentchannel.kaalm.io/helper-webhook created
 NAME             AGENT    PHASE    CONNECTED   AGE
-helper-webhook   helper   Active               2s
+helper-webhook   helper   Active               0s
 ```
 
-`Active` means the agent this channel points at is healthy. Kaalm also
-checked the path and found the token before it let the gateway route the
-channel; had either been wrong, `kubectl describe agentchannel helper-webhook`
-would say so under `Ready`.
+`Active` means the agent this channel points at is healthy. The phase follows
+the agent and nothing else, so a channel can read `Active` while it is not
+usable. Kaalm also checks the path and the token's Secret before the gateway
+routes the channel, and it reports the result under `Ready`, not in this
+table. Run `kubectl describe agentchannel helper-webhook` to see it; a failed
+check shows as `Ready` False with a reason.
 
 ## Reach the gateway
 

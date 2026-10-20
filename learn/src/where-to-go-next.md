@@ -7,6 +7,11 @@ k3d cluster delete kaalm-tutorial
 ```
 
 ```
+INFO[0000] Deleting cluster 'kaalm-tutorial'
+INFO[0000] Deleting cluster network 'k3d-kaalm-tutorial'
+INFO[0001] Deleting 1 attached volumes...
+INFO[0001] Removing cluster details from default kubeconfig...
+INFO[0001] Removing standalone kubeconfig file (if there is one)...
 INFO[0001] Successfully deleted cluster kaalm-tutorial!
 ```
 

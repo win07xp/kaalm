@@ -15,11 +15,11 @@ k3d cluster create kaalm-tutorial --wait \
 The `--image` flag pins the cluster to Kubernetes 1.37, so the version
 doesn't depend on your k3d release.
 
-That takes a few seconds and ends with:
+That takes about 15 seconds and ends with:
 
 ```
-INFO[0012] Cluster 'kaalm-tutorial' created successfully!
-INFO[0012] You can now use it like this:
+INFO[0015] Cluster 'kaalm-tutorial' created successfully!
+INFO[0015] You can now use it like this:
 kubectl cluster-info
 ```
 
@@ -99,10 +99,10 @@ kubectl get pods -n kaalm-system
 
 ```
 NAME                                READY   STATUS    RESTARTS   AGE
-kaalm-controller-6f75c5d79f-hx6gc   1/1     Running   0          22s
-kaalm-controller-6f75c5d79f-w6t4d   1/1     Running   0          22s
-kaalm-gateway-7c888cfb45-wc6j8      1/1     Running   0          22s
-kaalm-gateway-7c888cfb45-wxzzp      1/1     Running   0          22s
+kaalm-controller-597cff96f9-g7rzh   1/1     Running   0          19s
+kaalm-controller-597cff96f9-hl6pk   1/1     Running   0          19s
+kaalm-gateway-585c579b8b-b9mpt      1/1     Running   0          19s
+kaalm-gateway-585c579b8b-qqdrl      1/1     Running   0          19s
 ```
 
 > **A pod** is one running instance of your program, the smallest thing

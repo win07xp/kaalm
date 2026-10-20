@@ -57,12 +57,13 @@ kubectl apply -f task.yaml
 kubectl get agenttasks
 ```
 
-The task passes through `Pending`, `Provisioning`, and `Running`, reports,
-and settles. A few seconds after you applied it:
+The task passes through `Provisioning` and `Running`, then `Completing` while
+Kaalm checks what it reported, and settles at `Succeeded`. A few seconds
+after you applied it:
 
 ```
 NAME          PHASE       CLASS      AGE
-one-off-job   Succeeded   tutorial   23s
+one-off-job   Succeeded   tutorial   3s
 ```
 
 ## Read what it reported

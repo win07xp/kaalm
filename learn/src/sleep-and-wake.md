@@ -10,42 +10,11 @@ the time, and you are paying continuously for capacity nobody is using.
 Kaalm's answer: when an agent goes quiet, shut it down. Keep its identity, keep
 its storage, keep its address. Bring it back when a message arrives.
 
-## Watch it fall asleep
-
-You set the timers to 30 seconds each back in the class, so this takes about a
-minute. Stop sending messages and watch:
-
-```bash
-kubectl get agents -w
-```
-
-`-w` keeps the command running and prints a new line each time the agent
-changes. It moves from `Running` to `Idle` after 30 seconds of quiet, holds
-there for the 30-second hibernation delay, passes through `Hibernating` in a
-second or two, and settles at `Hibernated`. Press Ctrl-C when it settles:
-
-```
-NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   3m18s
-helper   Idle      True    tutorial   3m46s
-helper   Hibernating   True    tutorial   4m16s
-helper   Hibernated    False   tutorial   4m17s
-```
-
-The columns shift on the later rows because `-w` prints each change as it
-arrives instead of re-aligning the table.
-
-> **What counts as activity?** Kaalm watches the traffic an agent sends and
-> receives through the gateway: the messages delivered to it and the model
-> calls it makes. Every message you sent reset the idle clock, and the agent
-> stayed awake while you were talking to it. Stop sending messages and the
-> clock runs out: with the class's 30-second timers, the agent is asleep about
-> a minute after your last message. The message that wakes it counts too, so
-> a woken agent always gets a fresh 30 seconds before it can go idle again.
-
 ## What survived
 
-The program is gone:
+You have not messaged the agent since "Make it yours". With the class's
+30-second timers, that quiet was long enough for it to fall asleep. The
+program is gone:
 
 ```bash
 kubectl get pods -l kaalm.io/agent=helper
@@ -63,7 +32,7 @@ kubectl get agents
 
 ```
 NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   4m29s
+helper   Hibernated   False   tutorial   3m25s
 ```
 
 And so does its storage:
@@ -74,7 +43,7 @@ kubectl get pvc
 
 ```
 NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-helper-memory   Bound    pvc-9a8cd3cc-2433-4e43-932a-2cfa844ebba4   1Gi        RWO            local-path     <unset>                 4m29s
+helper-memory   Bound    pvc-531f991d-d41d-46fb-a5ca-c3eebeb40344   1Gi        RWO            local-path     <unset>                 3m25s
 ```
 
 That is hibernation in one screen: the expensive part (a running program) is
@@ -104,8 +73,10 @@ different program, in a different container, started seconds ago because your
 message arrived. It picked up the count from the volume Kaalm reattached, and
 carried on.
 
-On the walk that produced this book, the whole thing took two seconds. Your
-caller waited; nothing was lost; the agent answered.
+On the walk that produced this book, the reply took about 12 seconds to come
+back. Your caller waited; nothing was lost; the agent answered. While it
+waited, the agent's phase was `Resuming` with `READY` False, and it turned
+`Running` when the new container passed its readiness check.
 
 > **One thing the walk hid.** A `sync` channel gives the caller 30 seconds,
 > and a cold wake on a real cluster can take longer than that: pulling the
@@ -122,10 +93,47 @@ kubectl get agents
 
 ```
 NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   4m31s
+helper   Running   True    tutorial   3m44s
 ```
 
-Awake again, ready to go quiet and repeat the cycle.
+Awake again.
+
+## Watch it fall asleep again
+
+The timers are 30 seconds each, set back in the class. On the walk, the agent
+went idle about 43 seconds after the reply and was asleep about 75 seconds
+after it. Send nothing more and watch:
+
+```bash
+kubectl get agents -w
+```
+
+`-w` keeps the command running and prints a new line each time the agent
+changes. It moves from `Running` to `Idle` once the idle timeout passes,
+holds there for the 30-second hibernation delay, passes through `Hibernating`
+in a second or two, and settles at `Hibernated`. Press Ctrl-C when it settles:
+
+```
+NAME     PHASE     READY   CLASS      AGE
+helper   Running   True    tutorial   3m49s
+helper   Idle      True    tutorial   4m25s
+helper   Hibernating   True    tutorial   4m55s
+helper   Hibernating   True    tutorial   4m55s
+helper   Hibernated    False   tutorial   4m57s
+```
+
+The columns shift on the later rows because `-w` prints each change as it
+arrives instead of re-aligning the table. It prints a line for every change
+to the agent, so a phase can appear twice.
+
+> **What counts as activity?** Kaalm watches the traffic an agent sends and
+> receives through the gateway: the messages delivered to it and the model
+> calls it makes. Every message you sent reset the idle clock, and the agent
+> stayed awake while you were talking to it. Stop sending messages and the
+> clock runs out: on the walk, with the class's 30-second timers, the agent
+> was asleep about 75 seconds after the last reply. The message that wakes
+> it counts too, so a woken agent always gets a fresh 30 seconds before it can
+> go idle again.
 
 ## Why this matters
 
