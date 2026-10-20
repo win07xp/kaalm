@@ -96,6 +96,45 @@ var _ = Describe("Zero-build on-ramp (S16)", Ordered, func() {
 		}, "180s", "5s").Should(Equal("greeter v2: ping"))
 	})
 
+	It("delivers an async message sent while the Pod is being replaced", func() {
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agentchannel", "e2e", "s16-py-async-channel", "{.status.phase}")
+		}, "90s", "3s").Should(Equal("Active"))
+
+		port, stop, err := utils.PortForward("kaalm-system", "kaalm-gateway", "8080")
+		Expect(err).NotTo(HaveOccurred())
+		defer stop()
+
+		By("repointing the handler, then sending at once, while the Pod is replaced")
+		_, err = utils.Kubectl("patch", "agent", "s16-py", "-n", "e2e", "--type=merge",
+			"-p", `{"spec":{"handler":{"configMapRef":{"name":"s16-handler"}}}}`)
+		Expect(err).NotTo(HaveOccurred())
+		requestID := asyncAccept(port, "/channels/e2e/s16-py-async", "s16-webhook-bearer-token")
+
+		By("the polled record carries the agent's reply, not delivery_failed")
+		var payload string
+		Eventually(func() (int, error) {
+			var status int
+			status, payload, err = utils.GetWithBearer(
+				pollURL(port, requestID, "/channels/e2e/s16-py-async"), "s16-webhook-bearer-token")
+			return status, err
+		}, "180s", "5s").Should(Equal(200), "poll should return the completed response")
+		var record struct {
+			Response struct {
+				Content string `json:"content"`
+			} `json:"response"`
+			Error struct {
+				Type string `json:"type"`
+			} `json:"error"`
+		}
+		Expect(json.Unmarshal([]byte(payload), &record)).To(Succeed())
+		Expect(record.Error.Type).To(BeEmpty(), "the message must reach the replacement Pod")
+		// The old Pod may still answer if the message lands before the
+		// controller deletes it; either handler version proves delivery.
+		Expect(record.Response.Content).To(HavePrefix("greeter v"))
+		Expect(record.Response.Content).To(HaveSuffix(": wake-up"))
+	})
+
 	It("holds a missing handler ConfigMap at Ready=False and recovers when it appears", func() {
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "e2e", "s16-missing",
