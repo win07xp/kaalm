@@ -1123,13 +1123,13 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // create was rejected, so the caller can schedule a retry. A Pod it creates
 // mounts tlsSecret, the Secret the Agent's Certificate names. When a woken
 // (Resuming) or drift-replacement (Replacing) Pod turns Ready, it sets
-// lastActivityTime to that time, so the new Pod gets a full idleTimeout.
-// Drift is a spec
-// hash mismatch or a TLS volume that names a Secret other than tlsSecret; both
-// kinds share the maxUnavailableOnDrift slots. The Secret name stays out of
-// the hash: the TLS volume check compares it on its own. While the Certificate is not Ready (certHeld), it reads the Pod as
-// usual but never creates or replaces one, takes no drift slot, and reports
-// Ready=False CertificateNotReady.
+// lastActivityTime to that time, so the new Pod gets a full idleTimeout. Drift
+// is a spec hash mismatch or a TLS volume that names a Secret other than
+// tlsSecret; both kinds share the maxUnavailableOnDrift slots. The Secret name
+// stays out of the hash: the TLS volume check compares it on its own. While
+// the Certificate is not Ready (certHeld), it reads the Pod as usual but never
+// creates or replaces one, takes no drift slot, and reports Ready=False
+// CertificateNotReady.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 	tlsSecret string, certHeld bool,
