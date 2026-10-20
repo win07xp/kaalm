@@ -94,7 +94,7 @@ A replica keeps a path's entry only while at least one of its observations is in
 | `WebhookReady` | success | `POST /v1/message` returned `2xx`, on any channel type |
 | `WebhookAuthFailed` | failure | inbound auth failed: webhook bearer or HMAC, a Discord signature or timestamp, a WhatsApp signature or verify token |
 | `AgentNotReady` | failure | the referenced Agent does not exist, or the activator is unreachable or not configured |
-| `DispatchFailed` | failure | the delivery retry schedule was exhausted, the wait for the Agent's Pod ran out, or a wake ran past `wakeTimeout` |
+| `DispatchFailed` | failure | the delivery retry schedule was exhausted, the wait for the Agent's Pod ran out, or a wake did not reach the Pod before `wakeTimeout` or the caller's deadline ended it |
 | `CallbackInvalid` | failure | a webhook `callbackUrl` failed the pre-dial check, or its `callbackAuth` Secret could not be read, lacks the label `kaalm.io/channel-credential: "true"` ([rule 45](../../resources/validation/channels.md)), or, for a bearer token, does not list the `callbackUrl` host in `kaalm.io/callback-hosts` (rule 46) |
 | `CallbackRejected` | failure | a callback POST was terminally refused (`401`, `403`, `404`, `405`, `410`, `415`), or a platform reply was terminally refused or exhausted its retries |
 
