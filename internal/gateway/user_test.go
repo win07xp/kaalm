@@ -998,10 +998,13 @@ func TestWakeAndDeliver_PipelineDeadlineBeforeWakeTimeout(t *testing.T) {
 	}
 }
 
+// agentBackAfter is how long startAgentLater keeps the agent Service away.
+const agentBackAfter = 300 * time.Millisecond
+
 // startAgentLater points agent delivery at a free port where nothing listens
-// yet, then starts the harness agent backend there after delay: the Service
-// of an Agent whose Pod is being replaced or resumed. It returns the port.
-func startAgentLater(t *testing.T, h *userHarness, delay time.Duration) int {
+// yet, then starts the harness agent backend there after agentBackAfter: the
+// Service of an Agent whose Pod is being replaced or resumed.
+func startAgentLater(t *testing.T, h *userHarness) {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1015,7 +1018,7 @@ func startAgentLater(t *testing.T, h *userHarness, delay time.Duration) int {
 	started := make(chan struct{})
 	go func() {
 		defer close(started)
-		time.Sleep(delay)
+		time.Sleep(agentBackAfter)
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			t.Errorf("agent backend could not listen on %d: %v", port, err)
@@ -1028,7 +1031,6 @@ func startAgentLater(t *testing.T, h *userHarness, delay time.Duration) int {
 		<-started
 		srv.Close()
 	})
-	return port
 }
 
 // A message for an Agent whose Pod is being created or resumed waits for the
@@ -1045,7 +1047,7 @@ func TestWakeAndDeliver_WaitsForAPendingPod(t *testing.T) {
 			h.store.agents["team-a/sup"].Status.Phase = phase
 			act := &fakeActivator{}
 			h.server.Activator = act
-			startAgentLater(t, h, 300*time.Millisecond)
+			startAgentLater(t, h)
 
 			resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
 			defer func() { _ = resp.Body.Close() }()
@@ -1076,7 +1078,7 @@ func TestWakeAndDeliver_WaitsAfterARefusedConnect(t *testing.T) {
 	})
 	h.seedChannel("sync")
 	h.server.Metrics = NewMetrics(prometheus.NewRegistry())
-	startAgentLater(t, h, 300*time.Millisecond)
+	startAgentLater(t, h)
 
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
 	_ = resp.Body.Close()

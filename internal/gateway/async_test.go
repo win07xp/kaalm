@@ -277,7 +277,7 @@ func TestRunAsyncPipeline_DeliversWhenThePodReturns(t *testing.T) {
 	})
 	h.seedChannel("async")
 	h.store.agents["team-a/sup"].Status.Phase = kaalmv1beta1.AgentProvisioning
-	startAgentLater(t, h, 300*time.Millisecond)
+	startAgentLater(t, h)
 
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
 	if resp.StatusCode != http.StatusAccepted {

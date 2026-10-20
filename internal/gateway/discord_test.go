@@ -705,7 +705,7 @@ func TestDiscord_PipelineWaitsForTheAgentPod(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"content":"back"}`))
 	})
-	startAgentLater(t, h.userHarness, 300*time.Millisecond)
+	startAgentLater(t, h.userHarness)
 	h.send(t, discordCommand("123456789012345678", "9", "5", "hi"), nil, "")
 	got := h.fake.next(t)
 	if c, _ := got.Body["content"].(string); c != "back" {
