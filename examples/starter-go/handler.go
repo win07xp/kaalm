@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/win07xp/kaalm/agentruntime"
+	"github.com/win07xp/kaalm/agentruntime/v2"
 )
 
 // handler is the developer-owned part; everything else (TLS rotation, dedup,

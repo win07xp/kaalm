@@ -89,7 +89,7 @@ says when you need that.
 
 The templates carry no contract code of their own. `examples/starter-python` is a `FROM` build on
 the Python base image plus a `handler.py`, and `examples/starter-go` is a
-`main.go` and `handler.go` that import the `agentruntime` module, which
+`main.go` and `handler.go` that import the `github.com/win07xp/kaalm/agentruntime/v2` module, which
 implements the whole checklist. Start from the Go template if Go is your
 language and you need the whole program. Start clean only when you need
 another runtime, and implement the checklist above.

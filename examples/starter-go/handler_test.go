@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/win07xp/kaalm/agentruntime"
+	"github.com/win07xp/kaalm/agentruntime/v2"
 )
 
 // The reply format is asserted by the e2e suite (a reply must contain the

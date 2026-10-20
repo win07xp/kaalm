@@ -22,9 +22,11 @@ Three things have to line up:
 
 Put your key in a Secret, then describe the provider. This is
 `config/samples/kaalm_v1beta1_modelprovider.yaml` with the tutorial's
-namespace in `allowedNamespaces` and the sample's budget block left out. Note
-where the key lives: in a Secret in Kaalm's namespace, not in your agent's
-image, not in its environment. Your code never sees it.
+namespace in `allowedNamespaces` and the sample's budget block left out. The
+Secret is the sample's `anthropic-api-key`, as the guide's
+[Providing LLM access](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/llm-access.md)
+shows it. Note where the key lives: in a Secret in Kaalm's namespace, not in
+your agent's image, not in its environment. Your code never sees it.
 
 ```yaml
 apiVersion: v1
@@ -32,6 +34,10 @@ kind: Secret
 metadata:
   name: anthropic-api-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: api.anthropic.com
 type: Opaque
 stringData:
   token: sk-ant-your-key-here
@@ -55,6 +61,13 @@ spec:
       costPer1MOutputTokens: "15.00"
   allowedNamespaces: ["default"]
 ```
+
+Like the channel's Secret, this one carries an opt-in label. The label
+`kaalm.io/provider-credential` marks the Secret as usable by a provider, and
+the annotation `kaalm.io/provider-hosts` lists the hosts the key may be sent
+to, so it must include the host of the provider's `endpoint`. Without the label the provider
+reports `Ready=False` with reason `SecretNotOptedIn`, and without the host it
+reports `EndpointHostNotApproved`.
 
 The costs are not decoration. Kaalm multiplies them by the tokens your agents
 spend, which is what makes budgets possible. `allowedNamespaces`

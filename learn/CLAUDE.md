@@ -8,18 +8,23 @@ details. Build with `make books` (which runs `make docs-check` first);
 ## Status
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
-recently for 1.0.0: pass one against locally built 1.0.0 artifacts on
-2026-09-26, and pass two against the published 1.0.0 artifacts on
-2026-09-27, both with no command or output drift. Pass one replaced the
-sleep-and-wake watch block, which had shown a single row, with the real
-four-row stream. Every command and every block of output came from one run,
-in order, on a fresh k3d cluster. A re-walk is two passes: pre-release
+recently for 2.0.0: pass one against locally built 2.0.0 artifacts on
+2026-10-20. Pass one caught the channel Secret missing the
+`kaalm.io/channel-credential` label (every request returned 401), the provider
+Secret missing its `kaalm.io/provider-credential` label and
+`kaalm.io/provider-hosts` annotation, the new `REPLACING` column on
+`kubectl get agentclasses`, and the sleep chapter's starting state (the agent
+is already hibernated after "Giving it a job") and wake time (about 12
+seconds, not two). A second walk of 2026-10-20, also against the locally
+built 2.0.0 artifacts, ran the fixed pages clean end to end, and every
+command and block of output now comes from that run, in order, on a fresh k3d
+cluster. A re-walk is two passes: pre-release
 against locally built artifacts, then confirmation against the published
 ones after the tag.
 The walk history (what each pass caught) is in issues #77, #99, #115,
 #130, and #143.
 
-The install is pinned to `--version 1.0.0` on purpose: the pin is what makes
+The install is pinned to `--version 2.0.0` on purpose: the pin is what makes
 the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 

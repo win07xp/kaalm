@@ -23,7 +23,7 @@ This page carries the full metric table, the log conventions and the PII rule, t
 - Three Grafana dashboards (per-namespace, per-provider, cluster) as importable JSON
 - OpenTelemetry tracing across the gateway to agent to provider hops (default off)
 
-**Not part of Kaalm.** Both are on the vision page's [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1) list.
+**Not part of Kaalm.** Both are on the vision page's [Scope](../concepts/vision-and-scope.md#scope) list.
 
 - An audit-log export pipeline beyond standard Kubernetes audit logging
 - Cost analytics and chargeback reporting

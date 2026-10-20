@@ -13,7 +13,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/win07xp/kaalm/agentruntime"
+	"github.com/win07xp/kaalm/agentruntime/v2"
 )
 
 func main() {

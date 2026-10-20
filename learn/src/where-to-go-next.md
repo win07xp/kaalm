@@ -7,6 +7,11 @@ k3d cluster delete kaalm-tutorial
 ```
 
 ```
+INFO[0000] Deleting cluster 'kaalm-tutorial'
+INFO[0000] Deleting cluster network 'k3d-kaalm-tutorial'
+INFO[0001] Deleting 1 attached volumes...
+INFO[0001] Removing cluster details from default kubeconfig...
+INFO[0001] Removing standalone kubeconfig file (if there is one)...
 INFO[0001] Successfully deleted cluster kaalm-tutorial!
 ```
 
@@ -43,7 +48,7 @@ organized by the symptom you see.
 **Understand the machine.** The design book, starting at its
 [Introduction](https://github.com/win07xp/kaalm/blob/main/docs/src/introduction.md), is the specification: how the
 controller reconciles, how the gateway routes and bills, how every workload
-gets its certificate, and the twenty-four acceptance scenarios the whole
+gets its certificate, and the twenty-five acceptance scenarios the whole
 system is tested against. Start with its System architecture chapter.
 
 **Write a bigger agent.** You already write handlers; that is the whole

@@ -78,7 +78,7 @@ kubectl get agents
 
 ```
 NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   98s
+helper   Hibernated   False   tutorial   95s
 ```
 
 Asleep. While you were writing the handler, the 30 second timers from the

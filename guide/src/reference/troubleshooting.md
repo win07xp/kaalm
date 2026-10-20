@@ -15,7 +15,18 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   [Workload is `Ready=False` with `SecretNotOptedIn`](#workload-is-readyfalse-with-secretnotoptedin).
 - **Certificate not issued** (`Provisioning`): the Pod waits for its
   serving certificate. `kubectl get certificates -n NAMESPACE` and check
-  cert-manager logs.
+  cert-manager logs. The Certificate is named `NAME-tls`, and the Secret it
+  writes is named `NAME-tls-` plus the first eight characters of the
+  workload's UID, such as `support-assistant-tls-3f9c2a1e`. To find that
+  Secret from a script, read it from the Certificate instead of building the
+  name. Replace `NAME` with the Agent or AgentTask name:
+
+  ```bash
+  kubectl get certificate NAME-tls -n NAMESPACE -o jsonpath='{.spec.secretName}'
+  ```
+
+  The design book states the naming rule on
+  [Agent certificate](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agent.md#agent-certificate).
 - **PVC unbound** (`Provisioning`): `kubectl get pvc -n NAMESPACE`; usually a
   StorageClass problem.
 - **RuntimeClass missing**: reason `PodCreateRejected`. The Agent's class

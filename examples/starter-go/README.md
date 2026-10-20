@@ -1,7 +1,7 @@
 # starter-go
 
 A complete Kaalm agent that imports the contract runtime from the
-[`agentruntime` module](../../agentruntime) instead of vendoring it. Copy this
+[`github.com/win07xp/kaalm/agentruntime/v2` module](../../agentruntime) instead of vendoring it. Copy this
 directory, replace the handler, and you own exactly your agent's logic: the
 [runtime contract](../../docs/src/runtime/contract.md) stays Kaalm's code and
 reaches you as a module update, not a re-copy.
@@ -40,7 +40,7 @@ changes.
 
 ```bash
 cp -r examples/starter-go my-agent && cd my-agent
-go mod tidy    # pins the published agentruntime version, writes go.sum
+go mod tidy    # pins the published agentruntime/v2 version, writes go.sum
 docker build -t registry.example/agents/my-agent:v1 .
 ```
 

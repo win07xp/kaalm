@@ -43,7 +43,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-python:1.0.0
+  image: ghcr.io/win07xp/kaalm-agent-python:2.0.0
   persistence:
     enabled: true
   lifecycle:
@@ -84,20 +84,28 @@ agentclass.kaalm.io/tutorial created
 agent.kaalm.io/helper created
 ```
 
-Now watch it come up:
+Now check on it:
 
 ```bash
 kubectl get agents
 ```
 
 ```
-NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   7s
+NAME     PHASE          READY   CLASS      AGE
+helper   Provisioning   False   tutorial   2s
 ```
 
-It passes through `Pending` and `Provisioning` on the way, so if you are quick
-you will catch one of those. `Running` with `READY True` means the container
-started and is answering its health checks.
+The phase is blank for an instant after you apply, then `Provisioning` while
+Kaalm creates what the agent needs and its pod starts. Run the command again
+every few seconds until the phase reads `Running`:
+
+```
+NAME     PHASE     READY   CLASS      AGE
+helper   Running   True    tutorial   18s
+```
+
+`Running` with `READY True` means the container started and is answering its
+health checks. The first time, it takes longer while the cluster downloads the image.
 
 ## What happened behind the scenes
 
@@ -115,7 +123,7 @@ kubectl get pvc
 
 ```
 NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-helper-memory   Bound    pvc-9a8cd3cc-2433-4e43-932a-2cfa844ebba4   1Gi        RWO            local-path     <unset>                 7s
+helper-memory   Bound    pvc-531f991d-d41d-46fb-a5ca-c3eebeb40344   1Gi        RWO            local-path     <unset>                 17s
 ```
 
 `Bound` means real disk is attached and ready. Note the name: `helper-memory`,

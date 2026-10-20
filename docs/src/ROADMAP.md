@@ -5,13 +5,16 @@ against it, and what comes next.
 
 ## Where the project stands
 
-**v1.0.0 shipped on 2026-09-27**
-([release](https://github.com/win07xp/kaalm/releases/tag/v1.0.0)). It installs
-with a single `helm install` from the published OCI chart, upgrades in place
-from the previous release with two documented commands, and every acceptance
-scenario (S1 to S24) is proven on a real cluster.
+**v2.0.0 is the first stable release, and a fresh start.** It installs with a
+single `helm install` from the published OCI chart. It has no upgrade path
+from 1.x or 0.x: a cluster on an earlier release removes it and installs
+2.0.0 ([Moving from 1.x or 0.x](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/upgrading.md#moving-from-1x-or-0x)).
+Upgrades within 2.x are two documented steps, the new CRDs and then
+`helm upgrade`. Every acceptance scenario (S1 to S25) has a test that proves
+it on a real cluster. S21, the in-place upgrade, needs a 2.x release to
+upgrade from, so it starts guarding once 2.0.0 is published.
 
-Every component of the v1 design ships: all six CRDs, the reconciling
+Every component of the design ships: all six CRDs, the reconciling
 controller (lifecycle, hibernation and wake, budgets, health probes,
 finalizers), the two-listener gateway (LLM proxy with credential isolation,
 budgets, rate limits, and fallback trees that cross API formats; the MCP tool
@@ -20,98 +23,49 @@ optional operator console, the Helm chart with cert-manager-issued TLS, the
 runtime contract with published base images and starter templates, and the
 three books.
 
-The API is `kaalm.io/v1beta1`, and v1.0.0 makes it the compatibility
-contract: every change after this release is additive within `v1beta1`, and
+The API is `kaalm.io/v1beta1`, the only version served and the stored one. It
+is the compatibility contract: every change is additive within `v1beta1`, and
 anything breaking arrives as a new version with conversion both ways
 ([Deprecation policy](operations/api-versioning.md#deprecation-policy)).
-`v1alpha1` stays served and converted, with a warning per request, and is
-removed no earlier than the first minor release after v1.0.0, announced a
-release ahead.
 
-What v1.0.0 added on top of v0.7.0 (the "complete release" milestone,
-[#51](https://github.com/win07xp/kaalm/issues/51)) is hardening rather than
-new surface:
+The 0.x releases built the design in stages and graduated the API from
+`v1alpha1` to `v1beta1`. The 1.0.0 release hardened it: a security audit of
+every listener, restricted Pod defaults for workloads, NetworkPolicy for the
+operator's own Pods, hostname egress on Cilium, and a performance harness
+with a scale baseline. 2.0.0 removes the code that only carried objects
+through those upgrades, which is why it installs fresh.
 
-- **A security pass.** The threat model was re-derived over everything added
-  since v0.2.0 ([#138](https://github.com/win07xp/kaalm/issues/138)), and
-  every listener was audited for authorization and SSRF
-  ([#139](https://github.com/win07xp/kaalm/issues/139)): 33 checks, 10
-  findings, all fixed or corrected. Each verdict names the files it
-  examined, and `make audit-drift` reports which verdicts a later change
-  needs re-walked; the whole audit was re-walked against the release commit.
-  The design is the [threat model](security/threat-model.md).
-- **Secure defaults for workload Pods.** Every agent and task Pod starts from
-  the restricted Pod Security Standard (non-root, no privilege escalation,
-  a read-only root filesystem with a writable `/tmp`, all capabilities
-  dropped, the `RuntimeDefault` seccomp profile) and does not mount a
-  ServiceAccount token. A class can relax either, and the class's
-  `SecurityBaseline` condition names every field it relaxes.
-- **NetworkPolicy for the operator's own Pods.** The chart ships a
-  default-deny ingress policy for the controller, gateway, and console that
-  admits each port's real callers, with the metrics ports open to your
-  monitoring namespace only
-  ([The operator's own NetworkPolicy](operations/deployment.md#the-operators-own-networkpolicy)).
-- **Hostname egress on Cilium.** `allowedHosts` on an AgentClass becomes a
-  `CiliumNetworkPolicy` with `toFQDNs` rules for each workload when the CNI
-  is Cilium ([FQDN egress policy](runtime/child-resources.md#fqdn-egress-policy)),
-  proven in CI on a Cilium cluster.
-- **A scale proof and a performance pass.** A repeatable performance harness
-  ([#140](https://github.com/win07xp/kaalm/issues/140)) and a profiling pass
-  under its baseline ([#174](https://github.com/win07xp/kaalm/issues/174)):
-  400 agents on one machine, hibernation churn, and concurrent tasks, with
-  the numbers in [Performance and scale](operations/performance-and-scale.md).
-- **The Agent Sandbox decision**
-  ([#141](https://github.com/win07xp/kaalm/issues/141)): v1 runs agents as
-  plain Pods and documents the RuntimeClass alternative for code-executing
-  agents; the `agentSandbox` backend is planned for v1.2.0.
-- **A docs audit and its follow-ups.** Every page of the three books was
-  checked against the code and rewritten to one style
-  ([#142](https://github.com/win07xp/kaalm/issues/142)), with
-  `make docs-check` holding links, structure, and wording. The gaps it found
-  between the books and the code were filed as issues; the 27 that belonged
-  in this release are fixed, among them fields the schema accepted and the
-  code never applied, status the design specified and no reconciler wrote,
-  and gateway answers that differed from the wire contract.
-
-Quality bar at release: an 85% CI coverage minimum, envtest suites against a
-real apiserver, a k3d end-to-end suite (76 specs) green locally and in GitHub
-Actions, a Cilium job for hostname egress, and an upgrade suite run from both
-the previous release and the last pre-graduation release.
-
-The `v0.1.0` tag predates the release workflow that publishes the chart and
-images, and installs only from source.
+Quality bar: an 85% CI coverage minimum, envtest suites against a real
+apiserver, a k3d end-to-end suite green locally and in GitHub Actions, and a
+Cilium job for hostname egress.
 
 ## Next
 
-The next milestone is **v1.1.0**, a fix release. It closes the gaps the
-docs audit filed between the books and the code; until each is fixed, its
-page describes the shipped behavior and cites the issue. It also verifies
-and documents the microVM path, Kata first
-([#168](https://github.com/win07xp/kaalm/issues/168)), adds four phases to
-the performance harness: the tool plane, streaming, many namespaces, and many
-providers and classes
-([#175](https://github.com/win07xp/kaalm/issues/175)), and carries the
-tooling and test issues. The full list is on the
-[milestone](https://github.com/win07xp/kaalm/milestone/8).
-
-The milestone after it is **v1.2.0**, the isolation milestone: the
+The next milestone is **v2.1.0**. Its main item is the isolation work: the
 `agentSandbox` runtime backend
 ([#167](https://github.com/win07xp/kaalm/issues/167)). It starts when the
 upstream conditions the issue lists hold. One of them is a quarter of
 stable releases on upstream's v1beta1 line, so the start is no earlier than
-late November 2026. The full list is on the
+late November 2026. The milestone also carries a Claude Code coding agent
+as a proof of concept ([#476](https://github.com/win07xp/kaalm/issues/476)),
+a `values.schema.json` for the chart
+([#351](https://github.com/win07xp/kaalm/issues/351)), and two efficiency
+reviews: the reference runtimes rewriting their whole state file on every
+message ([#484](https://github.com/win07xp/kaalm/issues/484)), and the
+gateway and controller each holding one watch per Secret they read
+([#485](https://github.com/win07xp/kaalm/issues/485)). The full list is on the
 [milestone](https://github.com/win07xp/kaalm/milestone/9).
 
 ## Beyond
 
 The unscheduled backlog: the deferrals the design itself names (see
-[Scope for v1](concepts/vision-and-scope.md#scope-for-v1)), roughly in the order
+[Scope](concepts/vision-and-scope.md#scope)), roughly in the order
 they are likely to matter:
 
 - **The Discord Gateway WebSocket adapter.** Free-text message bots need a
   persistent connection per bot (identify, heartbeat, resume, sharding) and
-  one replica to hold it; the v0.7.0 Discord adapter covers slash commands
-  over HTTP instead. Tracked as
+  one replica to hold it; the Discord adapter covers slash commands over
+  HTTP instead. Tracked as
   [#124](https://github.com/win07xp/kaalm/issues/124).
 - **Serving the `google-vertex` provider type.** The enum is reserved and
   the adapter's outbound pieces exist, but no inbound path is routed and
@@ -127,7 +81,7 @@ they are likely to matter:
   or rejecting an undeclared server tool in a request body, and in-process
   tool observability at the LLM gateway. Each is designed far enough to
   name in [The tool plane](gateways/tool-plane.md) and not built.
-- **A `v1` API version.** v1.0.0 keeps `v1beta1` as its API. A `v1`
+- **A `v1` API version.** `v1beta1` is the only API version. A `v1`
   arrives when real usage asks for a change `v1beta1` cannot absorb
   additively, under the
   [Deprecation policy](operations/api-versioning.md#deprecation-policy).

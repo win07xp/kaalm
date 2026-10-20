@@ -251,7 +251,8 @@ switch to turn the check off. Developers need no Secret access to use a
 labeled Secret.
 [Troubleshooting](../reference/troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin)
 shows what a workload reports when a Secret lacks the label. For the rule, see
-[Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
+[Reference and access rules](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation/references-and-access.md#referenced-objects-must-exist)
+(rule 48).
 
 ### Label provider Secrets
 

@@ -1,4 +1,4 @@
-module github.com/win07xp/kaalm/agentruntime
+module github.com/win07xp/kaalm/agentruntime/v2
 
 go 1.26.0
 

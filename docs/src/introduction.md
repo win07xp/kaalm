@@ -16,7 +16,7 @@ The parts build on each other. Reading front to back never requires a concept th
 6. **The Console** documents the optional operator console: its scope, the read API, authentication, and test-chat.
 7. **Security** covers the trust model, RBAC, credential handling, TLS and certificates, and the threat model.
 8. **Operations** covers deployment with Helm, API versioning and the deprecation policy, observability, and performance and scale.
-9. The appendix holds the twenty-four acceptance scenarios that double as v1 acceptance criteria.
+9. The appendix holds the twenty-five acceptance scenarios that double as acceptance criteria.
 
 ## Where to start
 

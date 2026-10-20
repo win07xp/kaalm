@@ -1,6 +1,6 @@
 # Acceptance scenarios
 
-These scenarios are concrete enough to double as acceptance criteria: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. Priya, the platform engineer who provisions the capability, is the actor in S1 through S5, S17, S19 through S21, and S24. Dev, the application developer who deploys agents, is the actor in S6 through S11 and S25. S12 through S15, S22, and S23 cover channel integration, where external systems talk to agents through the User Gateway. S16, the zero-build on-ramp, and S18, the governed tool, involve both. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused; [Provenance](#provenance) records the release that added each one.
+These scenarios are concrete enough to double as acceptance criteria: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. Priya, the platform engineer who provisions the capability, is the actor in S1 through S5, S17, S19 through S21, and S24. Dev, the application developer who deploys agents, is the actor in S6 through S11 and S25. S12 through S15, S22, and S23 cover channel integration, where external systems talk to agents through the User Gateway. S16, the zero-build on-ramp, and S18, the governed tool, involve both. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused.
 
 ## S1: Install Kaalm and offer a standard agent class
 
@@ -8,7 +8,7 @@ Priya installs the Kaalm operator into her cluster with the Helm chart. The char
 
 ## S2: Offer a sandboxed class for code-execution agents
 
-Priya creates a second `AgentClass` named `sandboxed` for agents that execute untrusted code. This class requires the `gvisor` RuntimeClass, permits persistence with a size ceiling that workloads opt into, and enforces a stricter resource cap. Host networking is never granted: no Pod Kaalm creates uses it, and the deprecated class field `allowHostNetwork` has no effect. Developers working on coding agents use this class; the security team is satisfied that LLM-generated code cannot escape the sandbox. The repository's `config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml` is such a class, and the chart ships none ([Deployment](../operations/deployment.md)).
+Priya creates a second `AgentClass` named `sandboxed` for agents that execute untrusted code. This class requires the `gvisor` RuntimeClass, permits persistence with a size ceiling that workloads opt into, and enforces a stricter resource cap. Host networking is never granted: no Pod Kaalm creates uses it, and the CRD rejects an `allowHostNetwork` field on a class. Developers working on coding agents use this class; the security team is satisfied that LLM-generated code cannot escape the sandbox. The repository's `config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml` is such a class, and the chart ships none ([Deployment](../operations/deployment.md)).
 
 ## S3: Provision a shared Anthropic provider with a per-namespace budget
 
@@ -154,20 +154,3 @@ The scenarios that define the resource model, S1 to S18, drive these requirement
 - **S16** requires the published reference base images, the `Agent.spec.handler` ConfigMap reference, and the `AgentClass.spec.image.allowHandlerMounts` grant (validation rules 30 and 31). See [Reference base images](../runtime/base-images.md).
 - **S17** requires the opt-in hard budget mode: `budget.enforcement` and validation rules 32 to 34. See [Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement).
 - **S18** requires the tool plane: the `ToolProvider` CRD, the class and workload grant chain (validation rules 35 to 38), and the gateway's `/v1/mcp/*` broker with credential injection and session ownership binding. Specified in [The tool plane](../gateways/tool-plane.md).
-
-## Provenance
-
-Each scenario was added with the design it exercises. The release column names the release whose chapter introduced it; the coverage map says what proves it.
-
-| Scenarios | Added with | Release |
-|---|---|---|
-| S1 to S15 | The original design: classes, providers, agents, tasks, and webhook channels | v0.1.0 |
-| S16 | The reference base images and the mounted-handler on-ramp | v0.3.0 |
-| S17 | Hard budget enforcement | v0.3.0 |
-| S18 | The tool plane (design); the broker implementation followed | v0.3.0, proven at v0.4.0 |
-| S19 | The operator console | v0.5.0 |
-| S20 | OpenTelemetry tracing | v0.5.0 |
-| S21 | API versioning and the in-place upgrade | v0.6.0 |
-| S22, S23 | The Discord and WhatsApp platform adapters | v0.7.0 |
-| S24 | Cross-format provider fallback | v0.7.0 |
-| S25 | The framework on-ramp: a framework agent built `FROM` the Python base image | v0.4.0 |

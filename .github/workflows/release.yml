@@ -80,7 +80,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           push: true
 
-  # go get github.com/win07xp/kaalm/agentruntime@vX.Y.Z resolves through the
+  # go get github.com/win07xp/kaalm/agentruntime/v2@vX.Y.Z resolves through the
   # sub-module tag agentruntime/vX.Y.Z; publish it alongside the release tag.
   # The v* trigger does not match agentruntime/v*, so this cannot recurse.
   module-tag:
