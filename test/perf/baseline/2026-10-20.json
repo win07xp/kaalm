@@ -1,0 +1,1972 @@
+{
+  "commit": "2f13349d",
+  "startedAt": "2026-10-20T01:47:47.272539209Z",
+  "finishedAt": "2026-10-20T02:33:58.206966379Z",
+  "config": {
+    "Context": "k3d-kaalm-perf",
+    "Namespace": "perf",
+    "AgentImage": "registry.test/agents/starter-go:e2e",
+    "LoadgenImage": "registry.test/perf/loadgen:perf",
+    "Infra": "test/perf/testdata/infra.yaml",
+    "Out": "",
+    "Phases": [
+      "gateway",
+      "ramp",
+      "hold",
+      "restart",
+      "teardown",
+      "churn",
+      "tasks",
+      "tools",
+      "stream"
+    ],
+    "HostPreflight": true,
+    "RampTarget": 500,
+    "WaveSize": 50,
+    "WaveTimeout": 360000000000,
+    "MemFloorMiB": 3072,
+    "HoldDuration": 180000000000,
+    "HoldPerAgentInterval": 60000000000,
+    "HoldSampleInterval": 60000000000,
+    "IdleDuration": 180000000000,
+    "ChurnAgents": 100,
+    "ChurnCycle": 90000000000,
+    "ChurnDuration": 600000000000,
+    "Tasks": 200,
+    "TaskTimeout": 900000000000,
+    "GatewayConcurrency": 32,
+    "GatewayDuration": 60000000000,
+    "NamespacesCount": 20,
+    "NamespacesAgents": 400,
+    "ProvidersCount": 50
+  },
+  "environment": {
+    "hostCpus": 8,
+    "hostMemTotalMiB": 15919.531,
+    "kernel": "7.0.0-38-generic",
+    "k3dVersion": "k3d version v5.9.0",
+    "kubernetesVersion": "v1.37.1+k3s1",
+    "nodes": [
+      {
+        "name": "k3d-kaalm-perf-agent-0",
+        "allocatablePods": 250,
+        "allocatableCpu": "8",
+        "allocatableMemMiB": 15919.531,
+        "kubelet": "v1.37.1+k3s1"
+      },
+      {
+        "name": "k3d-kaalm-perf-agent-1",
+        "allocatablePods": 250,
+        "allocatableCpu": "8",
+        "allocatableMemMiB": 15919.531,
+        "kubelet": "v1.37.1+k3s1"
+      },
+      {
+        "name": "k3d-kaalm-perf-server-0",
+        "allocatablePods": 250,
+        "allocatableCpu": "8",
+        "allocatableMemMiB": 15919.531,
+        "kubelet": "v1.37.1+k3s1"
+      }
+    ],
+    "components": {
+      "kaalm-controller": {
+        "replicas": 2,
+        "image": "ghcr.io/win07xp/kaalm-controller:0.2.0"
+      },
+      "kaalm-gateway": {
+        "replicas": 2,
+        "image": "ghcr.io/win07xp/kaalm-gateway:0.2.0"
+      }
+    }
+  },
+  "gateway": {
+    "legs": [
+      {
+        "name": "token tier: soft budget, 0 ms upstream",
+        "provider": "perf-fast",
+        "mtls": false,
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 572195,
+          "statuses": {
+            "200": 572195
+          },
+          "durationSec": 60.002,
+          "rps": 9536.287,
+          "latencyMs": {
+            "count": 572195,
+            "mean": 3.325,
+            "p50": 2.725,
+            "p90": 6.322,
+            "p95": 7.903,
+            "p99": 11.446,
+            "max": 72.716
+          },
+          "warmupSec": 2.036
+        },
+        "gatewaySideMs": {
+          "count": 572196,
+          "mean": 1.402,
+          "p50": 2.576,
+          "p90": 4.637,
+          "p95": 4.895,
+          "p99": 8.479,
+          "max": 50
+        },
+        "gatewayRequests": 572196,
+        "spendUsd": 31.471,
+        "budgetUtilization": 0.00003147260499995993,
+        "gatewayCpuPerRequestMs": 0.388,
+        "gatewayUsageMax": {
+          "cpuMilli": 3686.8,
+          "memMiB": 50.891
+        }
+      },
+      {
+        "name": "mtls: soft budget, 0 ms upstream",
+        "provider": "perf-fast",
+        "mtls": true,
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 637960,
+          "statuses": {
+            "200": 637960
+          },
+          "durationSec": 60.003,
+          "rps": 10632.192,
+          "latencyMs": {
+            "count": 637960,
+            "mean": 2.992,
+            "p50": 2.5,
+            "p90": 5.55,
+            "p95": 6.927,
+            "p99": 9.998,
+            "max": 98.494
+          },
+          "warmupSec": 2.013
+        },
+        "gatewaySideMs": {
+          "count": 637961,
+          "mean": 1.353,
+          "p50": 2.564,
+          "p90": 4.615,
+          "p95": 4.871,
+          "p99": 8.076,
+          "max": 100
+        },
+        "gatewayRequests": 637961,
+        "spendUsd": 35.088,
+        "budgetUtilization": 0.00006575383499985156,
+        "gatewayCpuPerRequestMs": 0.364,
+        "gatewayUsageMax": {
+          "cpuMilli": 3900.821,
+          "memMiB": 52.973
+        }
+      },
+      {
+        "name": "mtls: soft budget, 50 ms upstream",
+        "provider": "perf-slow",
+        "mtls": true,
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 37155,
+          "statuses": {
+            "200": 37155
+          },
+          "durationSec": 60.036,
+          "rps": 618.877,
+          "latencyMs": {
+            "count": 37155,
+            "mean": 51.688,
+            "p50": 51.601,
+            "p90": 52.303,
+            "p95": 52.552,
+            "p99": 53.254,
+            "max": 79.632
+          },
+          "warmupSec": 2.064
+        },
+        "gatewaySideMs": {
+          "count": 37156,
+          "mean": 51.078,
+          "p50": 75,
+          "p90": 95,
+          "p95": 97.5,
+          "p99": 99.5,
+          "max": 100
+        },
+        "gatewayRequests": 37156,
+        "spendUsd": 2.044,
+        "budgetUtilization": 0.0000020476600000003486,
+        "gatewayCpuPerRequestMs": 0.547,
+        "gatewayUsageMax": {
+          "cpuMilli": 3899.799,
+          "memMiB": 53.043
+        }
+      },
+      {
+        "name": "mtls: hard budget, 0 ms upstream",
+        "provider": "perf-hard",
+        "mtls": true,
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 628832,
+          "statuses": {
+            "200": 628832
+          },
+          "durationSec": 60.004,
+          "rps": 10479.913,
+          "latencyMs": {
+            "count": 628832,
+            "mean": 3.037,
+            "p50": 2.568,
+            "p90": 5.548,
+            "p95": 6.869,
+            "p99": 9.827,
+            "max": 72.909
+          },
+          "warmupSec": 2.011
+        },
+        "gatewaySideMs": {
+          "count": 628833,
+          "mean": 1.404,
+          "p50": 2.565,
+          "p90": 4.617,
+          "p95": 4.873,
+          "p99": 8.138,
+          "max": 50
+        },
+        "gatewayRequests": 628833,
+        "spendUsd": 34.586,
+        "budgetUtilization": 0.00003453798499988351,
+        "gatewayCpuPerRequestMs": 0.376,
+        "gatewayUsageMax": {
+          "cpuMilli": 4028.949,
+          "memMiB": 54.445
+        }
+      },
+      {
+        "name": "mtls: rate limits on, 0 ms upstream",
+        "provider": "perf-limited",
+        "mtls": true,
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 600646,
+          "statuses": {
+            "200": 600646
+          },
+          "durationSec": 60.002,
+          "rps": 10010.373,
+          "latencyMs": {
+            "count": 600646,
+            "mean": 3.175,
+            "p50": 2.557,
+            "p90": 6.108,
+            "p95": 7.711,
+            "p99": 11.378,
+            "max": 99.07
+          },
+          "warmupSec": 2.014
+        },
+        "gatewaySideMs": {
+          "count": 600647,
+          "mean": 1.406,
+          "p50": 2.586,
+          "p90": 4.654,
+          "p95": 4.913,
+          "p99": 8.692,
+          "max": 50
+        },
+        "gatewayRequests": 600647,
+        "spendUsd": 33.036,
+        "budgetUtilization": 0.000033034429999942746,
+        "gatewayCpuPerRequestMs": 0.375,
+        "gatewayUsageMax": {
+          "cpuMilli": 3876.888,
+          "memMiB": 56.781
+        }
+      }
+    ]
+  },
+  "ramp": {
+    "target": 500,
+    "waveSize": 50,
+    "waves": [
+      {
+        "index": 0,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 50,
+        "wallSec": 16.884,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 6.9,
+          "p50": 7,
+          "p90": 9,
+          "p95": 9,
+          "p99": 15,
+          "max": 15
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 3,
+          "p50": 3,
+          "p90": 6,
+          "p95": 6,
+          "p99": 7,
+          "max": 7
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 4.7,
+          "p50": 5,
+          "p90": 7,
+          "p95": 7,
+          "p99": 8,
+          "max": 8
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 2.2,
+          "p50": 2,
+          "p90": 3,
+          "p95": 3,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 11372.949,
+        "controller": {
+          "cpuMilli": 119.206551,
+          "memMiB": 46.6171875
+        },
+        "gateway": {
+          "cpuMilli": 45.866518,
+          "memMiB": 47.16796875
+        },
+        "reconcileMs": {
+          "count": 280,
+          "mean": 130.424,
+          "p50": 132.759,
+          "p90": 282.353,
+          "p95": 350,
+          "p99": 455,
+          "max": 600
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 423.801,
+          "k3d-kaalm-perf-agent-1": 399.145,
+          "k3d-kaalm-perf-server-0": 1147.305
+        }
+      },
+      {
+        "index": 1,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 100,
+        "wallSec": 13.367,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 7.04,
+          "p50": 7,
+          "p90": 9,
+          "p95": 9,
+          "p99": 13,
+          "max": 13
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 3.26,
+          "p50": 3,
+          "p90": 6,
+          "p95": 7,
+          "p99": 7,
+          "max": 7
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 4.74,
+          "p50": 5,
+          "p90": 7,
+          "p95": 7,
+          "p99": 8,
+          "max": 8
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 2.3,
+          "p50": 2,
+          "p90": 3,
+          "p95": 3,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 10681.488,
+        "controller": {
+          "cpuMilli": 119.206551,
+          "memMiB": 46.6171875
+        },
+        "gateway": {
+          "cpuMilli": 45.866518,
+          "memMiB": 47.16796875
+        },
+        "reconcileMs": {
+          "count": 276,
+          "mean": 136.554,
+          "p50": 154.098,
+          "p90": 264.667,
+          "p95": 316,
+          "p99": 524,
+          "max": 700
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 423.801,
+          "k3d-kaalm-perf-agent-1": 399.145,
+          "k3d-kaalm-perf-server-0": 1147.305
+        }
+      },
+      {
+        "index": 2,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 150,
+        "wallSec": 11.015,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 8.18,
+          "p50": 9,
+          "p90": 10,
+          "p95": 10,
+          "p99": 11,
+          "max": 11
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 4.62,
+          "p50": 5,
+          "p90": 8,
+          "p95": 8,
+          "p99": 9,
+          "max": 9
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 5.98,
+          "p50": 6,
+          "p90": 9,
+          "p95": 9,
+          "p99": 9,
+          "max": 9
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 2.2,
+          "p50": 2,
+          "p90": 3,
+          "p95": 3,
+          "p99": 4,
+          "max": 4
+        },
+        "hostMemAvailMiB": 9937.184,
+        "controller": {
+          "cpuMilli": 170.94886800000003,
+          "memMiB": 51.05859375
+        },
+        "gateway": {
+          "cpuMilli": 47.00458400000001,
+          "memMiB": 47.515625
+        },
+        "reconcileMs": {
+          "count": 350,
+          "mean": 118.059,
+          "p50": 70,
+          "p90": 275,
+          "p95": 347.727,
+          "p99": 587.5,
+          "max": 900
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 630.504,
+          "k3d-kaalm-perf-agent-1": 587.043,
+          "k3d-kaalm-perf-server-0": 1382.953
+        }
+      },
+      {
+        "index": 3,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 200,
+        "wallSec": 11.55,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 8.38,
+          "p50": 9,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 4.24,
+          "p50": 5,
+          "p90": 7,
+          "p95": 8,
+          "p99": 9,
+          "max": 9
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 5.96,
+          "p50": 6,
+          "p90": 9,
+          "p95": 9,
+          "p99": 9,
+          "max": 9
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 2.42,
+          "p50": 2,
+          "p90": 3,
+          "p95": 4,
+          "p99": 5,
+          "max": 5
+        },
+        "hostMemAvailMiB": 9148.492,
+        "controller": {
+          "cpuMilli": 134.993831,
+          "memMiB": 56.23828125
+        },
+        "gateway": {
+          "cpuMilli": 65.048496,
+          "memMiB": 50.0703125
+        },
+        "reconcileMs": {
+          "count": 320,
+          "mean": 124.49,
+          "p50": 60.714,
+          "p90": 333.333,
+          "p95": 450,
+          "p99": 660,
+          "max": 900
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 814.809,
+          "k3d-kaalm-perf-agent-1": 754.781,
+          "k3d-kaalm-perf-server-0": 1680.195
+        }
+      },
+      {
+        "index": 4,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 250,
+        "wallSec": 28.82,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 12.68,
+          "p50": 13,
+          "p90": 16,
+          "p95": 16,
+          "p99": 25,
+          "max": 25
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 6.1,
+          "p50": 6,
+          "p90": 11,
+          "p95": 11,
+          "p99": 12,
+          "max": 12
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 8.26,
+          "p50": 8,
+          "p90": 12,
+          "p95": 13,
+          "p99": 13,
+          "max": 13
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 4.42,
+          "p50": 4,
+          "p90": 6,
+          "p95": 12,
+          "p99": 13,
+          "max": 13
+        },
+        "hostMemAvailMiB": 8442.07,
+        "controller": {
+          "cpuMilli": 197.92768099999998,
+          "memMiB": 62.73046875
+        },
+        "gateway": {
+          "cpuMilli": 95.05223000000001,
+          "memMiB": 58.734375
+        },
+        "reconcileMs": {
+          "count": 365,
+          "mean": 150.382,
+          "p50": 45.956,
+          "p90": 415,
+          "p95": 652.273,
+          "p99": 1146.875,
+          "max": 1750
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 1192.035,
+          "k3d-kaalm-perf-agent-1": 1154.02,
+          "k3d-kaalm-perf-server-0": 2223.148
+        }
+      },
+      {
+        "index": 5,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 300,
+        "wallSec": 19.354,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 10.64,
+          "p50": 11,
+          "p90": 12,
+          "p95": 12,
+          "p99": 17,
+          "max": 17
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 4.18,
+          "p50": 4,
+          "p90": 8,
+          "p95": 9,
+          "p99": 9,
+          "max": 9
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 6.08,
+          "p50": 6,
+          "p90": 9,
+          "p95": 9,
+          "p99": 10,
+          "max": 10
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 4.56,
+          "p50": 4,
+          "p90": 6,
+          "p95": 7,
+          "p99": 12,
+          "max": 12
+        },
+        "hostMemAvailMiB": 7646.152,
+        "controller": {
+          "cpuMilli": 58.247168,
+          "memMiB": 65.796875
+        },
+        "gateway": {
+          "cpuMilli": 42.499349,
+          "memMiB": 63.1796875
+        },
+        "reconcileMs": {
+          "count": 372,
+          "mean": 114.348,
+          "p50": 39.744,
+          "p90": 361.667,
+          "p95": 480,
+          "p99": 764,
+          "max": 1500
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 1273.973,
+          "k3d-kaalm-perf-agent-1": 1215.164,
+          "k3d-kaalm-perf-server-0": 2934.125
+        }
+      },
+      {
+        "index": 6,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 350,
+        "wallSec": 25.844,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 11.4,
+          "p50": 13,
+          "p90": 13,
+          "p95": 13,
+          "p99": 23,
+          "max": 23
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 4.74,
+          "p50": 5,
+          "p90": 9,
+          "p95": 9,
+          "p99": 10,
+          "max": 10
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 6.64,
+          "p50": 6,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 4.76,
+          "p50": 5,
+          "p90": 7,
+          "p95": 7,
+          "p99": 13,
+          "max": 13
+        },
+        "hostMemAvailMiB": 6735.852,
+        "controller": {
+          "cpuMilli": 130.743332,
+          "memMiB": 73.375
+        },
+        "gateway": {
+          "cpuMilli": 46.254064,
+          "memMiB": 67.0234375
+        },
+        "reconcileMs": {
+          "count": 380,
+          "mean": 114.604,
+          "p50": 29.762,
+          "p90": 350,
+          "p95": 470,
+          "p99": 655,
+          "max": 1000
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 1357.113,
+          "k3d-kaalm-perf-agent-1": 1341.902,
+          "k3d-kaalm-perf-server-0": 3863.918
+        }
+      },
+      {
+        "index": 7,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 400,
+        "wallSec": 40.111,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 18.78,
+          "p50": 17,
+          "p90": 29,
+          "p95": 38,
+          "p99": 39,
+          "max": 39
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 6.22,
+          "p50": 6,
+          "p90": 12,
+          "p95": 13,
+          "p99": 13,
+          "max": 13
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 9,
+          "p50": 9,
+          "p90": 14,
+          "p95": 15,
+          "p99": 15,
+          "max": 15
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 9.78,
+          "p50": 8,
+          "p90": 16,
+          "p95": 24,
+          "p99": 25,
+          "max": 25
+        },
+        "hostMemAvailMiB": 5837.449,
+        "controller": {
+          "cpuMilli": 50.237755,
+          "memMiB": 81.609375
+        },
+        "gateway": {
+          "cpuMilli": 29.868474000000006,
+          "memMiB": 81.14453125
+        },
+        "reconcileMs": {
+          "count": 400,
+          "mean": 158.789,
+          "p50": 37.037,
+          "p90": 433.333,
+          "p95": 700,
+          "p99": 1375,
+          "max": 3000
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 1544.344,
+          "k3d-kaalm-perf-agent-1": 1402.594,
+          "k3d-kaalm-perf-server-0": 4621.332
+        }
+      },
+      {
+        "index": 8,
+        "requested": 50,
+        "readyInWave": 43,
+        "fleetReady": 443,
+        "wallSec": 157.147,
+        "timeToReadySec": {
+          "count": 43,
+          "mean": 49.023,
+          "p50": 38,
+          "p90": 97,
+          "p95": 122,
+          "p99": 153,
+          "max": 153
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 4.32,
+          "p50": 4,
+          "p90": 8,
+          "p95": 9,
+          "p99": 9,
+          "max": 9
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 6.08,
+          "p50": 6,
+          "p90": 10,
+          "p95": 10,
+          "p99": 10,
+          "max": 10
+        },
+        "startToReadySec": {
+          "count": 43,
+          "mean": 42.977,
+          "p50": 33,
+          "p90": 93,
+          "p95": 115,
+          "p99": 152,
+          "max": 152
+        },
+        "hostMemAvailMiB": 4288.367,
+        "controller": {
+          "cpuMilli": 22.216925,
+          "memMiB": 80.83984375
+        },
+        "gateway": {
+          "cpuMilli": 15.194963000000001,
+          "memMiB": 87.15625
+        },
+        "reconcileMs": {
+          "count": 519,
+          "mean": 77.425,
+          "p50": 4.896,
+          "p90": 246.346,
+          "p95": 369.062,
+          "p99": 645.25,
+          "max": 1750
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-perf-agent-0": 2395.406,
+          "k3d-kaalm-perf-agent-1": 1464.391,
+          "k3d-kaalm-perf-server-0": 5110.816
+        }
+      }
+    ],
+    "achieved": 400,
+    "saturation": "agent pods failing probes: 1 in CrashLoopBackOff",
+    "saturationWave": 8,
+    "hostMemBeforeMiB": 12162.527,
+    "memPerAgentMiB": 18.664
+  },
+  "hold": {
+    "agents": 400,
+    "channels": 400,
+    "channelsActiveSec": 0.807,
+    "client": {
+      "mode": "channels",
+      "requests": 1200,
+      "statuses": {
+        "202": 1200
+      },
+      "durationSec": 180.005,
+      "rps": 6.666,
+      "latencyMs": {
+        "count": 1200,
+        "mean": 5.306,
+        "p50": 4.88,
+        "p90": 6.148,
+        "p95": 7.514,
+        "p99": 15.466,
+        "max": 60.352
+      },
+      "warmupSec": 0.046
+    },
+    "messagesByStatus": {
+      "delivered": 1171,
+      "delivery_failed": 30
+    },
+    "messageDurationMs": {
+      "count": 1201,
+      "mean": 8116.786,
+      "p50": 8.729,
+      "p90": 10000,
+      "p95": 10000,
+      "p99": 10000,
+      "max": 10000
+    },
+    "deliveryAttempts": {
+      "connect": 397,
+      "ok": 1171,
+      "timeout": 144
+    },
+    "audit": {
+      "seconds": 297.291,
+      "agents": 400,
+      "controller": {
+        "DELETE": 0,
+        "GET": 109,
+        "POST": 0,
+        "PUT": 557
+      },
+      "gateway": {
+        "GET": 617,
+        "PATCH": 480,
+        "POST": 1201
+      },
+      "apiserver": {
+        "APPLY configmaps": 480,
+        "CONNECT pods/log": 1,
+        "CONNECT pods/portforward": 16,
+        "DELETE certificaterequests": 44,
+        "DELETE certificates": 24,
+        "DELETE endpoints": 46,
+        "DELETE endpointslices": 44,
+        "DELETE ipaddresses": 23,
+        "DELETE jobs": 2,
+        "DELETE networkpolicies": 23,
+        "DELETE pods": 1,
+        "DELETE secrets": 44,
+        "DELETE serviceaccounts": 23,
+        "DELETE services": 23,
+        "GET /api": 19,
+        "GET /apis": 19,
+        "GET /openapi/v3": 59,
+        "GET certificaterequests": 44,
+        "GET certificates": 20,
+        "GET configmaps": 600,
+        "GET endpoints": 30,
+        "GET endpointslices": 74,
+        "GET jobs": 39,
+        "GET leases": 93,
+        "GET networkpolicies": 20,
+        "GET pods": 39,
+        "GET secrets": 46,
+        "GET serviceaccounts": 20,
+        "GET services": 20,
+        "LIST limitranges": 1,
+        "LIST persistentvolumeclaims": 1,
+        "LIST persistentvolumes": 2,
+        "LIST pods": 9,
+        "LIST services": 2,
+        "LIST storageclasses": 1,
+        "PATCH nodes/status": 3,
+        "PATCH pods": 1,
+        "PATCH pods/status": 5,
+        "POST configmaps": 1201,
+        "POST events": 6,
+        "POST jobs": 1,
+        "POST pods": 1,
+        "POST pods/binding": 1,
+        "POST serviceaccounts/token": 2,
+        "POST subjectaccessreviews": 16,
+        "POST tokenreviews": 7,
+        "PUT agentchannels/status": 408,
+        "PUT jobs/status": 5,
+        "PUT leases": 455,
+        "WATCH addons": 1,
+        "WATCH agentchannels": 5,
+        "WATCH agentclasses": 5,
+        "WATCH agents": 4,
+        "WATCH agenttasks": 3,
+        "WATCH apiservices": 3,
+        "WATCH backendtlspolicies": 1,
+        "WATCH bundles": 1,
+        "WATCH certificaterequests": 1,
+        "WATCH certificates": 2,
+        "WATCH challenges": 1,
+        "WATCH clusterissuers": 2,
+        "WATCH clusterrolebindings": 2,
+        "WATCH clusterroles": 1,
+        "WATCH clustertrustbundles": 1,
+        "WATCH configmaps": 19,
+        "WATCH cronjobs": 1,
+        "WATCH csidrivers": 5,
+        "WATCH csinodes": 2,
+        "WATCH csistoragecapacities": 2,
+        "WATCH customresourcedefinitions": 3,
+        "WATCH daemonsets": 1,
+        "WATCH deployments": 1,
+        "WATCH deviceclasses": 1,
+        "WATCH devicetaintrules": 2,
+        "WATCH endpointslices": 11,
+        "WATCH flowschemas": 1,
+        "WATCH gatewayclasses": 1,
+        "WATCH gateways": 1,
+        "WATCH helmchartconfigs": 2,
+        "WATCH helmcharts": 2,
+        "WATCH horizontalpodautoscalers": 1,
+        "WATCH httproutes": 1,
+        "WATCH ingressclasses": 2,
+        "WATCH ingresses": 1,
+        "WATCH ipaddresses": 2,
+        "WATCH issuers": 2,
+        "WATCH jobs": 2,
+        "WATCH leases": 1,
+        "WATCH limitranges": 2,
+        "WATCH modelproviders": 4,
+        "WATCH mutatingadmissionpolicies": 1,
+        "WATCH mutatingadmissionpolicybindings": 2,
+        "WATCH mutatingwebhookconfigurations": 2,
+        "WATCH namespaces": 5,
+        "WATCH networkpolicies": 4,
+        "WATCH nodes": 12,
+        "WATCH orders": 1,
+        "WATCH persistentvolumeclaims": 5,
+        "WATCH persistentvolumes": 4,
+        "WATCH podcertificaterequests": 4,
+        "WATCH poddisruptionbudgets": 2,
+        "WATCH pods": 10,
+        "WATCH podtemplates": 1,
+        "WATCH priorityclasses": 2,
+        "WATCH prioritylevelconfigurations": 2,
+        "WATCH referencegrants": 1,
+        "WATCH replicasets": 2,
+        "WATCH replicationcontrollers": 1,
+        "WATCH resourceclaims": 2,
+        "WATCH resourceclaimtemplates": 1,
+        "WATCH resourceslices": 1,
+        "WATCH rolebindings": 3,
+        "WATCH roles": 2,
+        "WATCH runtimeclasses": 3,
+        "WATCH secrets": 10,
+        "WATCH serviceaccounts": 4,
+        "WATCH servicecidrs": 5,
+        "WATCH services": 8,
+        "WATCH statefulsets": 2,
+        "WATCH storageclasses": 3,
+        "WATCH storageversionmigrations": 1,
+        "WATCH tcproutes": 1,
+        "WATCH tlsroutes": 1,
+        "WATCH toolproviders": 2,
+        "WATCH udproutes": 1,
+        "WATCH validatingadmissionpolicies": 2,
+        "WATCH validatingadmissionpolicybindings": 2,
+        "WATCH validatingwebhookconfigurations": 2,
+        "WATCH volumeattachments": 2,
+        "WATCH volumeattributesclasses": 1
+      },
+      "controllerRequestsPerSec": 2.24,
+      "gatewayRequestsPerSec": 7.73,
+      "controllerWritesPerAgentMinute": 0.281,
+      "gatewayWritesPerAgentMinute": 0.848
+    },
+    "series": [
+      {
+        "atSec": 60.343,
+        "component": "gateway",
+        "goroutines": 1118,
+        "heapMiB": 41.625,
+        "rssMiB": 83.793
+      },
+      {
+        "atSec": 60.692,
+        "component": "controller",
+        "goroutines": 366,
+        "heapMiB": 39.461,
+        "rssMiB": 100.789
+      },
+      {
+        "atSec": 120.907,
+        "component": "gateway",
+        "goroutines": 1178,
+        "heapMiB": 48.133,
+        "rssMiB": 94.168
+      },
+      {
+        "atSec": 121.119,
+        "component": "controller",
+        "goroutines": 366,
+        "heapMiB": 41.438,
+        "rssMiB": 101.008
+      },
+      {
+        "atSec": 181.337,
+        "component": "gateway",
+        "goroutines": 1159,
+        "heapMiB": 47.297,
+        "rssMiB": 98.293
+      },
+      {
+        "atSec": 181.547,
+        "component": "controller",
+        "goroutines": 366,
+        "heapMiB": 40.133,
+        "rssMiB": 101.258
+      }
+    ],
+    "callbacks": 1201,
+    "readyBefore": 400,
+    "readyAfter": 400,
+    "restartsBefore": 0,
+    "restartsAfter": 0,
+    "flaps": 0,
+    "gatewayUsageMax": {
+      "cpuMilli": 99.48,
+      "memMiB": 127.727
+    },
+    "controllerUsageMax": {
+      "cpuMilli": 85.07,
+      "memMiB": 87.695
+    }
+  },
+  "teardown": {
+    "agents": 400,
+    "seconds": 57.888
+  },
+  "churn": {
+    "agents": 100,
+    "timeToReadySec": {
+      "count": 100,
+      "mean": 96.58,
+      "p50": 95,
+      "p90": 168,
+      "p95": 176,
+      "p99": 182,
+      "max": 183
+    },
+    "allReadySec": 186.812,
+    "firstHibernationSec": {
+      "count": 100,
+      "mean": 15.88,
+      "p50": 16,
+      "p90": 16,
+      "p95": 17,
+      "p99": 19,
+      "max": 20
+    },
+    "allHibernatedSec": 15.27,
+    "client": {
+      "mode": "channels",
+      "requests": 667,
+      "statuses": {
+        "202": 667
+      },
+      "durationSec": 600.312,
+      "rps": 1.111,
+      "latencyMs": {
+        "count": 667,
+        "mean": 6.216,
+        "p50": 5.169,
+        "p90": 7.96,
+        "p95": 12.269,
+        "p99": 25.439,
+        "max": 46.057
+      },
+      "warmupSec": 0.025
+    },
+    "messagesByStatus": {
+      "delivered": 668
+    },
+    "wakeDurationMs": {
+      "count": 667,
+      "mean": 2433.321,
+      "p50": 1911.202,
+      "p90": 3769.802,
+      "p95": 4595.297,
+      "p99": 10000,
+      "max": 10000
+    },
+    "wakesByResult": {
+      "ready": 667
+    },
+    "wakesTotal": 667,
+    "hibernationsTotal": 667,
+    "callbacks": 668,
+    "teardownSec": 9.999,
+    "idleSettleSec": 50.351,
+    "idle": {
+      "seconds": 180.984,
+      "agents": 100,
+      "controller": {
+        "DELETE": 0,
+        "GET": 71,
+        "POST": 0,
+        "PUT": 91
+      },
+      "gateway": {
+        "GET": 372,
+        "PATCH": 36,
+        "POST": 0
+      },
+      "apiserver": {
+        "APPLY configmaps": 36,
+        "CONNECT pods/portforward": 4,
+        "GET /api": 12,
+        "GET /apis": 12,
+        "GET /openapi/v3": 36,
+        "GET configmaps": 360,
+        "GET endpoints": 18,
+        "GET endpointslices": 18,
+        "GET leases": 56,
+        "GET pods": 8,
+        "LIST pods": 2,
+        "LIST services": 1,
+        "PATCH nodes/status": 2,
+        "POST subjectaccessreviews": 9,
+        "POST tokenreviews": 4,
+        "PUT leases": 277,
+        "WATCH addons": 2,
+        "WATCH agentchannels": 2,
+        "WATCH agentclasses": 3,
+        "WATCH agents": 5,
+        "WATCH agenttasks": 4,
+        "WATCH apiservices": 2,
+        "WATCH certificates": 1,
+        "WATCH certificatesigningrequests": 1,
+        "WATCH challenges": 1,
+        "WATCH clusterrolebindings": 1,
+        "WATCH clusterroles": 1,
+        "WATCH clustertrustbundles": 1,
+        "WATCH configmaps": 11,
+        "WATCH controllerrevisions": 1,
+        "WATCH csidrivers": 3,
+        "WATCH csinodes": 2,
+        "WATCH daemonsets": 1,
+        "WATCH devicetaintrules": 1,
+        "WATCH endpoints": 1,
+        "WATCH endpointslices": 3,
+        "WATCH etcdsnapshotfiles": 1,
+        "WATCH flowschemas": 1,
+        "WATCH gatewayclasses": 1,
+        "WATCH httproutes": 1,
+        "WATCH ingressclasses": 1,
+        "WATCH ingresses": 1,
+        "WATCH ipaddresses": 1,
+        "WATCH jobs": 1,
+        "WATCH leases": 2,
+        "WATCH limitranges": 1,
+        "WATCH modelproviders": 4,
+        "WATCH mutatingadmissionpolicies": 2,
+        "WATCH mutatingwebhookconfigurations": 3,
+        "WATCH namespaces": 4,
+        "WATCH networkpolicies": 4,
+        "WATCH nodes": 5,
+        "WATCH orders": 2,
+        "WATCH persistentvolumeclaims": 1,
+        "WATCH persistentvolumes": 1,
+        "WATCH podcertificaterequests": 4,
+        "WATCH poddisruptionbudgets": 2,
+        "WATCH pods": 8,
+        "WATCH prioritylevelconfigurations": 2,
+        "WATCH referencegrants": 1,
+        "WATCH replicasets": 1,
+        "WATCH replicationcontrollers": 1,
+        "WATCH resourcequotas": 1,
+        "WATCH resourceslices": 2,
+        "WATCH rolebindings": 2,
+        "WATCH roles": 2,
+        "WATCH runtimeclasses": 3,
+        "WATCH secrets": 7,
+        "WATCH serviceaccounts": 2,
+        "WATCH servicecidrs": 1,
+        "WATCH services": 7,
+        "WATCH statefulsets": 2,
+        "WATCH storageclasses": 1,
+        "WATCH tcproutes": 1,
+        "WATCH toolproviders": 2,
+        "WATCH udproutes": 1,
+        "WATCH validatingwebhookconfigurations": 1
+      },
+      "controllerRequestsPerSec": 0.895,
+      "gatewayRequestsPerSec": 2.254,
+      "controllerWritesPerAgentMinute": 0.302,
+      "gatewayWritesPerAgentMinute": 0.119
+    },
+    "active": {
+      "seconds": 698.61,
+      "agents": 100,
+      "controller": {
+        "DELETE": 669,
+        "GET": 259,
+        "PATCH": 667,
+        "POST": 5361,
+        "PUT": 10989
+      },
+      "gateway": {
+        "GET": 1428,
+        "PATCH": 140,
+        "POST": 668
+      },
+      "apiserver": {
+        "APPLY configmaps": 140,
+        "CONNECT pods/log": 1,
+        "CONNECT pods/portforward": 4,
+        "DELETE jobs": 2,
+        "DELETE pods": 1338,
+        "GET /api": 47,
+        "GET /apis": 47,
+        "GET /openapi/v3": 140,
+        "GET configmaps": 1400,
+        "GET customresourcedefinitions": 12,
+        "GET endpoints": 70,
+        "GET endpointslices": 70,
+        "GET jobs": 123,
+        "GET leases": 216,
+        "GET persistentvolumeclaims": 3983,
+        "GET persistentvolumes": 2648,
+        "GET pods": 5317,
+        "GET secrets": 2,
+        "GET services": 2671,
+        "LIST limitranges": 20,
+        "LIST pods": 1998,
+        "LIST secrets": 3,
+        "LIST services": 4,
+        "PATCH agents": 667,
+        "PATCH nodes/status": 7,
+        "PATCH pods": 1,
+        "PATCH pods/status": 4012,
+        "POST configmaps": 668,
+        "POST events": 8043,
+        "POST jobs": 1,
+        "POST pods": 669,
+        "POST pods/binding": 669,
+        "POST serviceaccounts/token": 2,
+        "POST subjectaccessreviews": 35,
+        "POST tokenreviews": 16,
+        "PUT agentchannels/status": 104,
+        "PUT agents": 1143,
+        "PUT agents/status": 9394,
+        "PUT endpoints": 2003,
+        "PUT endpointslices": 2671,
+        "PUT jobs/status": 5,
+        "PUT leases": 1065,
+        "PUT persistentvolumeclaims/status": 1503,
+        "WATCH addons": 2,
+        "WATCH agentchannels": 7,
+        "WATCH agentclasses": 6,
+        "WATCH agents": 9,
+        "WATCH agenttasks": 6,
+        "WATCH apiservices": 4,
+        "WATCH backendtlspolicies": 2,
+        "WATCH bundles": 4,
+        "WATCH certificaterequests": 2,
+        "WATCH certificates": 6,
+        "WATCH certificatesigningrequests": 1,
+        "WATCH challenges": 3,
+        "WATCH clusterissuers": 4,
+        "WATCH clusterrolebindings": 5,
+        "WATCH clusterroles": 3,
+        "WATCH clustertrustbundles": 3,
+        "WATCH configmaps": 43,
+        "WATCH controllerrevisions": 1,
+        "WATCH cronjobs": 2,
+        "WATCH csidrivers": 9,
+        "WATCH csinodes": 2,
+        "WATCH csistoragecapacities": 4,
+        "WATCH customresourcedefinitions": 6,
+        "WATCH daemonsets": 4,
+        "WATCH deployments": 1,
+        "WATCH deviceclasses": 5,
+        "WATCH devicetaintrules": 4,
+        "WATCH endpoints": 1,
+        "WATCH endpointslices": 21,
+        "WATCH etcdsnapshotfiles": 1,
+        "WATCH flowschemas": 3,
+        "WATCH gatewayclasses": 1,
+        "WATCH gateways": 1,
+        "WATCH grpcroutes": 2,
+        "WATCH helmchartconfigs": 3,
+        "WATCH helmcharts": 4,
+        "WATCH horizontalpodautoscalers": 2,
+        "WATCH httproutes": 1,
+        "WATCH ingressclasses": 3,
+        "WATCH ingresses": 3,
+        "WATCH ipaddresses": 3,
+        "WATCH issuers": 4,
+        "WATCH jobs": 3,
+        "WATCH leases": 2,
+        "WATCH limitranges": 2,
+        "WATCH listenersets": 2,
+        "WATCH modelproviders": 4,
+        "WATCH mutatingadmissionpolicies": 2,
+        "WATCH mutatingadmissionpolicybindings": 3,
+        "WATCH mutatingwebhookconfigurations": 5,
+        "WATCH namespaces": 10,
+        "WATCH networkpolicies": 6,
+        "WATCH nodes": 28,
+        "WATCH orders": 2,
+        "WATCH persistentvolumeclaims": 8,
+        "WATCH persistentvolumes": 7,
+        "WATCH podcertificaterequests": 8,
+        "WATCH poddisruptionbudgets": 2,
+        "WATCH pods": 22,
+        "WATCH podtemplates": 1,
+        "WATCH priorityclasses": 4,
+        "WATCH prioritylevelconfigurations": 3,
+        "WATCH referencegrants": 2,
+        "WATCH replicasets": 4,
+        "WATCH replicationcontrollers": 3,
+        "WATCH resourceclaims": 5,
+        "WATCH resourceclaimtemplates": 1,
+        "WATCH resourcequotas": 3,
+        "WATCH resourceslices": 4,
+        "WATCH rolebindings": 6,
+        "WATCH roles": 4,
+        "WATCH runtimeclasses": 7,
+        "WATCH secrets": 695,
+        "WATCH serviceaccounts": 6,
+        "WATCH servicecidrs": 10,
+        "WATCH services": 17,
+        "WATCH statefulsets": 3,
+        "WATCH storageclasses": 6,
+        "WATCH storageversionmigrations": 1,
+        "WATCH tcproutes": 2,
+        "WATCH tlsroutes": 2,
+        "WATCH toolproviders": 6,
+        "WATCH udproutes": 1,
+        "WATCH validatingadmissionpolicies": 4,
+        "WATCH validatingadmissionpolicybindings": 4,
+        "WATCH validatingwebhookconfigurations": 4,
+        "WATCH volumeattachments": 6,
+        "WATCH volumeattributesclasses": 1
+      },
+      "controllerRequestsPerSec": 25.687,
+      "gatewayRequestsPerSec": 3.201,
+      "controllerWritesPerAgentMinute": 15.19,
+      "gatewayWritesPerAgentMinute": 0.694
+    }
+  },
+  "tasks": {
+    "submitted": 200,
+    "submitSec": 0.711,
+    "phases": {
+      "Succeeded": 200
+    },
+    "provisionSec": {
+      "count": 200,
+      "mean": 38.645,
+      "p50": 41,
+      "p90": 45,
+      "p95": 45,
+      "p99": 46,
+      "max": 46
+    },
+    "runSec": {
+      "count": 200,
+      "mean": 13.32,
+      "p50": 13,
+      "p90": 16,
+      "p95": 16,
+      "p99": 17,
+      "max": 17
+    },
+    "totalSec": {
+      "count": 200,
+      "mean": 51.965,
+      "p50": 54,
+      "p90": 61,
+      "p95": 62,
+      "p99": 63,
+      "max": 63
+    },
+    "makespanSec": 64,
+    "throughputPerMin": 187.5,
+    "retries": 0,
+    "teardownSec": 18.518,
+    "audit": {
+      "seconds": 67.333,
+      "agents": 0,
+      "controller": {
+        "DELETE": 461,
+        "GET": 30,
+        "PATCH": 0,
+        "POST": 1600,
+        "PUT": 1318
+      },
+      "gateway": {
+        "GET": 147,
+        "PATCH": 214,
+        "POST": 0
+      },
+      "apiserver": {
+        "APPLY configmaps": 14,
+        "APPLY secrets": 374,
+        "CONNECT pods/log": 40,
+        "CONNECT pods/portforward": 4,
+        "DELETE certificaterequests": 94,
+        "DELETE certificates": 65,
+        "DELETE configmaps": 458,
+        "DELETE endpoints": 132,
+        "DELETE endpointslices": 92,
+        "DELETE ipaddresses": 66,
+        "DELETE networkpolicies": 66,
+        "DELETE persistentvolumeclaims": 66,
+        "DELETE persistentvolumes": 41,
+        "DELETE pods": 40,
+        "DELETE rolebindings": 188,
+        "DELETE roles": 188,
+        "DELETE secrets": 293,
+        "DELETE serviceaccounts": 66,
+        "DELETE services": 66,
+        "GET /api": 7,
+        "GET /apis": 7,
+        "GET /openapi/v3": 14,
+        "GET certificaterequests": 91,
+        "GET certificates": 267,
+        "GET configmaps": 140,
+        "GET endpoints": 7,
+        "GET endpointslices": 98,
+        "GET leases": 21,
+        "GET networkpolicies": 64,
+        "GET nodes": 40,
+        "GET persistentvolumeclaims": 130,
+        "GET pods": 965,
+        "GET rolebindings": 188,
+        "GET roles": 188,
+        "GET secrets": 91,
+        "GET serviceaccounts": 65,
+        "GET services": 65,
+        "LIST agenttasks": 22,
+        "LIST limitranges": 4,
+        "LIST pods": 68,
+        "LIST secrets": 7,
+        "PATCH configmaps": 200,
+        "PATCH events": 4,
+        "PATCH nodes/status": 1,
+        "PATCH pods/status": 775,
+        "POST agenttasks": 200,
+        "POST certificaterequests": 202,
+        "POST certificates": 200,
+        "POST configmaps": 200,
+        "POST events": 3338,
+        "POST networkpolicies": 200,
+        "POST pods": 240,
+        "POST pods/binding": 200,
+        "POST rolebindings": 200,
+        "POST roles": 200,
+        "POST secrets": 202,
+        "POST serviceaccounts": 200,
+        "POST serviceaccounts/token": 40,
+        "POST subjectaccessreviews": 28,
+        "POST tokenreviews": 1,
+        "PUT agentchannels": 73,
+        "PUT agentclasses/status": 11,
+        "PUT agenttasks": 200,
+        "PUT agenttasks/status": 1001,
+        "PUT certificaterequests/status": 404,
+        "PUT certificates/status": 1795,
+        "PUT leases": 99,
+        "PUT persistentvolumeclaims": 66,
+        "PUT persistentvolumes": 41,
+        "PUT persistentvolumes/status": 66,
+        "WATCH agentchannels": 2,
+        "WATCH agenttasks": 9,
+        "WATCH apiservices": 1,
+        "WATCH certificaterequests": 2,
+        "WATCH certificates": 3,
+        "WATCH challenges": 1,
+        "WATCH configmaps": 34,
+        "WATCH controllerrevisions": 1,
+        "WATCH csidrivers": 1,
+        "WATCH deployments": 1,
+        "WATCH deviceclasses": 1,
+        "WATCH endpointslices": 2,
+        "WATCH etcdsnapshotfiles": 1,
+        "WATCH gateways": 1,
+        "WATCH httproutes": 1,
+        "WATCH limitranges": 1,
+        "WATCH modelproviders": 1,
+        "WATCH mutatingadmissionpolicybindings": 1,
+        "WATCH namespaces": 1,
+        "WATCH networkpolicies": 1,
+        "WATCH nodes": 1,
+        "WATCH persistentvolumeclaims": 2,
+        "WATCH persistentvolumes": 1,
+        "WATCH podcertificaterequests": 1,
+        "WATCH pods": 3,
+        "WATCH podtemplates": 1,
+        "WATCH runtimeclasses": 1,
+        "WATCH secrets": 3,
+        "WATCH serviceaccounts": 1,
+        "WATCH storageclasses": 2,
+        "WATCH toolproviders": 1,
+        "WATCH udproutes": 1,
+        "WATCH volumeattributesclasses": 1
+      },
+      "controllerRequestsPerSec": 50.629,
+      "gatewayRequestsPerSec": 5.361,
+      "controllerWritesPerAgentMinute": 0,
+      "gatewayWritesPerAgentMinute": 0
+    }
+  },
+  "restart": {
+    "agents": 400,
+    "controllerRolloutSec": 15.552,
+    "controllerFirstReconcileSec": 15.824,
+    "gatewayRolloutSec": 12.05,
+    "gatewayClient": {
+      "mode": "gateway",
+      "requests": 398479,
+      "statuses": {
+        "200": 398460,
+        "error": 19
+      },
+      "durationSec": 60.003,
+      "rps": 6640.955,
+      "latencyMs": {
+        "count": 398460,
+        "mean": 4.779,
+        "p50": 3.505,
+        "p90": 9.041,
+        "p95": 12.091,
+        "p99": 22.699,
+        "max": 219.162
+      },
+      "errors": [
+        "Post \"https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions\": http: server closed idle connection",
+        "Post \"https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions\": http: server closed idle connection",
+        "Post \"https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions\": http: server closed idle connection",
+        "Post \"https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions\": http: server closed idle connection",
+        "Post \"https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions\": http: server closed idle connection"
+      ],
+      "warmupSec": 5.031
+    },
+    "gatewayFailed": 19
+  },
+  "tools": {
+    "legs": [
+      {
+        "name": "tools token tier: 2026-07-28, immediate tool server",
+        "provider": "perf-mcp",
+        "mtls": false,
+        "concurrency": 32,
+        "client": {
+          "mode": "tools",
+          "requests": 329640,
+          "statuses": {
+            "200": 329640
+          },
+          "durationSec": 60.005,
+          "rps": 5493.565,
+          "latencyMs": {
+            "count": 329640,
+            "mean": 5.775,
+            "p50": 4.677,
+            "p90": 10.845,
+            "p95": 13.777,
+            "p99": 21.204,
+            "max": 122.11
+          },
+          "warmupSec": 2.039
+        },
+        "gatewaySideMs": {
+          "count": 329641,
+          "mean": 2.365,
+          "p50": 2.783,
+          "p90": 5.101,
+          "p95": 8.118,
+          "p99": 17.425,
+          "max": 250
+        },
+        "callsByStatus": {
+          "ok": 329641
+        },
+        "gatewayCalls": 329641,
+        "gatewayCpuPerRequestMs": 0.452,
+        "gatewayUsageMax": {
+          "cpuMilli": 2836.24,
+          "memMiB": 63.145
+        }
+      },
+      {
+        "name": "tools mtls: 2026-07-28, immediate tool server",
+        "provider": "perf-mcp",
+        "mtls": true,
+        "concurrency": 32,
+        "client": {
+          "mode": "tools",
+          "requests": 495050,
+          "statuses": {
+            "200": 495050
+          },
+          "durationSec": 60.003,
+          "rps": 8250.373,
+          "latencyMs": {
+            "count": 495050,
+            "mean": 3.857,
+            "p50": 3.31,
+            "p90": 6.89,
+            "p95": 8.444,
+            "p99": 11.968,
+            "max": 146.896
+          },
+          "warmupSec": 2.012
+        },
+        "gatewaySideMs": {
+          "count": 495051,
+          "mean": 1.87,
+          "p50": 2.648,
+          "p90": 4.766,
+          "p95": 5.567,
+          "p99": 9.427,
+          "max": 50
+        },
+        "callsByStatus": {
+          "ok": 495051
+        },
+        "gatewayCalls": 495051,
+        "gatewayCpuPerRequestMs": 0.453,
+        "gatewayUsageMax": {
+          "cpuMilli": 3762.907,
+          "memMiB": 69.773
+        }
+      },
+      {
+        "name": "tools mtls: legacy session, immediate tool server",
+        "provider": "perf-mcp-legacy",
+        "mtls": true,
+        "concurrency": 32,
+        "client": {
+          "mode": "tools",
+          "requests": 499634,
+          "statuses": {
+            "200": 499634
+          },
+          "durationSec": 60.003,
+          "rps": 8326.749,
+          "latencyMs": {
+            "count": 499634,
+            "mean": 3.821,
+            "p50": 3.162,
+            "p90": 7.12,
+            "p95": 8.936,
+            "p99": 12.985,
+            "max": 119.478
+          },
+          "warmupSec": 2.021
+        },
+        "gatewaySideMs": {
+          "count": 499635,
+          "mean": 1.872,
+          "p50": 2.669,
+          "p90": 4.805,
+          "p95": 6.217,
+          "p99": 9.832,
+          "max": 100
+        },
+        "callsByStatus": {
+          "ok": 499635
+        },
+        "gatewayCalls": 499635,
+        "gatewayCpuPerRequestMs": 0.43,
+        "gatewayUsageMax": {
+          "cpuMilli": 3717.386,
+          "memMiB": 67.957
+        }
+      }
+    ]
+  },
+  "stream": {
+    "legs": [
+      {
+        "name": "stream openai: token tier, immediate upstream",
+        "provider": "perf-fast",
+        "mtls": false,
+        "stream": true,
+        "format": "openai",
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 326531,
+          "statuses": {
+            "200": 326531
+          },
+          "durationSec": 60.005,
+          "rps": 5441.712,
+          "latencyMs": {
+            "count": 326531,
+            "mean": 5.586,
+            "p50": 4.606,
+            "p90": 10.549,
+            "p95": 13.106,
+            "p99": 19.674,
+            "max": 141.09
+          },
+          "ttfbMs": {
+            "count": 326531,
+            "mean": 4.822,
+            "p50": 3.912,
+            "p90": 9.319,
+            "p95": 11.649,
+            "p99": 17.813,
+            "max": 138.788
+          },
+          "warmupSec": 2.023
+        },
+        "gatewaySideMs": {
+          "count": 326532,
+          "mean": 4.003,
+          "p50": 3.436,
+          "p90": 9.134,
+          "p95": 13.356,
+          "p99": 23.031,
+          "max": 250
+        },
+        "gatewayRequests": 326532,
+        "spendUsd": 17.959,
+        "budgetUtilization": 0.00010584436999988559,
+        "gatewayCpuPerRequestMs": 0.661,
+        "gatewayUsageMax": {
+          "cpuMilli": 3620.847,
+          "memMiB": 71.523
+        }
+      },
+      {
+        "name": "stream anthropic: token tier, immediate upstream",
+        "provider": "perf-anthropic",
+        "mtls": false,
+        "stream": true,
+        "format": "anthropic",
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 322761,
+          "statuses": {
+            "200": 322761
+          },
+          "durationSec": 60.013,
+          "rps": 5378.184,
+          "latencyMs": {
+            "count": 322761,
+            "mean": 5.668,
+            "p50": 4.8,
+            "p90": 10.436,
+            "p95": 12.829,
+            "p99": 18.962,
+            "max": 63.515
+          },
+          "ttfbMs": {
+            "count": 322761,
+            "mean": 4.815,
+            "p50": 4.006,
+            "p90": 9.114,
+            "p95": 11.257,
+            "p99": 17.065,
+            "max": 63.487
+          },
+          "warmupSec": 2.014
+        },
+        "gatewaySideMs": {
+          "count": 322762,
+          "mean": 4.064,
+          "p50": 3.481,
+          "p90": 9.108,
+          "p95": 12.662,
+          "p99": 22.788,
+          "max": 100
+        },
+        "gatewayRequests": 322762,
+        "spendUsd": 17.752,
+        "budgetUtilization": 0.000017702479999976226,
+        "gatewayCpuPerRequestMs": 0.684,
+        "gatewayUsageMax": {
+          "cpuMilli": 3713.495,
+          "memMiB": 71.055
+        }
+      },
+      {
+        "name": "stream openai: token tier, 10 ms between events",
+        "provider": "perf-paced",
+        "mtls": false,
+        "stream": true,
+        "format": "openai",
+        "concurrency": 32,
+        "client": {
+          "mode": "gateway",
+          "requests": 44173,
+          "statuses": {
+            "200": 44173
+          },
+          "durationSec": 60.034,
+          "rps": 735.795,
+          "latencyMs": {
+            "count": 44173,
+            "mean": 43.339,
+            "p50": 43.267,
+            "p90": 44.419,
+            "p95": 44.815,
+            "p99": 45.732,
+            "max": 76.332
+          },
+          "ttfbMs": {
+            "count": 44173,
+            "mean": 1.006,
+            "p50": 0.889,
+            "p90": 1.429,
+            "p95": 1.669,
+            "p99": 2.491,
+            "max": 33.168
+          },
+          "warmupSec": 2.054
+        },
+        "gatewaySideMs": {
+          "count": 44174,
+          "mean": 42.865,
+          "p50": 37.502,
+          "p90": 47.504,
+          "p95": 48.754,
+          "p99": 49.754,
+          "max": 100
+        },
+        "gatewayRequests": 44174,
+        "spendUsd": 2.43,
+        "budgetUtilization": 0.000002409594999999578,
+        "gatewayCpuPerRequestMs": 1.127,
+        "gatewayUsageMax": {
+          "cpuMilli": 3656.883,
+          "memMiB": 68.813
+        }
+      }
+    ]
+  }
+}
