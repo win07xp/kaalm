@@ -290,7 +290,9 @@ func (s *Server) wakeAndDeliver(
 		if err := s.waitAgentReachable(ctx, agent); err != nil {
 			elapsed := time.Since(wakeStart)
 			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", elapsed.Seconds())
-			return nil, errWakeTimeout, s.podWaitError(ctx, agent, elapsed)
+			e := s.podWaitError(ctx, agent, elapsed)
+			s.recordChannelFailure(healthPath, healthReasonDispatchFailed, e.Error())
+			return nil, errWakeTimeout, e
 		}
 		s.Metrics.ChannelWakeDuration(agent.Namespace, "ready", time.Since(wakeStart).Seconds())
 		waited = true
