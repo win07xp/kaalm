@@ -38,6 +38,17 @@ import (
 // BudgetConfigMapName returns the per-provider budget ConfigMap name.
 func BudgetConfigMapName(providerName string) string { return "kaalm-budget-" + providerName }
 
+// SpendConfigMapLabel marks every budget and agent-spend ConfigMap, with
+// the value SpendLabelBudget or SpendLabelAgentSpend. Every writer sets it,
+// so each replica's tick finds every spend ConfigMap with one list.
+const SpendConfigMapLabel = "kaalm.io/spend"
+
+// Values of SpendConfigMapLabel.
+const (
+	SpendLabelBudget     = "budget"
+	SpendLabelAgentSpend = "agent-spend"
+)
+
 // AgentSpendConfigMapName returns the per-provider workload-spend ConfigMap
 // name. Workload spend lives in its own object so the budget enforcement
 // fold never sees its keys and the two never contend for the 1 MiB object
@@ -708,6 +719,7 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.Mo
 		return
 	}
 	apply := applycorev1.ConfigMap(BudgetConfigMapName(provider.Name), p.OperatorNamespace).
+		WithLabels(map[string]string{SpendConfigMapLabel: SpendLabelBudget}).
 		WithData(map[string]string{p.PodName: string(raw)})
 	_, err = p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Apply(ctx, apply,
 		metav1.ApplyOptions{FieldManager: p.PodName, Force: true})
@@ -734,6 +746,7 @@ func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv
 		return
 	}
 	apply := applycorev1.ConfigMap(AgentSpendConfigMapName(provider.Name), p.OperatorNamespace).
+		WithLabels(map[string]string{SpendConfigMapLabel: SpendLabelAgentSpend}).
 		WithData(map[string]string{p.PodName: string(raw)})
 	if _, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Apply(ctx, apply,
 		metav1.ApplyOptions{FieldManager: p.PodName, Force: true}); err != nil {

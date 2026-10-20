@@ -284,3 +284,30 @@ func TestFoldPartials_SkipsPreviousArchive(t *testing.T) {
 		t.Errorf("fold = %v, want team-a 5 (the _previous archive is not spend)", got)
 	}
 }
+
+// Every publish labels the ConfigMaps it writes, so each replica's tick can
+// find every spend ConfigMap with one labeled list.
+func TestBudgetPublisher_PublishSetsSpendLabel(t *testing.T) {
+	ctx := context.Background()
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	client := k8sfake.NewSimpleClientset(
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: AgentSpendConfigMapName("prov"), Namespace: "kaalm-system"}},
+	)
+	ledger := NewBudgetLedger()
+	ledger.Add(p, "team-a", "agent/test", 42)
+	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
+	pub.publish(ctx, p)
+	for name, want := range map[string]string{
+		BudgetConfigMapName("prov"):     SpendLabelBudget,
+		AgentSpendConfigMapName("prov"): SpendLabelAgentSpend,
+	} {
+		cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cm.Labels[SpendConfigMapLabel]; got != want {
+			t.Errorf("%s label %s = %q, want %q", name, SpendConfigMapLabel, got, want)
+		}
+	}
+}
