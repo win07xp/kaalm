@@ -25,8 +25,8 @@ Idle --> Hibernating : hibernationDelay elapsed
 Hibernating --> Hibernated : Pod gone
 Hibernated --> Resuming : wake annotation
 Resuming --> Running : Pod Ready
-Running --> Provisioning : spec drift,\nPod disruption
-Idle --> Provisioning : spec drift,\nPod disruption
+Running --> Provisioning : spec drift,\nPod disruption,\nPod not Ready
+Idle --> Provisioning : spec drift,\nPod disruption,\nPod not Ready
 
 Any --> Degraded : class mismatch
 Degraded --> Any : mismatch cleared
