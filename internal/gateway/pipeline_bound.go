@@ -22,8 +22,30 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// wakePollInterval is the wait between readiness connects during a Pod wait.
+// wakePollInterval is the wait between readiness connects after
+// wakePollFastWindow, and the longest wait between connects in a Pod wait.
 const wakePollInterval = 2 * time.Second
+
+// wakePollFastInterval is the wait between readiness connects for the first
+// wakePollFastWindow of a Pod wait. A woken Pod is usually reachable within a
+// few seconds, so the wait checks often at first and delivers soon after the
+// Pod is Ready. It must not exceed wakePollInterval: backgroundPipelineBound
+// counts wakePollInterval as the last poll's overshoot.
+const wakePollFastInterval = 250 * time.Millisecond
+
+// wakePollFastWindow is how long a Pod wait polls every wakePollFastInterval.
+// A wait that runs longer is usually an image pull or scheduling, where a
+// check every wakePollInterval adds little delay.
+const wakePollFastWindow = 5 * time.Second
+
+// wakePollDelay is the wait before the next readiness connect, elapsed into
+// a Pod wait.
+func wakePollDelay(elapsed time.Duration) time.Duration {
+	if elapsed < wakePollFastWindow {
+		return wakePollFastInterval
+	}
+	return wakePollInterval
+}
 
 // activatorWorstCase is the longest the activator call can take: one attempt
 // and its retry on a fresh connection, each bounded by activatorAttemptTimeout.
@@ -56,7 +78,8 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 // for as long as a tenant sets. It sums:
 //
 //   - the activator call and the capped wakeTimeout, plus one readiness
-//     connect and poll interval, which the last poll can overrun. This leg
+//     connect and the longest poll interval, which the last poll can
+//     overrun. This leg
 //     covers the one Pod wait any message gets: a wake, a wait for a Pod
 //     being created or resumed, or a wait after a refused connect, which
 //     takes the place of a retry delay;

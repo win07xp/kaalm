@@ -551,6 +551,18 @@ func tlsSecretOf(pod *corev1.Pod) string {
 	return ""
 }
 
+// The startup probe holds back liveness and readiness until the agent answers
+// /livez, and the kubelet runs readiness as soon as it passes. A new or woken
+// Pod is then Ready about a second after the agent listens, not at the next
+// 10 s readiness period. Thirty checks one second apart give the same start
+// window as the liveness defaults (three failures ten seconds apart), so a slow
+// start is not cut shorter. It checks /livez, not /readyz, so a listening but
+// unready agent (an expired certificate) stays unready instead of restarting.
+const (
+	startupProbePeriodSeconds    int32 = 1
+	startupProbeFailureThreshold int32 = 30
+)
+
 // desiredPod derives the agent Pod: injected env and probes per the runtime
 // contract, the single projected TLS volume at /var/run/kaalm, and the
 // drift-detection hash annotation. The TLS volume projects tlsSecret, the
@@ -665,6 +677,10 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 		}
 	}
 
+	startup := probe("/livez")
+	startup.PeriodSeconds = startupProbePeriodSeconds
+	startup.FailureThreshold = startupProbeFailureThreshold
+
 	container := corev1.Container{
 		Name:            agentContainer,
 		Image:           eff.Image,
@@ -678,6 +694,7 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 		Ports:           []corev1.ContainerPort{{Name: "https", ContainerPort: eff.HealthPort}},
 		LivenessProbe:   probe("/livez"),
 		ReadinessProbe:  probe("/readyz"),
+		StartupProbe:    startup,
 	}
 
 	return &corev1.Pod{

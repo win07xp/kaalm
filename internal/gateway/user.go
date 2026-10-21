@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -399,22 +400,45 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 // accepts, bounded by the capped wakeTimeout and ctx. It is the one Pod wait
 // a message gets: after a wake, for a Pod being created or resumed, or after
 // a refused connect. Connect success is the readiness signal.
+//
+// It polls every wakePollFastInterval for the first wakePollFastWindow, then
+// every wakePollInterval. It resolves the Service name once per wait, by its
+// absolute name and through the same resolver as delivery, and retries the
+// lookup at each poll until it resolves (a Service not created yet answers
+// NXDOMAIN). Go does not cache lookups, so resolving at every connect would
+// send every poll to the cluster DNS server. Each poll's lookup and connect
+// share one AgentConnectTimeout.
 func (s *Server) waitAgentReachable(ctx context.Context, agent *kaalmv1beta1.Agent) error {
-	deadline := time.Now().Add(s.wakeTimeout(agent))
-	addr := net.JoinHostPort(s.agentServiceHost(agent), fmt.Sprintf("%d", s.agentServicePort(agent)))
+	start := time.Now()
+	deadline := start.Add(s.wakeTimeout(agent))
+	host := s.agentServiceHost(agent)
+	port := strconv.Itoa(int(s.agentServicePort(agent)))
+	var target string
+	var dialer net.Dialer
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		conn, err := net.DialTimeout("tcp", addr, s.Config.AgentConnectTimeout)
-		if err == nil {
-			_ = conn.Close()
-			return nil
+		pollCtx, cancel := context.WithTimeout(ctx, s.Config.AgentConnectTimeout)
+		if target == "" {
+			if addrs, err := s.agentResolver().LookupIPAddr(pollCtx, absoluteDialName(host)); err == nil && len(addrs) > 0 {
+				target = net.JoinHostPort(addrs[0].IP.String(), port)
+			}
 		}
+		if target != "" {
+			if conn, err := dialer.DialContext(pollCtx, "tcp", target); err == nil {
+				_ = conn.Close()
+				cancel()
+				return nil
+			}
+		}
+		cancel()
+		timer := time.NewTimer(wakePollDelay(time.Since(start)))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(wakePollInterval):
+		case <-timer.C:
 		}
 	}
 	return fmt.Errorf("wake timeout")

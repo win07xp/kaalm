@@ -37,6 +37,29 @@ func TestRetryScheduleWorstCase(t *testing.T) {
 	}
 }
 
+// The Pod wait polls every wakePollFastInterval inside the fast window and
+// every wakePollInterval after it. The bound counts wakePollInterval as the
+// last poll's overshoot, so the fast step must not be the longer one.
+func TestWakePollDelay(t *testing.T) {
+	cases := []struct {
+		elapsed time.Duration
+		want    time.Duration
+	}{
+		{0, wakePollFastInterval},
+		{wakePollFastWindow - time.Nanosecond, wakePollFastInterval},
+		{wakePollFastWindow, wakePollInterval},
+		{time.Minute, wakePollInterval},
+	}
+	for _, c := range cases {
+		if got := wakePollDelay(c.elapsed); got != c.want {
+			t.Errorf("wakePollDelay(%s) = %s, want %s", c.elapsed, got, c.want)
+		}
+	}
+	if wakePollFastInterval > wakePollInterval {
+		t.Errorf("wakePollFastInterval %s exceeds wakePollInterval %s, which the pipeline bound counts as the overshoot", wakePollFastInterval, wakePollInterval)
+	}
+}
+
 func TestBackgroundPipelineBound_Arithmetic(t *testing.T) {
 	s := &Server{Config: Config{
 		MaxWakeTimeout:      time.Hour,

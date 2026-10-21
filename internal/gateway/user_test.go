@@ -824,6 +824,152 @@ func (r *countingResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAd
 	return []net.IPAddr{{IP: r.ip}}, nil
 }
 
+// scriptedResolver fails its first fail lookups with NXDOMAIN, as the
+// cluster DNS answers for a Service not created yet, then answers with one
+// IP. It counts the calls and records the names it was asked for.
+type scriptedResolver struct {
+	fail  int32
+	ip    net.IP
+	calls int32
+
+	mu    sync.Mutex
+	hosts []string
+}
+
+func (r *scriptedResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	n := atomic.AddInt32(&r.calls, 1)
+	r.mu.Lock()
+	r.hosts = append(r.hosts, host)
+	r.mu.Unlock()
+	if n <= r.fail {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	return []net.IPAddr{{IP: r.ip}}, nil
+}
+
+func (r *scriptedResolver) recordedHosts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.hosts...)
+}
+
+// reservedClosedPort returns a local port that nothing listens on.
+func reservedClosedPort(t *testing.T) int32 {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return int32(port)
+}
+
+func podWaitAgent(wakeTimeout time.Duration) *kaalmv1beta1.Agent {
+	return &kaalmv1beta1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
+		Status:     kaalmv1beta1.AgentStatus{EffectiveWakeTimeout: &metav1.Duration{Duration: wakeTimeout}},
+	}
+}
+
+// A woken Pod is usually reachable within a few seconds, so the Pod wait
+// checks often at first: an agent that starts listening shortly after the
+// wait begins is reached well before a 2 s poll interval would allow.
+func TestWaitAgentReachable_PollsFastAtTheStart(t *testing.T) {
+	s := NewServer(Config{
+		OperatorNamespace: "kaalm-system", AgentServiceHostOverride: "127.0.0.1",
+		AgentConnectTimeout: 100 * time.Millisecond,
+	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
+	port := reservedClosedPort(t)
+	s.Config.AgentServicePortOverride = port
+
+	var ln net.Listener
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		time.Sleep(agentBackAfter)
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Errorf("agent could not listen on %d: %v", port, err)
+			return
+		}
+		ln = l
+	}()
+	t.Cleanup(func() {
+		<-started
+		if ln != nil {
+			_ = ln.Close()
+		}
+	})
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second))
+	took := time.Since(start)
+	if err != nil {
+		t.Fatalf("wait = %v, want reachable", err)
+	}
+	if took >= time.Second {
+		t.Errorf("wait took %v for an agent listening after %v: the second connect came after a full 2 s poll interval", took, agentBackAfter)
+	}
+}
+
+// The Pod wait resolves the Service once and reuses the address for every
+// connect: Go does not cache lookups, so a lookup per connect would send
+// every poll to the cluster DNS server.
+func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
+	s := NewServer(Config{
+		OperatorNamespace: "kaalm-system", AgentConnectTimeout: 50 * time.Millisecond,
+	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
+	s.Config.AgentServicePortOverride = reservedClosedPort(t)
+	resolver := &scriptedResolver{ip: net.ParseIP("127.0.0.1")}
+	s.AgentResolver = resolver
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(time.Second))
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("wait against a closed port must time out")
+	}
+	if took < time.Second {
+		t.Errorf("wait ended after %v, want the full 1s wakeTimeout", took)
+	}
+	if got := atomic.LoadInt32(&resolver.calls); got != 1 {
+		t.Errorf("resolver called %d times in one wait, want 1", got)
+	}
+	if hosts := resolver.recordedHosts(); len(hosts) == 0 || hosts[0] != "sup.team-a.svc.cluster.local." {
+		t.Errorf("resolved %q, want the absolute Service name", hosts)
+	}
+}
+
+// A Service not created yet (a first start) answers NXDOMAIN: the wait
+// retries the lookup on the poll schedule and connects once it resolves.
+func TestWaitAgentReachable_RetriesTheLookupUntilTheServiceResolves(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	s := NewServer(Config{
+		OperatorNamespace: "kaalm-system", AgentConnectTimeout: 50 * time.Millisecond,
+	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
+	s.Config.AgentServicePortOverride = int32(ln.Addr().(*net.TCPAddr).Port)
+	resolver := &scriptedResolver{fail: 2, ip: net.ParseIP("127.0.0.1")}
+	s.AgentResolver = resolver
+
+	start := time.Now()
+	err = s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second))
+	took := time.Since(start)
+	if err != nil {
+		t.Fatalf("wait = %v, want reachable once the Service resolves", err)
+	}
+	if got := atomic.LoadInt32(&resolver.calls); got != 3 {
+		t.Errorf("resolver called %d times, want 3 (two misses, then the address)", got)
+	}
+	if took >= time.Second {
+		t.Errorf("wait took %v, want two fast retries then the connect", took)
+	}
+}
+
 func TestAbsoluteDialName(t *testing.T) {
 	cases := map[string]string{
 		"sup.team-a.svc.cluster.local":  "sup.team-a.svc.cluster.local.",

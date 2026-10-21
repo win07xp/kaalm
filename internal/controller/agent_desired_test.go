@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -361,6 +362,47 @@ func TestDesiredPod_ContractInjection(t *testing.T) {
 	}
 	if !found {
 		t.Error("persistence volume missing")
+	}
+}
+
+// A started agent Pod is marked Ready about a second after it answers: the
+// startup probe checks /livez every second, and the kubelet runs readiness as
+// soon as it passes. Its window must be no shorter than the liveness default
+// (3 failures 10 s apart), and liveness and readiness keep the API defaults.
+func TestDesiredPod_StartupProbe(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	pod := desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 9090}, "kaalm-system", "x-tls")
+	c := pod.Spec.Containers[0]
+
+	sp := c.StartupProbe
+	if sp == nil {
+		t.Fatal("agent container has no startup probe")
+	}
+	if sp.HTTPGet == nil || sp.HTTPGet.Path != "/livez" {
+		t.Errorf("startup probe must GET /livez, got %+v", sp.HTTPGet)
+	} else {
+		if sp.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+			t.Errorf("startup probe scheme = %q, want HTTPS", sp.HTTPGet.Scheme)
+		}
+		if sp.HTTPGet.Port != intstr.FromInt32(9090) {
+			t.Errorf("startup probe port = %v, want the health port 9090", sp.HTTPGet.Port)
+		}
+	}
+	if sp.PeriodSeconds != 1 {
+		t.Errorf("startup probe period = %d, want 1", sp.PeriodSeconds)
+	}
+	if sp.PeriodSeconds*sp.FailureThreshold < 30 {
+		t.Errorf("startup budget %d s is shorter than the liveness default window of 30 s",
+			sp.PeriodSeconds*sp.FailureThreshold)
+	}
+	if sp.InitialDelaySeconds != 0 {
+		t.Errorf("startup probe initial delay = %d, want 0", sp.InitialDelaySeconds)
+	}
+
+	for name, p := range map[string]*corev1.Probe{"liveness": c.LivenessProbe, "readiness": c.ReadinessProbe} {
+		if p.PeriodSeconds != 0 || p.FailureThreshold != 0 || p.InitialDelaySeconds != 0 || p.TimeoutSeconds != 0 {
+			t.Errorf("%s probe must keep the API defaults, got %+v", name, p)
+		}
 	}
 }
 
