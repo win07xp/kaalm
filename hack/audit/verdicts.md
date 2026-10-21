@@ -57,4 +57,4 @@ Cross-cutting
 ## Corrections
 
 - #156 (provider probes ignore the upstream CA bundle) was a false finding: the wiring exists as `controller.NewProbeClient` behind `--probe-ca`, chart-mounted. The walk read only the nil-Client fallback and searched the chart for the wrong term. Verdict 4.1's probe CA claim is corrected to pass, `internal/controller/probe_client.go` joined the manifest, and the correction surfaced one real residue (the #153 redirect refusal missing the configured probe client), fixed in PR #163.
-- The e2e gate itself was hardened during the fix work: the suite invocation now carries `-count=1`, because go's test cache happily replayed a stored transcript against a freshly deployed cluster.
+- The e2e suite was hardened during the fix work: its invocation now carries `-count=1`, because the Go test cache replayed a stored transcript against a freshly deployed cluster.
