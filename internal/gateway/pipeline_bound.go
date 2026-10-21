@@ -82,7 +82,9 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 //     overrun. This leg
 //     covers the one Pod wait any message gets: a wake, a wait for a Pod
 //     being created or resumed, or a wait after a refused connect, which
-//     takes the place of a retry delay;
+//     takes the place of a retry delay. The activator call is the one call a
+//     message makes, before its Pod wait or during it; the wait keeps one
+//     deadline, so a wake requested inside it stays inside this leg;
 //   - the agent-delivery schedule, each attempt at gateway.agentReadTimeout;
 //   - responseRequests runs of the callback schedule, each attempt at
 //     gateway.callbackReadTimeout: the callback and the polling-record patch

@@ -719,7 +719,7 @@ func TestDeliverToAgentCountsEveryAttemptByOutcome(t *testing.T) {
 
 	// Every attempt answers 503: four attempts, all "status", none "ok".
 	s := deliveryServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
-	if _, err := s.deliverToAgent(context.Background(), agent, env, false); err == nil {
+	if _, err := s.deliverToAgent(context.Background(), "", agent, env, false); err == nil {
 		t.Fatal("delivery against a 503 agent must fail")
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeStatus)); got != 4 {
@@ -738,7 +738,7 @@ func TestDeliverToAgentCountsEveryAttemptByOutcome(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"content":"hi"}`))
 	})
-	if _, err := s.deliverToAgent(context.Background(), agent, env, false); err != nil {
+	if _, err := s.deliverToAgent(context.Background(), "", agent, env, false); err != nil {
 		t.Fatalf("delivery must succeed on the second attempt: %v", err)
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeStatus)); got != 1 {
@@ -772,7 +772,7 @@ func TestDeliverToAgentReusesTheConnection(t *testing.T) {
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 
 	for i := 0; i < 5; i++ {
-		if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: fmt.Sprintf("m%d", i)}, false); err != nil {
+		if _, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: fmt.Sprintf("m%d", i)}, false); err != nil {
 			t.Fatalf("delivery %d: %v", i, err)
 		}
 	}
@@ -797,7 +797,7 @@ func TestDeliverToAgentRedialsWithinTheAttempt(t *testing.T) {
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, false)
+	_, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m1"}, false)
 	took := time.Since(start)
 	if err == nil {
 		t.Fatal("delivery to a blackhole must fail")
@@ -904,7 +904,7 @@ func TestWaitAgentReachable_PollsFastAtTheStart(t *testing.T) {
 	})
 
 	start := time.Now()
-	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second))
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil)
 	took := time.Since(start)
 	if err != nil {
 		t.Fatalf("wait = %v, want reachable", err)
@@ -926,7 +926,7 @@ func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	err := s.waitAgentReachable(context.Background(), podWaitAgent(time.Second))
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(time.Second), nil)
 	took := time.Since(start)
 	if err == nil {
 		t.Fatal("wait against a closed port must time out")
@@ -958,7 +958,7 @@ func TestWaitAgentReachable_RetriesTheLookupUntilTheServiceResolves(t *testing.T
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	err = s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second))
+	err = s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil)
 	took := time.Since(start)
 	if err != nil {
 		t.Fatalf("wait = %v, want reachable once the Service resolves", err)
@@ -996,7 +996,7 @@ func TestDeliverToAgentResolutionTimeoutIsDNS(t *testing.T) {
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 	s.AgentResolver = &stallingResolver{}
 
-	if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, false); err == nil {
+	if _, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m1"}, false); err == nil {
 		t.Fatal("delivery with a stalled resolver must fail")
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeDNS)); got != 2 {
@@ -1526,7 +1526,7 @@ func TestDeliverToAgentWaitsOnceForARefusedConnect(t *testing.T) {
 	s.Config.AgentServicePortOverride = 1 // nothing listens on :1
 	s.Config.AgentConnectTimeout = 20 * time.Millisecond
 
-	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, true)
+	_, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m1"}, true)
 	if err == nil || !strings.Contains(err.Error(), "wakeTimeout") {
 		t.Fatalf("err = %v, want one naming wakeTimeout", err)
 	}
@@ -1536,7 +1536,7 @@ func TestDeliverToAgentWaitsOnceForARefusedConnect(t *testing.T) {
 
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 	start := time.Now()
-	_, err = s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m2"}, false)
+	_, err = s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m2"}, false)
 	if err == nil || strings.Contains(err.Error(), "wakeTimeout") {
 		t.Fatalf("err = %v, want an exhausted schedule", err)
 	}
