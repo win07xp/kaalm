@@ -11,7 +11,7 @@ partition "evidence" {
   if (any replica reachable?) then (no)
     :keep the phase, back off\nGatewayReachable=False;
     kill
-  elseif (any replica recorded\nactivity for the Agent?) then (yes)
+  elseif (any replica recorded activity\nsince the Agent was created?) then (yes)
     :newest timestamp per source,\nthen activitySource;
   elseif (some replica up for\nat least idleTimeout?) then (no)
     :defer, requeue in 30s;

@@ -43,20 +43,49 @@ func replicaWith(startedAgo time.Duration, agentName string, trafficAgo time.Dur
 	}
 }
 
+// replicaWithTrafficAtCreation builds a replica, up for startedAgo, whose
+// traffic record for the Agent is exactly its creationTimestamp: the oldest
+// record the controller still counts. Tests that need silence wait it out
+// with waitSinceCreation instead of seeding an older record.
+func replicaWithTrafficAtCreation(t *testing.T, name string, startedAgo time.Duration) ReplicaActivity {
+	t.Helper()
+	traffic := getWorkloadAgent(t, name).CreationTimestamp.Time
+	return ReplicaActivity{
+		StartedAt: time.Now().Add(-startedAgo),
+		Agents:    map[string]AgentActivity{name: {GatewayTraffic: &traffic}},
+	}
+}
+
+// waitSinceCreation sleeps until more than d has passed since the Agent's
+// creationTimestamp.
+func waitSinceCreation(t *testing.T, name string, d time.Duration) {
+	t.Helper()
+	created := getWorkloadAgent(t, name).CreationTimestamp.Time
+	time.Sleep(time.Until(created.Add(d + 200*time.Millisecond)))
+}
+
+// expectLastActivityAtCreation checks that the Idle transition read the
+// seeded record at the Agent's creationTimestamp.
+func expectLastActivityAtCreation(t *testing.T, name string) {
+	t.Helper()
+	ag := getWorkloadAgent(t, name)
+	if ag.Status.LastActivityTime == nil || !ag.Status.LastActivityTime.Time.Equal(ag.CreationTimestamp.Time) {
+		t.Errorf("lastActivityTime = %v, want the creationTimestamp %v", ag.Status.LastActivityTime, ag.CreationTimestamp)
+	}
+}
+
 func TestAgent_IdleTransitionAndReturn(t *testing.T) {
 	mkWorkloadClass(t, "wc-idle", nil)
 	provisionRunningAgentWithLifecycle(t, "idle-agent", "wc-idle", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
 	})
 
-	// Stale activity: last traffic an hour ago, replica up for two.
-	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, "idle-agent", time.Hour)}, 1)
+	// Stale activity: last traffic at creation, more than idleTimeout ago.
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "idle-agent", 2*time.Hour)}, 1)
+	waitSinceCreation(t, "idle-agent", time.Second)
 	touchAgent(t, "idle-agent") // trigger a reconcile pass
 	expectAgentPhase(t, "idle-agent", kaalmv1beta1.AgentIdle)
-	ag := getWorkloadAgent(t, "idle-agent")
-	if ag.Status.LastActivityTime == nil {
-		t.Error("lastActivityTime must be written on the Idle transition")
-	}
+	expectLastActivityAtCreation(t, "idle-agent")
 	if agentPod(t, "idle-agent") == nil {
 		t.Error("Idle is a pod-bearing phase; the Pod must survive")
 	}
@@ -152,8 +181,10 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
 	})
 
-	// Long-stale activity drives Idle then Hibernating in successive passes.
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "hib-wake", 2*time.Hour)}, 1)
+	// Activity older than idleTimeout+hibernationDelay drives Idle then
+	// Hibernating in successive passes.
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "hib-wake", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "hib-wake", 2*time.Second)
 	touchAgent(t, "hib-wake")
 
 	// The reconciler deletes the Pod; finish its termination (no kubelet).
@@ -255,7 +286,8 @@ func TestAgent_WakeDuringHibernating(t *testing.T) {
 	})
 
 	// Stale activity drives Idle then Hibernating.
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "hib-race", 2*time.Hour)}, 1)
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "hib-race", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "hib-race", 2*time.Second)
 	touchAgent(t, "hib-race")
 	eventually(t, func() error {
 		ag := getWorkloadAgent(t, "hib-race")
@@ -341,12 +373,13 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		ag.Spec.Persistence.Enabled = true
 		ag.Spec.Lifecycle.HibernationEnabled = true
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: 5 * time.Second}
-		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Hour}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
 	})
 
-	// Activity from two hours ago: both windows have long elapsed, so the
-	// agent hibernates on the immediate requeue chain.
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "wake-act", 2*time.Hour)}, 1)
+	// Activity at creation, older than both windows once the wait ends, so
+	// the agent hibernates on the immediate requeue chain.
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "wake-act", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "wake-act", 6*time.Second)
 	touchAgent(t, "wake-act")
 	eventually(t, func() error {
 		var pods corev1.PodList
@@ -365,7 +398,10 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 	})
 
 	// Wake via annotation while the gateway still reports only the stale
-	// record: the waking message is not recorded until after delivery.
+	// record: the waking message is not recorded until after delivery. The
+	// hour-long hibernationDelay keeps the woken Pod through the Idle hold
+	// below. TestEvaluateActivity_WakeFloorsHibernationWindow shows that the
+	// delay counts from the wake, not from the record before the sleep.
 	woke := time.Now()
 	eventually(t, func() error {
 		got := getWorkloadAgent(t, "wake-act")
@@ -373,6 +409,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 			got.Annotations = map[string]string{}
 		}
 		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
+		got.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Hour}
 		return testClient.Update(ctxT(), got)
 	})
 	eventually(t, func() error {
@@ -389,9 +426,10 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		t.Fatalf("the wake must set lastActivityTime; got %v", got.Status.LastActivityTime)
 	}
 
-	// Running holds for idleTimeout from the wake, then Idle; the stale
-	// record must not carry it on to Hibernating, because the delay counts
-	// from the wake too.
+	// Running holds for idleTimeout from the wake, then goes Idle. The
+	// hour-long hibernationDelay keeps the Agent Idle with its Pod through
+	// the hold; TestEvaluateActivity_WakeFloorsHibernationWindow covers the
+	// hibernation half.
 	eventually(t, func() error {
 		touchAgent(t, "wake-act")
 		time.Sleep(500 * time.Millisecond)
@@ -404,11 +442,46 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		touchAgent(t, "wake-act")
 		time.Sleep(300 * time.Millisecond)
 		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1beta1.AgentIdle {
-			t.Fatalf("pass %d: phase=%s, the wake floor must hold the agent Idle for hibernationDelay", i, got.Status.Phase)
+			t.Fatalf("pass %d: phase=%s, want Idle while hibernationDelay runs", i, got.Status.Phase)
 		}
 	}
 	if agentPod(t, "wake-act") == nil {
 		t.Error("Idle is a pod-bearing phase; the woken Pod must survive")
+	}
+}
+
+// An Idle Agent whose gateway record predates its sleep measures the
+// hibernation window from the wake (lastActivityTime), not from the record.
+// Once idleTimeout+hibernationDelay has passed since the wake, it hibernates.
+func TestEvaluateActivity_WakeFloorsHibernationWindow(t *testing.T) {
+	eff := effectiveAgentSpec{IdleTimeout: time.Minute, HibernationDelay: time.Hour, HibernationEnabled: true}
+	for _, tc := range []struct {
+		name    string
+		wokeAgo time.Duration
+		want    kaalmv1beta1.AgentPhase
+	}{
+		{"window from the wake not elapsed", 2 * time.Minute, kaalmv1beta1.AgentIdle},
+		{"window from the wake elapsed", 2 * time.Hour, kaalmv1beta1.AgentHibernating},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The record is older than idleTimeout+hibernationDelay, so only
+			// the wake floor can keep the Agent Idle.
+			r := &AgentReconciler{Activity: &stubActivity{
+				reachable: []ReplicaActivity{replicaWith(5*time.Hour, "woken", 3*time.Hour)}, total: 1,
+			}}
+			woke := metav1.NewTime(time.Now().Add(-tc.wokeAgo))
+			idleSince := metav1.NewTime(time.Now().Add(-time.Minute))
+			agent := &kaalmv1beta1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "woken", Namespace: "default"},
+				Status: kaalmv1beta1.AgentStatus{
+					Phase: kaalmv1beta1.AgentIdle, PhaseTransitionTime: &idleSince, LastActivityTime: &woke,
+				},
+			}
+			r.evaluateActivity(context.Background(), agent, eff, false)
+			if agent.Status.Phase != tc.want {
+				t.Errorf("phase = %s, want %s", agent.Status.Phase, tc.want)
+			}
+		})
 	}
 }
 
@@ -429,7 +502,8 @@ func TestAgent_WakeHoldsResumingUntilReady(t *testing.T) {
 	})
 
 	// Stale activity drives Idle, Hibernating, and Hibernated.
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "resume", 2*time.Hour)}, 1)
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "resume", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "resume", 2*time.Second)
 	touchAgent(t, "resume")
 	eventually(t, func() error {
 		for _, pod := range terminatingPods(t, "resume") {
@@ -566,9 +640,11 @@ func TestAgent_GatewayRestartDefersIdle(t *testing.T) {
 // a mutator, so lifecycle fields land before creation.
 func provisionRunningAgentWithLifecycle(t *testing.T, name, className string, mutate func(*kaalmv1beta1.Agent)) {
 	t.Helper()
-	// Fresh activity by default so provisioning is not raced by idle logic.
-	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, name, 0)}, 1)
 	mkWorkloadAgent(t, name, className, mutate)
+	// Fresh activity by default so provisioning is not raced by idle logic.
+	// Seeded after the create, so the record never predates the Agent; no
+	// activity pass runs before the Agent is Running.
+	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, name, 0)}, 1)
 	markCertReady(t, name)
 	eventually(t, func() error {
 		if agentPod(t, name) == nil {
@@ -727,7 +803,8 @@ func TestAgent_WakesOnChannelAnnotation(t *testing.T) {
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
 		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
 	})
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "ch-wake", 2*time.Hour)}, 1)
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "ch-wake", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "ch-wake", 2*time.Second)
 	touchAgent(t, "ch-wake")
 	eventually(t, func() error {
 		var pods corev1.PodList

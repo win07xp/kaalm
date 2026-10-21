@@ -129,9 +129,11 @@ func TestAgent_PhaseChangedOnEveryTransition(t *testing.T) {
 	expectEvent(t, "Agent", "default", "phase-ev", kaalmv1beta1.ReasonPhaseChanged, corev1.EventTypeNormal,
 		"from Provisioning to Running")
 
-	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, "phase-ev", time.Hour)}, 1)
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "phase-ev", 2*time.Hour)}, 1)
+	waitSinceCreation(t, "phase-ev", time.Second)
 	touchAgent(t, "phase-ev")
 	expectAgentPhase(t, "phase-ev", kaalmv1beta1.AgentIdle)
+	expectLastActivityAtCreation(t, "phase-ev")
 	idle := expectEvent(t, "Agent", "default", "phase-ev", kaalmv1beta1.ReasonPhaseChanged, corev1.EventTypeNormal,
 		"from Running to Idle")
 	if n := eventCount(idle); n != 1 {
