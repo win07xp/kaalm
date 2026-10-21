@@ -854,18 +854,6 @@ func (r *scriptedResolver) recordedHosts() []string {
 	return append([]string(nil), r.hosts...)
 }
 
-// reservedClosedPort returns a local port that nothing listens on.
-func reservedClosedPort(t *testing.T) int32 {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return int32(port)
-}
-
 func podWaitAgent(wakeTimeout time.Duration) *kaalmv1beta1.Agent {
 	return &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
@@ -881,15 +869,15 @@ func TestWaitAgentReachable_PollsFastAtTheStart(t *testing.T) {
 		OperatorNamespace: "kaalm-system", AgentServiceHostOverride: "127.0.0.1",
 		AgentConnectTimeout: 100 * time.Millisecond,
 	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
-	port := reservedClosedPort(t)
-	s.Config.AgentServicePortOverride = port
+	port, listen := holdPort(t)
+	s.Config.AgentServicePortOverride = int32(port)
 
 	var ln net.Listener
 	started := make(chan struct{})
 	go func() {
 		defer close(started)
 		time.Sleep(agentBackAfter)
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		l, err := listen()
 		if err != nil {
 			t.Errorf("agent could not listen on %d: %v", port, err)
 			return
@@ -921,7 +909,8 @@ func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
 	s := NewServer(Config{
 		OperatorNamespace: "kaalm-system", AgentConnectTimeout: 50 * time.Millisecond,
 	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
-	s.Config.AgentServicePortOverride = reservedClosedPort(t)
+	port, _ := holdPort(t)
+	s.Config.AgentServicePortOverride = int32(port)
 	resolver := &scriptedResolver{ip: net.ParseIP("127.0.0.1")}
 	s.AgentResolver = resolver
 
