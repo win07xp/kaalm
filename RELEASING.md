@@ -115,7 +115,8 @@ so nothing publishes.
 
 A release PR that changes nothing under `releases/` (for example, because the
 notes are already on `main`) gets no upgrade check, so it is not released.
-Edit the notes on the branch so the check runs.
+Before you merge, edit the notes on the branch so the check runs. After the
+merge, this fix no longer works: see [When a run fails](#when-a-run-fails).
 
 ## When a run fails
 
@@ -130,6 +131,11 @@ again to a release that exists.
   the release run. Otherwise fix `main` and open a new release PR for the same
   version. The new PR must change a file under `releases/`, such as the notes,
   so the check runs.
+- **The PR had no upgrade check:** the merge is on `main`, but nothing is
+  tagged. Pushing to the merged branch or rerunning the release run changes
+  nothing, because the run always reads the check on the PR's original head
+  commit. Open a new release PR for the same version that changes a file under
+  `releases/`, such as the notes, so the check runs.
 
 A failed upgrade check keeps its evidence. The run's artifact
 `e2e-upgrade-attempt-N` holds the output of `make e2e-upgrade` and the cluster
