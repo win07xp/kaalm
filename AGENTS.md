@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## Project Overview
 
@@ -11,8 +11,8 @@ lives in `docs/src/ROADMAP.md` and the GitHub milestone, not here.
 ## Documentation
 
 Three mdBooks: `docs/` (the design book, which is the spec), `guide/`
-(task-oriented user guide), and `learn/` (beginner tutorial). Each has a
-CLAUDE.md with its own charter. `make books` builds all three after
+(task-oriented user guide), and `learn/` (beginner tutorial). Each has an
+AGENTS.md with its own charter. `make books` builds all three after
 `make docs-check`; `make diagrams` renders the PlantUML figures.
 
 Prose rules for every book, README, and release note:
