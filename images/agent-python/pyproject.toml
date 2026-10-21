@@ -1,7 +1,7 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 [project]
 name = "kaalm-agent"
-version = "2.0.0"
+version = "2.0.1"
 description = "Kaalm reference base image runtime: the runtime contract plus the kaalm handler ABI"
 requires-python = ">=3.11"
 dependencies = [

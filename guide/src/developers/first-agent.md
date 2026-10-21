@@ -35,7 +35,7 @@ metadata:
 spec:
   agentClassRef:
     name: standard
-  image: ghcr.io/win07xp/kaalm-agent-python:2.0.0
+  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1
   providers:
     - providerRef:
         name: anthropic-shared
