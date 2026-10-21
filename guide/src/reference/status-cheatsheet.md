@@ -7,7 +7,7 @@ by resource. Conditions listed are the ones the controller sets.
 
 `kubectl get agents` columns: `Phase`, `Ready`, `Class`, `Age`.
 
-![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
+![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift, Pod disruption, or Pod not Ready. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
 
 Phases, in lifecycle order:
 
@@ -42,7 +42,9 @@ Certificate's TLS Secret ([Change propagation](https://github.com/win07xp/kaalm/
 `Replacing` while the Agent holds one of the class's `maxUnavailableOnDrift`
 slots, `ReplacementPending` while it waits for one, or `CertificateNotReady`
 while the replacement waits for the certificate; in the last two cases the current Pod
-keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
+keeps running; `False` with `PodDisrupted` while an evicted, deleted, or failed
+Pod is replaced, which takes no drift slot and clears to `Current` when the new
+Pod is Ready). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
 changes the phase.
 
 `Ready=False` reasons that move the phase to `Degraded` (the message names

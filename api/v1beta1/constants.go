@@ -75,7 +75,7 @@ const (
 	ConditionDegraded            = "Degraded"            // Agent: recoverable condition, distinct from the Degraded phase
 	ConditionCompleted           = "Completed"           // AgentTask
 	ConditionPlatformConnected   = "PlatformConnected"   // AgentChannel, tri-state
-	ConditionPodUpToDate         = "PodUpToDate"         // Agent: drift replacement progress (Pod spec change or TLS Secret mismatch)
+	ConditionPodUpToDate         = "PodUpToDate"         // Agent: Pod replacement progress (spec drift, TLS Secret mismatch, or involuntary disruption)
 	ConditionIdleDetection       = "IdleDetection"       // Agent: False (Disabled) when no idle timeout applies; absent otherwise
 )
 
@@ -155,7 +155,8 @@ const (
 	ReasonReplacementPending         = "ReplacementPending"
 	ReasonCertificateNotReady        = "CertificateNotReady" // Ready: Certificate not Ready; PodUpToDate: drift waits for it
 	ReasonReplacing                  = "Replacing"
-	ReasonIdleDetectionDisabled      = "Disabled" // IdleDetection: no effective idle timeout
+	ReasonPodDisrupted               = "PodDisrupted" // PodUpToDate: an evicted, deleted, or terminal Pod is being replaced
+	ReasonIdleDetectionDisabled      = "Disabled"     // IdleDetection: no effective idle timeout
 	ReasonSpecDriftPending           = "SpecDriftPending"
 	ReasonDeletionBlocked            = "DeletionBlocked"
 	ReasonNamespaceNotAllowed        = "NamespaceNotAllowed" // rule 47: AgentClass allowedNamespaces

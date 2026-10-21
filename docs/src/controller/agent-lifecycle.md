@@ -5,7 +5,7 @@ An Agent is a persistent workload: the controller provisions a Pod for it and ke
 The happy path is a straight line: an Agent is admitted (`Pending`), its child resources are built (`Provisioning`), and its Pod reports Ready (`Running`). Everything else on this page is a branch off that line, in three groups:
 
 - **The idle and hibernate cycle.** An Agent with no traffic drops to `Idle`, then optionally to `Hibernated` (Pod deleted, PVC kept), and comes back through `Resuming` when a message arrives.
-- **Re-provisioning.** Spec drift or an involuntary Pod disruption sends a live Agent back through `Provisioning` for a Pod replacement.
+- **Re-provisioning.** Spec drift or an involuntary Pod disruption sends a live Agent back through `Provisioning` for a Pod replacement. A Pod that stops being Ready also sends it back, until the Pod is Ready again.
 - **Trouble.** `Degraded` for a mismatch the developer can fix, `Failed` for a Pod that cannot run, `Terminating` for deletion.
 
 This page is the state machine itself: the figure, the table of every transition and its trigger, and the mechanics of the Degraded and Failed phases. The other transitions are explained on their own pages: [Activity detection](hibernation-and-wake.md#activity-detection), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling). For what the reconciler does on each pass, see [AgentReconciler](reconcilers/agent.md).
@@ -14,7 +14,7 @@ This page is the state machine itself: the figure, the table of every transition
 
 The other lifecycles in the system are indexed on [Lifecycles at a glance](../appendix/lifecycles.md).
 
-![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
+![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift, Pod disruption, or Pod not Ready. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
 
 ## Transition triggers
 
@@ -33,6 +33,7 @@ The table lists every transition in the order the reconciler evaluates them. Row
 | `Resuming` | `Running` | The recreated Pod reports Ready. The Agent stays `Resuming` while the Pod is created, replaced, or not Ready, so a woken Agent never shows `Provisioning`. See [Wake-failure state machine](hibernation-and-wake.md#wake-failure-state-machine). |
 | `Running`, `Idle` | `Provisioning` | Spec drift: the Pod's `kaalm.io/pod-spec-hash` annotation differs from the hash of the current spec, or the Agent's Certificate names a different TLS Secret than the Pod mounts ([why](change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced)). The Agent moves to `Provisioning` after it holds a `maxUnavailableOnDrift` slot; until then it stays in phase with `PodUpToDate=False, reason=ReplacementPending` (`CertificateNotReady` while the Agent's Certificate is not Ready, which asks for no slot; see [Waiting on the Certificate](#waiting-on-the-certificate)) and its current Pod keeps running. See [Drift replacements are capped per class](change-propagation.md#drift-replacements-are-capped-per-class). |
 | `Running`, `Idle` | `Provisioning` | Involuntary Pod disruption: the Pod was deleted out of band, or is present but terminal. See [Involuntary Pod disruption](#involuntary-pod-disruption). |
+| `Running`, `Idle` | `Provisioning` | The Pod stops being Ready without crash-looping or failing to pull its image, which give `Failed`. The Agent returns to `Running` when the Pod is Ready again. The idle clock is not reset, so an Agent silent past `idleTimeout` goes back to `Idle` on that pass, and a flapping Pod does not keep an Agent awake. |
 | any | `Degraded` | A class-versus-spec mismatch, present at first provisioning or introduced by class, ModelProvider, or ToolProvider drift. The check runs before every other step, so `Hibernated` and `Pending` Agents degrade too. See [Degraded](#degraded). |
 | `Degraded` | the phase recorded in `status.preDegradedPhase` | Every outstanding mismatch has cleared. |
 | any | `Failed` | A container in `CrashLoopBackOff` with five or more restarts, or in `ImagePullBackOff`. See [Failed](#failed). |
@@ -49,6 +50,8 @@ An Agent in `Running` or `Idle` returns to `Provisioning` when its Pod goes away
 
 - **Deleted out of band**: node drain or the eviction API, a manual `kubectl delete`, or node loss followed by Pod garbage collection. The owned-Pod watch fires, so the reconciler creates a replacement at once.
 - **Present but terminal**: node-pressure eviction leaves the Pod object at `status.phase: Failed`, `reason: Evicted`. `restartPolicy: Always` does not resurrect it, because the kubelet restarts containers inside a live Pod, never a dead one, and crash-loop detection never sees it (the eviction increments no `restartCount`). The reconciler emits a `PodDisrupted` warning, deletes the dead Pod, and re-enters `Provisioning`.
+
+While the replacement runs, `PodUpToDate` is `False` with reason `PodDisrupted` ([Agent status](../resources/agent.md#status)), and the new Pod gets a full `idleTimeout` from the moment it is Ready ([why](hibernation-and-wake.md#manual-wake)).
 
 Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the reconciler is the self-healing loop. The PVC, Service, and Certificate are preserved, as in the spec-drift replacement.
 

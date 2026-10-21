@@ -1122,8 +1122,9 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // reports whether the Agent has drifted and waits for a slot, and whether the
 // create was rejected, so the caller can schedule a retry. A Pod it creates
 // mounts tlsSecret, the Secret the Agent's Certificate names. When a woken
-// (Resuming) or drift-replacement (Replacing) Pod turns Ready, it sets
-// lastActivityTime to that time, so the new Pod gets a full idleTimeout. Drift
+// (Resuming), drift-replacement (Replacing), or disruption-replacement
+// (PodDisrupted, see markDisrupted) Pod turns Ready, it sets lastActivityTime
+// to that time, so the new Pod gets a full idleTimeout. Drift
 // is a spec hash mismatch or a TLS volume that names a Secret other than
 // tlsSecret; both kinds share the maxUnavailableOnDrift slots. The Secret name
 // stays out of the hash: the TLS volume check compares it on its own. While
@@ -1140,7 +1141,7 @@ func (r *AgentReconciler) convergePod(
 	}
 	// Read before admitDriftReplacement or the certHeld branch can rewrite
 	// the reason in this pass.
-	replacing := podUpToDateReason(agent) == kaalmv1beta1.ReasonReplacing
+	floorAtReady := floorsActivityAtReady(podUpToDateReason(agent))
 	ready := func(ok bool, reason, msg string) { r.setPodReady(agent, certHeld, ok, reason, msg) }
 
 	if pod == nil {
@@ -1149,31 +1150,14 @@ func (r *AgentReconciler) convergePod(
 			r.waitForCertificateWithoutPod(agent)
 			return false, false, nil
 		}
-		desired := desiredPod(agent, eff, r.OperatorNamespace, tlsSecret)
-		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
-			return false, false, err
-		}
-		if err := r.Create(ctx, desired); err != nil {
-			if !isWriteRejection(err) {
-				return false, false, err
-			}
-			// A rejection holds like a failed Ready check: the cause is fixed
-			// outside the Agent, and the caller's timed requeue notices the
-			// fix. The drift slot (PodUpToDate=Replacing) is kept.
-			r.setPhase(agent, podPendingPhase(agent), "Pod create rejected")
-			r.markAgentNotReady(agent, kaalmv1beta1.ReasonPodCreateRejected, rejectionMessage(err))
-			agent.Status.PodName = ""
-			return false, true, nil
-		}
-		r.setPhase(agent, podPendingPhase(agent), "Pod created")
-		r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
-		agent.Status.PodName = desired.Name
-		return false, false, nil
+		rejected, err := r.createAgentPod(ctx, agent, eff, tlsSecret)
+		return false, rejected, err
 	}
 
 	// A Pod already being deleted is a replacement in progress: wait for the
 	// owned-Pod watch to fire when it is gone.
 	if !pod.DeletionTimestamp.IsZero() {
+		r.markDisrupted(agent, fmt.Sprintf("Pod %s is being deleted; a replacement Pod follows", pod.Name))
 		r.setPhase(agent, podPendingPhase(agent), "previous Pod terminating")
 		ready(false, "PodProvisioning", "previous Pod terminating")
 		return false, false, nil
@@ -1182,10 +1166,11 @@ func (r *AgentReconciler) convergePod(
 	// Involuntary disruption: a terminal Pod is never resurrected by the
 	// kubelet under restartPolicy Always, so delete it and re-provision.
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-		r.Recorder.Eventf(agent, pod, corev1.EventTypeWarning, "PodDisrupted", kaalmv1beta1.ActionReplacePod,
+		r.Recorder.Eventf(agent, pod, corev1.EventTypeWarning, kaalmv1beta1.ReasonPodDisrupted, kaalmv1beta1.ActionReplacePod,
 			"Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase)
+		r.markDisrupted(agent, fmt.Sprintf("Pod %s is terminal (%s); replacing it", pod.Name, pod.Status.Phase))
 		r.setPhase(agent, podPendingPhase(agent), "replacing a terminal Pod")
-		ready(false, "PodDisrupted", "replacing a terminal Pod")
+		ready(false, kaalmv1beta1.ReasonPodDisrupted, "replacing a terminal Pod")
 		return false, false, r.Delete(ctx, pod)
 	}
 
@@ -1211,8 +1196,10 @@ func (r *AgentReconciler) convergePod(
 	} else if cause != "" {
 		// The replacement waits for the Certificate without a drift slot. A
 		// Replacing Agent whose Pod is not Ready keeps its slot, which counts
-		// that unavailability.
-		if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacing || podReady(pod) {
+		// that unavailability. A disrupted Agent whose replacement Pod is not
+		// Ready keeps PodDisrupted the same way, so the floor applies when
+		// that Pod turns Ready.
+		if !floorsActivityAtReady(podUpToDateReason(agent)) || podReady(pod) {
 			r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonCertificateNotReady,
 				cause+"; the replacement waits for the agent certificate, and the current Pod keeps running")
 		}
@@ -1237,8 +1224,9 @@ func (r *AgentReconciler) convergePod(
 		// agent back to Running; only fresh activity does.
 		if agent.Status.Phase != kaalmv1beta1.AgentIdle {
 			if agent.Status.Phase != kaalmv1beta1.AgentRunning &&
-				(agent.Status.Phase == kaalmv1beta1.AgentResuming || replacing) {
-				// A woken or drift-replacement Pod is Ready. The gateway may
+				(agent.Status.Phase == kaalmv1beta1.AgentResuming || floorAtReady) {
+				// A woken Pod, or a Pod that replaces one after a spec change
+				// or an involuntary disruption, is Ready. The gateway may
 				// hold a message for it and records that message only after
 				// delivery, and the activity read is cached, so the silence
 				// before the wake or the change would idle or hibernate the
@@ -1266,6 +1254,72 @@ func (r *AgentReconciler) convergePod(
 		ready(false, "PodNotReady", "agent Pod is not ready")
 	}
 	return waiting, false, nil
+}
+
+// createAgentPod creates the Agent's Pod when it has none. When the Agent
+// lost a Pod and has PodUpToDate set (see markDisrupted), it first marks and
+// persists the involuntary replacement. It reports whether the API server
+// rejected the create; any other create error is returned.
+func (r *AgentReconciler) createAgentPod(
+	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, tlsSecret string,
+) (rejected bool, err error) {
+	desired := desiredPod(agent, eff, r.OperatorNamespace, tlsSecret)
+	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
+		return false, err
+	}
+	// Persist the marker before the create, as admitDriftReplacement does,
+	// so a lost end-of-pass write cannot leave the new Pod without its floor.
+	if r.markDisrupted(agent, "the Agent's Pod is gone; creating a replacement") {
+		if err := r.writeStatus(ctx, agent); err != nil {
+			return false, err
+		}
+	}
+	if err := r.Create(ctx, desired); err != nil {
+		if !isWriteRejection(err) {
+			return false, err
+		}
+		// A rejection holds like a failed Ready check: the cause is fixed
+		// outside the Agent, and the caller's timed requeue notices the
+		// fix. The drift slot (PodUpToDate=Replacing) is kept.
+		r.setPhase(agent, podPendingPhase(agent), "Pod create rejected")
+		r.markAgentNotReady(agent, kaalmv1beta1.ReasonPodCreateRejected, rejectionMessage(err))
+		agent.Status.PodName = ""
+		return true, nil
+	}
+	r.setPhase(agent, podPendingPhase(agent), "Pod created")
+	r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
+	agent.Status.PodName = desired.Name
+	return false, nil
+}
+
+// floorsActivityAtReady reports whether a PodUpToDate reason marks a
+// replacement whose Pod gets a full idleTimeout from Ready: a drift
+// replacement or a replacement after an involuntary disruption.
+func floorsActivityAtReady(reason string) bool {
+	return reason == kaalmv1beta1.ReasonReplacing || reason == kaalmv1beta1.ReasonPodDisrupted
+}
+
+// markDisrupted marks an involuntary Pod replacement (evicted, deleted, or
+// terminal Pod) with PodUpToDate=False PodDisrupted and reports whether it
+// changed the reason. The gateway records a message it holds for the new Pod
+// only after delivery, so without the marker a long-silent Agent would go
+// Idle, or hibernate, before that message lands; the marker gives the new Pod
+// the activity floor at Ready. It lives in status so it survives a
+// controller restart in the middle of the replacement. It is set only when
+// PodUpToDate is present, which means a Pod has been Ready since the Agent
+// was created or woken, or a drift was seen (ReplacementPending, or
+// CertificateNotReady while a Certificate holds the Pod). First provisioning
+// without drift keeps its idle timing; a first Pod that drifted and was then
+// lost gets the floor, as a Replacing first Pod already does. A drift replacement
+// keeps Replacing and its slot; a pending drift stops waiting, because the
+// new Pod is built from the current spec.
+func (r *AgentReconciler) markDisrupted(agent *kaalmv1beta1.Agent, msg string) bool {
+	switch podUpToDateReason(agent) {
+	case "", kaalmv1beta1.ReasonReplacing, kaalmv1beta1.ReasonPodDisrupted:
+		return false
+	}
+	r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonPodDisrupted, msg)
+	return true
 }
 
 // podDriftCause says why pod no longer matches the Agent, or "" when it does,
