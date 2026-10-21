@@ -6,7 +6,9 @@ name: Release
 # tag pushed by hand releases a commit that did not come from one. Both call
 # the same publish jobs (release-publish.yml). The notes come from
 # releases/<tag>.md at the tagged commit when it exists, and are generated
-# otherwise. The upgrade e2e runs in the same run. See RELEASING.md.
+# otherwise. The upgrade e2e runs next to the publish jobs and does not stop
+# a release from a tag pushed by hand, which has no release PR to check
+# first. See RELEASING.md.
 
 on:
   push:
