@@ -182,7 +182,7 @@ TIME_PATTERNS = [
 ]
 TIME_RE = re.compile("|".join(TIME_PATTERNS), re.IGNORECASE)
 
-# Words the prose rules ban outright (root CLAUDE.md and the
+# Words the prose rules ban outright (root AGENTS.md and the
 # google-dev-docs-style skill). Judgment calls (metaphors, "shape" as a
 # design noun) stay a hand sweep; only the flat bans are mechanical.
 WORDING_PATTERNS = [
@@ -549,7 +549,7 @@ class Checker:
 
     def check_issue_refs(self) -> None:
         """No code comment, build file, script, or workflow cites an issue or
-        PR number: CLAUDE.md asks for the reason instead, and this keeps a
+        PR number: AGENTS.md asks for the reason instead, and this keeps a
         citation from coming back."""
         for rel in self.tracked_outside_books():
             path = pathlib.PurePosixPath(rel)
