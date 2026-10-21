@@ -282,10 +282,12 @@ func (s *Server) wakeAndDeliver(
 		}
 		waited = true
 	}
-	// A Pod being created (first start or a replacement after a spec change)
-	// or resumed has no endpoints yet: wait for it rather than spend the
-	// retry schedule against an empty Service. No wake is needed, so the
-	// activator is not called.
+	// A Pod being created has no endpoints yet: on a first start, a
+	// replacement after a spec change, or an involuntary replacement (after
+	// an eviction, a drain, a deletion, or a terminal Pod). A resumed Pod has
+	// none either. Wait for it rather than spend the retry schedule against
+	// an empty Service. No wake is needed, so the activator is not called,
+	// unless the wait finds the cached phase Hibernating or Hibernated.
 	if phase := agent.Status.Phase; phase == kaalmv1beta1.AgentProvisioning || phase == kaalmv1beta1.AgentResuming {
 		slog.Info("agent Pod not ready; waiting for it before delivery",
 			"namespace", agent.Namespace, "agent", agent.Name, "messageId", env.MessageID, "phase", phase)
