@@ -4,16 +4,21 @@ You release Kaalm by merging a pull request from the branch `release/vX.Y.Z`
 into `main`. The PR adds the release notes as `releases/vX.Y.Z.md`. The merge
 publishes everything with no other step, so the merge is the one decision and
 the notes get reviewed with the PR. The
-[release-on-merge workflow](.github/workflows/release-merge.yml) does the rest.
+[release-on-merge workflow](.github/workflows/release-merge.yml) does the rest,
+after it checks that the upgrade e2e passed on the PR.
 
 ## Cut a release
 
-The merge publishes at once, so do the steps in this order:
+The release run tags only after the `e2e-upgrade (from the latest release)`
+check passed on the PR's head commit, and the merge then publishes at once.
+Do the steps in this order:
 
 1. Branch `release/vX.Y.Z` from `main`.
 2. Add `releases/vX.Y.Z.md`.
-3. Run the checks in [Before you merge the release PR](#before-you-merge-the-release-pr).
-4. Open the PR against `main`.
+3. Open the PR against `main`.
+4. Run the checks in [Before you merge the release PR](#before-you-merge-the-release-pr):
+   wait for the upgrade check to pass on the PR, and run the performance
+   harness.
 5. Merge the PR.
 
 Any merge method works. The workflow tags the commit that the merge puts on
@@ -77,19 +82,21 @@ its path, which has no effect on a release.
 
 ## Before you merge the release PR
 
-Run these checks on the release branch, because merging publishes at once.
-The release run also starts the [upgrade workflow](.github/workflows/upgrade.yml),
-which runs `make e2e-upgrade` in CI next to the publish jobs. A failure there
-cannot stop the release, which is why you run the upgrade test yourself first.
-The performance run happens only on your machine.
+Run these checks on the open release PR, because merging publishes at once.
 
-1. Run the upgrade test from the previous release:
+1. Wait for the upgrade e2e to pass on the PR. The
+   [upgrade workflow](.github/workflows/upgrade.yml) runs on every release PR,
+   because the PR adds a file under `releases/`, and its check is named
+   `e2e-upgrade (from the latest release)`. If it fails, fix the change on the
+   release PR and don't merge.
+
+   To check before you open the PR, run the same test on your machine:
 
    ```bash
    make e2e-upgrade
    ```
 
-   The Makefile sets `PREV_CHART_VERSION` to the newest release tag (`v*`, with no pre-release suffix) before `HEAD`, so a run on a tag's own commit does not start from that tag. The test installs the chart at that version, upgrades to your local build, and asserts that nothing was recreated or lost. When the previous release is older than `UPGRADE_FROM_MIN` (2.0.0, the oldest release this build upgrades from), the target prints why and skips.
+   The Makefile sets `PREV_CHART_VERSION` to the newest release tag (`v*`, with no pre-release suffix) before `HEAD`, so a run on a tag's own commit does not start from that tag. On the PR, `HEAD` is the merge of the PR into `main`, so the test starts from the newest release tag on `main`. The test installs the chart at that version, upgrades to the build under test, and asserts that nothing was recreated or lost. When the previous release is older than `UPGRADE_FROM_MIN` (2.0.0, the oldest release this build upgrades from), the target prints why and skips.
 
 2. Run the performance harness on the baseline environment:
 
@@ -99,11 +106,35 @@ The performance run happens only on your machine.
 
    Compare the new summary with the files in `test/perf/baseline/`, leg by leg. The numbers only mean something on the same environment, which is why this is a local check and not a CI job. [Performance and scale](docs/src/operations/performance-and-scale.md#the-baseline-environment) describes that environment.
 
+### What the release run checks
+
+The release run reads the newest run of the upgrade check on the PR's head
+commit. That run must have finished and passed. A run that is still going,
+failed, was skipped, or never ran makes the release run fail before it tags,
+so nothing publishes.
+
+A release PR that changes nothing under `releases/` (for example, because the
+notes are already on `main`) gets no upgrade check, so it is not released.
+Edit the notes on the branch so the check runs.
+
 ## When a run fails
 
-Rerun the failed jobs or the whole run from the Actions tab. The tag step
-accepts a tag that already points at the merge commit, and the release step
-attaches the chart again to a release that exists.
+Rerun the failed jobs from the Actions tab. The tag step accepts a tag that
+already points at the merge commit, and the release step attaches the chart
+again to a release that exists.
+
+- **The release run stopped because the check had not finished:** wait for the
+  check to pass on the PR, then rerun the failed jobs.
+- **The upgrade check failed:** the merge is on `main`, but nothing is tagged.
+  If the failure is not in the change, rerun the check on the PR, then rerun
+  the release run. Otherwise fix `main` and open a new release PR for the same
+  version. The new PR must change a file under `releases/`, such as the notes,
+  so the check runs.
+
+A failed upgrade check keeps its evidence. The run's artifact
+`e2e-upgrade-attempt-N` holds the output of `make e2e-upgrade` and the cluster
+diagnostics, where N is the attempt number. Look there when the job log is missing or
+incomplete.
 
 If `vX.Y.Z` already exists at another commit, the run fails: that version is
 taken, so release a new one.
@@ -121,6 +152,10 @@ git push origin v2.1.0
 The release uses `releases/<tag>.md` at the tagged commit when that file
 exists, and generated notes otherwise. Use this path to release a commit that
 did not come from a release PR.
+
+This path has no release PR to check first. The upgrade e2e runs next to the
+publish jobs and cannot stop the release, so run `make e2e-upgrade` yourself
+before you push the tag.
 
 ## Installing a published release
 
@@ -178,6 +213,7 @@ make chart-package VERSION=2.1.0   # writes dist/kaalm-2.1.0.tgz
   to publish. The merge path tags and publishes in one run because a tag pushed
   with the workflow's `GITHUB_TOKEN` starts no other workflow.
 - `packages: write` and `contents: write` are granted to the workflow's
-  `GITHUB_TOKEN`; no separate secret is needed.
+  `GITHUB_TOKEN`; no separate secret is needed. The tag job also gets
+  `checks: read`, to read the release PR's check runs.
 - Image and chart versions are always the release version minus its leading
   `v`, so a chart at `X.Y.Z` always references images at `X.Y.Z`.
