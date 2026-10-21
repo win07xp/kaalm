@@ -165,10 +165,12 @@ func TestAgent_ReplacementPodGetsAFullIdleTimeout(t *testing.T) {
 		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Hour}
 	})
 
-	// Activity from 30 minutes ago: past idleTimeout, inside hibernationDelay.
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "repl-act", 30*time.Minute)}, 1)
+	// Activity at creation, waited past idleTimeout: inside hibernationDelay.
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "repl-act", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "repl-act", 5*time.Second)
 	touchAgent(t, "repl-act")
 	expectAgentPhase(t, "repl-act", kaalmv1beta1.AgentIdle)
+	expectLastActivityAtCreation(t, "repl-act")
 
 	old := agentPod(t, "repl-act")
 	eventually(t, func() error {

@@ -213,9 +213,11 @@ func TestAgent_CertificateHoldKeepsIdlePod(t *testing.T) {
 	pod := agentPod(t, "cert-idle")
 	reissueCertificate(t, "cert-idle")
 
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "cert-idle", 2*time.Hour)}, 1)
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "cert-idle", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "cert-idle", 2*time.Second)
 	touchAgent(t, "cert-idle")
 	expectAgentPhase(t, "cert-idle", kaalmv1beta1.AgentIdle)
+	expectLastActivityAtCreation(t, "cert-idle")
 	touched := false
 	start := time.Now()
 	consistently(t, holdWindow, func() error {
@@ -297,7 +299,8 @@ func TestAgent_WakeWaitsForCertificate(t *testing.T) {
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
 		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
 	})
-	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "cert-wake", 2*time.Hour)}, 1)
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "cert-wake", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "cert-wake", 2*time.Second)
 	touchAgent(t, "cert-wake")
 	eventually(t, func() error {
 		var pods corev1.PodList

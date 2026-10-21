@@ -287,20 +287,77 @@ func TestMergedActivity_Sources(t *testing.T) {
 		{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &newer}}},
 	}
 	// gatewayTraffic (default) picks the most recent traffic across replicas.
-	if got := mergedActivity(reachable, "a", "gatewayTraffic"); got == nil || !got.Equal(newer) {
+	if got := mergedActivity(reachable, "a", "gatewayTraffic", time.Time{}); got == nil || !got.Equal(newer) {
 		t.Errorf("gatewayTraffic merge wrong: %v", got)
 	}
 	// agentHeartbeat ignores traffic.
-	if got := mergedActivity(reachable, "a", "agentHeartbeat"); got == nil || !got.Equal(t1) {
+	if got := mergedActivity(reachable, "a", "agentHeartbeat", time.Time{}); got == nil || !got.Equal(t1) {
 		t.Errorf("agentHeartbeat merge wrong: %v", got)
 	}
 	// both takes the newer of traffic and heartbeat.
-	if got := mergedActivity(reachable, "a", "both"); got == nil || !got.Equal(newer) {
+	if got := mergedActivity(reachable, "a", "both", time.Time{}); got == nil || !got.Equal(newer) {
 		t.Errorf("both merge wrong: %v", got)
 	}
 	// unknown agent -> nil.
-	if got := mergedActivity(reachable, "missing", "both"); got != nil {
+	if got := mergedActivity(reachable, "missing", "both", time.Time{}); got != nil {
 		t.Errorf("missing agent must merge to nil, got %v", got)
+	}
+}
+
+// A merged timestamp older than the Agent's creation belongs to a deleted
+// Agent of the same name and is dropped; one at or after creation is kept.
+func TestMergedActivity_IgnoresActivityBeforeCreation(t *testing.T) {
+	created := time.Now().Add(-time.Minute)
+	before := created.Add(-time.Hour)
+	after := created.Add(30 * time.Second)
+	at := created
+	sources := []string{"gatewayTraffic", "agentHeartbeat", "both"}
+	for _, tc := range []struct {
+		name      string
+		reachable []ReplicaActivity
+		created   time.Time
+		want      map[string]*time.Time
+	}{
+		{
+			name:      "every source before creation",
+			reachable: []ReplicaActivity{{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &before, Heartbeat: &before}}}},
+			created:   created,
+			want:      map[string]*time.Time{"gatewayTraffic": nil, "agentHeartbeat": nil, "both": nil},
+		},
+		{
+			name:      "record at creation",
+			reachable: []ReplicaActivity{{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &at, Heartbeat: &at}}}},
+			created:   created,
+			want:      map[string]*time.Time{"gatewayTraffic": &at, "agentHeartbeat": &at, "both": &at},
+		},
+		{
+			name:      "old traffic, new heartbeat",
+			reachable: []ReplicaActivity{{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &before, Heartbeat: &after}}}},
+			created:   created,
+			want:      map[string]*time.Time{"gatewayTraffic": nil, "agentHeartbeat": &after, "both": &after},
+		},
+		{
+			name: "old record on one replica, new on another",
+			reachable: []ReplicaActivity{
+				{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &before, Heartbeat: &before}}},
+				{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &after, Heartbeat: &after}}},
+			},
+			created: created,
+			want:    map[string]*time.Time{"gatewayTraffic": &after, "agentHeartbeat": &after, "both": &after},
+		},
+		{
+			name:      "zero creation time",
+			reachable: []ReplicaActivity{{Agents: map[string]AgentActivity{"a": {GatewayTraffic: &before, Heartbeat: &before}}}},
+			want:      map[string]*time.Time{"gatewayTraffic": &before, "agentHeartbeat": &before, "both": &before},
+		},
+	} {
+		for _, source := range sources {
+			got := mergedActivity(tc.reachable, "a", source, tc.created)
+			want := tc.want[source]
+			if (got == nil) != (want == nil) || (got != nil && !got.Equal(*want)) {
+				t.Errorf("%s, %s: got %v, want %v", tc.name, source, got, want)
+			}
+		}
 	}
 }
 

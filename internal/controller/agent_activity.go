@@ -217,9 +217,18 @@ func (g *GatewayActivityClient) ForgetUnreachable() {
 }
 
 // mergedActivity merges one agent's timestamps across replicas (most recent
-// per source), then applies the activitySource filter. The order is
-// load-bearing: merge first, filter second; the controller owns the policy.
-func mergedActivity(reachable []ReplicaActivity, agentName, source string) *time.Time {
+// per source), applies the activitySource filter, and then drops a result
+// older than created, the Agent's creationTimestamp. The merge comes before
+// the filter because the controller owns the policy. The cutoff exists
+// because the gateway keys records by namespace and Agent name and keeps them
+// until the replica restarts: a record older than the Agent belongs to a
+// deleted Agent of the same name, and reading it would idle the new Agent on
+// its first Ready pass. Dropping the newest value is the same as dropping
+// each old one, because the newest is the only one returned. creationTimestamp
+// has one-second resolution, so a record from the creation's own second is
+// kept; the old Pod's shutdown and the new Pod's start take longer than that.
+// A zero created cuts nothing.
+func mergedActivity(reachable []ReplicaActivity, agentName, source string, created time.Time) *time.Time {
 	var traffic, heartbeat *time.Time
 	newer := func(current, candidate *time.Time) *time.Time {
 		if candidate == nil {
@@ -236,12 +245,17 @@ func mergedActivity(reachable []ReplicaActivity, agentName, source string) *time
 			heartbeat = newer(heartbeat, a.Heartbeat)
 		}
 	}
+	var picked *time.Time
 	switch source {
 	case "agentHeartbeat":
-		return heartbeat
+		picked = heartbeat
 	case "both":
-		return newer(traffic, heartbeat)
+		picked = newer(traffic, heartbeat)
 	default: // gatewayTraffic
-		return traffic
+		picked = traffic
 	}
+	if picked != nil && picked.Before(created) {
+		return nil
+	}
+	return picked
 }

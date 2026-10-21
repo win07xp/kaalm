@@ -502,10 +502,11 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 // evaluateActivity reads the gateway activity data and drives Running <->
 // Idle and Idle -> Hibernating. Absence of data is not evidence of
 // inactivity: unreachable gateways preserve the phase, and silence counts
-// only once a replica has been up for idleTimeout. While the Agent's
-// Certificate is not Ready (hibernationHeld), an Idle Agent keeps its Pod,
-// because a wake could not create one; it hibernates on the first pass after
-// the Certificate is Ready.
+// only once a replica has been up for idleTimeout. Activity recorded before
+// the Agent was created is ignored, so a recreated Agent counts as having no
+// record. While the Agent's Certificate is not Ready (hibernationHeld), an
+// Idle Agent keeps its Pod, because a wake could not create one; it
+// hibernates on the first pass after the Certificate is Ready.
 func (r *AgentReconciler) evaluateActivity(
 	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, hibernationHeld bool,
 ) ctrl.Result {
@@ -527,7 +528,7 @@ func (r *AgentReconciler) evaluateActivity(
 		Reason: "GatewayReady", Message: "gateway activity data available",
 	})
 
-	last := mergedActivity(reachable, agent.Name, eff.ActivitySource)
+	last := mergedActivity(reachable, agent.Name, eff.ActivitySource, agent.CreationTimestamp.Time)
 	synthetic := false
 	if last == nil {
 		// No recorded activity: genuine silence only if some replica has
