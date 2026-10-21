@@ -35,7 +35,7 @@ GET /v1/activity?namespace=team-support
 | Field | Type | Description |
 |---|---|---|
 | `replicaStartedAt` | timestamp | When this gateway replica started. The controller uses it when no replica has a record for an Agent: a missing record counts as silence only once some replica has been up for at least `idleTimeout` ([Activity tracking API](../user/activation-and-activity.md#activity-tracking-api)) |
-| `agents` | map | Keys are Agent names in the requested namespace; values are per-source last-activity timestamps as observed by this replica |
+| `agents` | map | Keys are Agent names in the requested namespace; values are per-source last-activity timestamps as observed by this replica. An Agent the replica has seen deleted has no key ([Activity tracking API](../user/activation-and-activity.md#activity-tracking-api)) |
 | `gatewayTraffic` | timestamp or null | The last LLM proxy request or delivered channel message this replica observed for the agent, test chats included. Tool calls do not count. `null` if none since the replica started. |
 | `heartbeat` | timestamp or null | The last `POST /v1/agent/heartbeat` this replica received from the agent. `null` if none since the replica started. |
 

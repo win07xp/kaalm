@@ -67,7 +67,7 @@ Heartbeats are an Agent-only signal: the mTLS middleware rejects an AgentTask ca
 
 ### The endpoint
 
-`GET /v1/activity?namespace={ns}` on the cluster listener returns the replica's `replicaStartedAt` and, for each agent in the namespace it has seen, both source timestamps, `null` for a source it has not observed since it started. Both sources are always returned; the gateway never reads Agent specs, and the controller applies `Agent.spec.lifecycle.activitySource` after merging replicas. The wire contract, request, response, and status codes are under [GET /v1/activity](../api/internal-endpoints.md#get-v1activity).
+`GET /v1/activity?namespace={ns}` on the cluster listener returns the replica's `replicaStartedAt` and, for each agent in the namespace it has seen, both source timestamps, `null` for a source it has not observed since it started. A replica drops an Agent's record when its Agent watch sees the Agent deleted, so memory and the response follow the Agents that exist, within the watch lag. A delivery or LLM request in flight at the delete can record again after the drop; the controller's creation cutoff covers that record ([Fan-out and merge](../../controller/hibernation-and-wake.md#fan-out-and-merge)). Both sources are always returned; the gateway never reads Agent specs, and the controller applies `Agent.spec.lifecycle.activitySource` after merging replicas. The wire contract, request, response, and status codes are under [GET /v1/activity](../api/internal-endpoints.md#get-v1activity).
 
 ### Multi-replica fan-out
 

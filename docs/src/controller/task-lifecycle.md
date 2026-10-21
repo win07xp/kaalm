@@ -90,4 +90,4 @@ A retry also re-runs the env Secret check ([rule 48](../resources/validation/ref
 | `ResourceClaimsIgnored` | Warning | the task's `spec.resources` sets `claims` ([rule 53](../resources/validation/class-policy.md)); not on every pass, and never for a settled task. [Event emission](operations.md#event-emission) gives the timing |
 | `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn` | Warning | a pre-Pod reconcile-time check sets `Ready=False` with the reason, when the reason first appears on `Ready`, not on each pass that finds the problem again |
 
-A retry emits a `Warning` event with the failure's reason. A settled task emits its event once.
+A retry emits a `Warning` event with the failure's reason. A settled task emits its event once. Its note is the condition message cut to the Event limit, as the [AgentTask status table](../resources/agenttask.md#status) describes.
