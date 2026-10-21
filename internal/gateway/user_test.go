@@ -1176,18 +1176,56 @@ func startAgentLater(t *testing.T, h *userHarness) {
 	agentServiceLater(t, h)()
 }
 
-// agentServiceLater points agent delivery at a free port where nothing
-// listens yet. The returned start func, which runs once however often it is
-// called, starts the harness agent backend there after agentBackAfter: a
-// test calls it when the Pod should come back, such as from a wake.
-func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
+// holdPort binds a loopback TCP socket to a free port without listening on
+// it. While held, a connect to the port is refused (no listener, so the kernel
+// answers with a reset) and no other socket can bind it: on Linux a bind that
+// overlaps a bound socket without SO_REUSEADDR fails, and the free-port search
+// of a Listen on port 0 skips it. A Listen-then-Close reservation leaves the
+// port free for another process in between, and a listener held open would
+// accept connects into its backlog. BSD bind rules differ; CI and development
+// run on Linux. listen turns the same socket into a listener.
+func holdPort(t *testing.T) (port int, listen func() (net.Listener, error)) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+	syscall.CloseOnExec(fd)
+	var closeOnce sync.Once
+	closeFD := func() { closeOnce.Do(func() { _ = syscall.Close(fd) }) }
+	t.Cleanup(closeFD)
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port = sa.(*syscall.SockaddrInet4).Port
+	return port, func() (net.Listener, error) {
+		if err := syscall.Listen(fd, syscall.SOMAXCONN); err != nil {
+			return nil, err
+		}
+		var ln net.Listener
+		var err error
+		// FileListener dups the descriptor; closing the file closes the
+		// original, so the Cleanup close must not run on it afterwards.
+		closeOnce.Do(func() {
+			f := os.NewFile(uintptr(fd), "held-port")
+			ln, err = net.FileListener(f)
+			_ = f.Close()
+		})
+		return ln, err
+	}
+}
+
+// agentServiceLater points agent delivery at a port held by holdPort, where
+// nothing listens yet. The returned start func, which runs once however often
+// it is called, starts the harness agent backend there after agentBackAfter: a
+// test calls it when the Pod should come back, such as from a wake.
+func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
+	t.Helper()
+	port, listen := holdPort(t)
 	h.server.Config.AgentServicePortOverride = int32(port)
 
 	srv := httptest.NewUnstartedServer(h.agentSrv.Config.Handler)
@@ -1215,7 +1253,7 @@ func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
 			go func() {
 				defer close(ch)
 				time.Sleep(agentBackAfter)
-				ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+				ln, err := listen()
 				if err != nil {
 					t.Errorf("agent backend could not listen on %d: %v", port, err)
 					return
@@ -1224,6 +1262,38 @@ func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
 				srv.StartTLS()
 			}()
 		})
+	}
+}
+
+// agentServiceLater keeps its port from other processes until start, and
+// refuses connects to it until then: a foreign listener on the port would end
+// the Pod wait at once and send delivery to the wrong server.
+func TestAgentServiceLater_HoldsThePortUntilStart(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	start := agentServiceLater(t, h)
+	addr := fmt.Sprintf("127.0.0.1:%d", h.server.Config.AgentServicePortOverride)
+
+	if ln, err := net.Listen("tcp", addr); err == nil {
+		_ = ln.Close()
+		t.Fatalf("another listener bound %s before start: the port is not held", addr)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		_ = conn.Close()
+		t.Fatalf("a connect to %s was accepted before start", addr)
+	}
+
+	start()
+	deadline := time.Now().Add(agentBackAfter + 5*time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no connect to %s after start: %v", addr, err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
