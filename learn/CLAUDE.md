@@ -28,6 +28,12 @@ The install is pinned to `--version 2.0.0` on purpose: the pin is what makes
 the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 
+A fix PR leaves the learn book alone, even when the fix changes what the book
+shows. The release PR moves the pin and walks the whole book against locally
+built artifacts tagged as the new version (pass one), and every pending book
+update lands in that PR. Pass two, after the tag, confirms the walked pages
+against the published artifacts.
+
 Chapters 1 to 9 use no ModelProvider, so the tutorial needs no API key and
 cannot fail on a reader's billing. "Give it a real brain" is the single paid
 chapter and the only one not walked end to end; it is written as a signpost
