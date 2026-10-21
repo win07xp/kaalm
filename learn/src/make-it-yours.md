@@ -77,16 +77,17 @@ kubectl get agents
 ```
 
 ```
-NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   95s
+NAME     PHASE          READY   CLASS      AGE
+helper   Provisioning   False   tutorial   70s
 ```
 
-Asleep. While you were writing the handler, the 30 second timers from the
-class ran out. It does not matter at all: the change is recorded in the
-agent's spec, there is no running pod to swap, and the next message will
-bring the agent back already wearing your code. (If yours is still
-`Running`, Kaalm replaces the pod right away instead; either way the next
-message reaches your handler.)
+`Provisioning`: the agent was still running when you patched it, so Kaalm is
+replacing its pod with one that starts with your code. (If more than about 75
+seconds passed since your last message, the class's 30 second timers ran out
+and yours reads `Hibernated` instead. That does not matter: the change is
+recorded in the agent's spec, there is no running pod to swap, and the next
+message brings the agent back already wearing your code.) Either way the next
+message reaches your handler.
 
 ## Prove it is your code
 

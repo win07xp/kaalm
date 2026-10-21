@@ -46,7 +46,7 @@ kubectl get agentclasses
 
 ```
 NAME       AGENTS   TASKS   REPLACING   AGE
-standard                                25s
+standard                                24s
 ```
 
 The chart shipped a class called `standard`. An **AgentClass** is a template
