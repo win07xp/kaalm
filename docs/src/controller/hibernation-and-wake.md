@@ -113,6 +113,6 @@ A Pod that replaces another gets the same floor, in two cases: a drift replaceme
 
 The first Pod of a new Agent, and a Pod that turns Ready again after a readiness flap, keep the idle clock as it is, so a flapping Pod does not keep an Agent awake.
 
-The controller tells a disruption from a flap by `PodUpToDate=False` with reason `PodDisrupted` ([Agent status](../resources/agent.md#status)). It sets the condition when it finds the Pod terminal, being deleted outside a drift replacement, or gone, and keeps it until the new Pod is Ready. The condition lives in status, so a controller restart in the middle of the replacement does not lose the floor.
+The controller tells a disruption from a flap by `PodUpToDate=False` with reason `PodDisrupted` ([Agent status](../resources/agent.md#status)). Once the Agent has had a Ready Pod since it was created or woken, the controller sets the condition when it finds the Pod terminal, being deleted outside a drift replacement, or gone, and keeps it until the new Pod is Ready. The condition lives in status, so a controller restart in the middle of the replacement does not lose the floor.
 
 A `kaalm.io/wake-trigger` annotation left on an Agent with no `kaalm.io/wake=true` request is stale: the reconciler removes it on its next pass, before it can label a later manual wake as a channel wake.
