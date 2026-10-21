@@ -23,7 +23,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -156,4 +158,105 @@ func TestAgent_ReplacementPodGetsAFullIdleTimeout(t *testing.T) {
 	if got.Status.LastActivityTime == nil || got.Status.LastActivityTime.Time.Before(readyAt.Add(-time.Second)) {
 		t.Errorf("lastActivityTime = %v, want at or after the Ready time %v", got.Status.LastActivityTime, readyAt)
 	}
+}
+
+// expectNewPod waits for the Agent's Pod to be one other than old.
+func expectNewPod(t *testing.T, agentName, old string) *corev1.Pod {
+	t.Helper()
+	var pod *corev1.Pod
+	eventually(t, func() error {
+		pod = agentPod(t, agentName)
+		if pod == nil || pod.Name == old {
+			return errString("no replacement pod yet")
+		}
+		return nil
+	})
+	return pod
+}
+
+// expectRunningFromReady marks fresh Ready and checks the Agent stays
+// Running with its Pod kept, and lastActivityTime at or after Ready.
+func expectRunningFromReady(t *testing.T, agentName string, fresh *corev1.Pod) {
+	t.Helper()
+	readyAt := time.Now()
+	markPodReady(t, fresh)
+	expectAgentPhase(t, agentName, kaalmv1beta1.AgentRunning)
+	consistently(t, 2*time.Second, func() error {
+		if ag := getWorkloadAgent(t, agentName); ag.Status.Phase != kaalmv1beta1.AgentRunning {
+			return fmt.Errorf("phase=%s, want Running for idleTimeout from Ready", ag.Status.Phase)
+		}
+		if pod := agentPod(t, agentName); pod == nil || pod.Name != fresh.Name {
+			return fmt.Errorf("replacement Pod %s was deleted", fresh.Name)
+		}
+		return nil
+	})
+	got := getWorkloadAgent(t, agentName)
+	if got.Status.LastActivityTime == nil || got.Status.LastActivityTime.Time.Before(readyAt.Add(-time.Second)) {
+		t.Errorf("lastActivityTime = %v, want at or after the Ready time %v", got.Status.LastActivityTime, readyAt)
+	}
+}
+
+// A Pod that replaces one lost to an involuntary disruption gets a full
+// idleTimeout from Ready, like a drift replacement: otherwise a long-silent
+// Agent goes Idle and hibernates before the gateway delivers the message it
+// holds for the new Pod.
+func TestAgent_DisruptedPodReplacementGetsAFullIdleTimeout(t *testing.T) {
+	mkWorkloadClass(t, "wc-disrupt-act", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+
+	t.Run("deleted out of band, silent past hibernation", func(t *testing.T) {
+		const name = "disrupt-gone"
+		provisionRunningAgentWithLifecycle(t, name, "wc-disrupt-act", func(ag *kaalmv1beta1.Agent) {
+			ag.Spec.Persistence.Enabled = true
+			ag.Spec.Lifecycle.HibernationEnabled = true
+			ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: 5 * time.Second}
+			ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
+		})
+		old := agentPod(t, name)
+		forceDeletePod(t, old)
+		fresh := expectNewPod(t, name, old.Name)
+
+		// Last traffic an hour ago: past idleTimeout + hibernationDelay.
+		fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, name, time.Hour)}, 1)
+		expectRunningFromReady(t, name, fresh)
+	})
+
+	t.Run("idle, terminal Pod", func(t *testing.T) {
+		const name = "disrupt-term"
+		provisionRunningAgentWithLifecycle(t, name, "wc-disrupt-act", func(ag *kaalmv1beta1.Agent) {
+			ag.Spec.Persistence.Enabled = true
+			ag.Spec.Lifecycle.HibernationEnabled = true
+			ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: 5 * time.Second}
+			ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Hour}
+		})
+		// Activity from 30 minutes ago: past idleTimeout, inside hibernationDelay.
+		fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, name, 30*time.Minute)}, 1)
+		touchAgent(t, name)
+		expectAgentPhase(t, name, kaalmv1beta1.AgentIdle)
+
+		old := agentPod(t, name)
+		old.Status.Phase = corev1.PodFailed
+		if err := testClient.Status().Update(ctxT(), old); err != nil {
+			t.Fatalf("update pod status: %v", err)
+		}
+		// The reconciler deletes the terminal Pod; finish its termination.
+		eventually(t, func() error {
+			var got corev1.Pod
+			err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: old.Name}, &got)
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !got.DeletionTimestamp.IsZero() {
+				forceDeletePod(t, &got)
+			}
+			return errString("terminal pod still present")
+		})
+		expectRunningFromReady(t, name, expectNewPod(t, name, old.Name))
+	})
 }
