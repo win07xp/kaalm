@@ -109,7 +109,7 @@ Returned when the calling Pod's UID does not match `status.currentPodUID`, or th
 
 ### 413 Payload Too Large
 
-Returned when the request body exceeds 1 MiB, when any single artifact value exceeds 4 KiB, or when the sum of `message` plus all artifact values exceeds 32 KiB. The body cap exists because the gateway buffers the body in memory and patches it into the per-task ConfigMap, whose Kubernetes object limit is about 1 MiB, so a larger body could never be stored. It applies before the body is parsed, so an oversized body gets `413` even if it is not valid JSON. The artifact caps measure UTF-8 bytes of the value strings only; keys are bounded by ConfigMap key naming rules and are not counted. Large artifacts should be stored externally and referenced by URL in the value.
+Returned when the request body exceeds 1 MiB, when any single artifact value exceeds 4 KiB, or when the sum of `message` plus all artifact values exceeds 32 KiB. The body cap exists because the gateway buffers the body in memory and patches it into the per-task ConfigMap, whose Kubernetes object limit is about 1 MiB, so a larger body could never be stored. It applies before the body is parsed, so an oversized body gets `413` even if it is not valid JSON. The artifact caps are far lower because the reconciler copies the values into the AgentTask's `status.artifactValues`, and they keep that status small (see [Artifact collection](../../controller/task-lifecycle.md#artifact-collection)). They measure UTF-8 bytes of the value strings only; keys are bounded by ConfigMap key naming rules and are not counted. Large artifacts should be stored externally and referenced by URL in the value.
 
 ### 503 Service Unavailable
 
