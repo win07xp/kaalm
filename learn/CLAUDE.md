@@ -13,7 +13,10 @@ recently for 2.0.1: pass one against locally built 2.0.1 artifacts on
 now comes from that run, in order, on a fresh k3d cluster. The only real
 change was the wake time in the sleep chapter (about 3 seconds, was about 12),
 and the replacement in "Make it yours" delivers the message sent while it
-runs. The 2.0.0 walks caught the channel Secret missing the
+runs. A confirmation walk the same day, against the same artifacts, ran every
+chapter clean on a fresh k3d cluster (wake 3.06 seconds); its one catch was
+the "Make it yours" state after the patch, where a reader who waits a few
+seconds sees `Running`, now covered. The 2.0.0 walks caught the channel Secret missing the
 `kaalm.io/channel-credential` label (every request returned 401), the provider
 Secret missing its `kaalm.io/provider-credential` label and
 `kaalm.io/provider-hosts` annotation, the `REPLACING` column on

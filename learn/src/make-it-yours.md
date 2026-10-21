@@ -82,12 +82,13 @@ helper   Provisioning   False   tutorial   70s
 ```
 
 `Provisioning`: the agent was still running when you patched it, so Kaalm is
-replacing its pod with one that starts with your code. (If more than about 75
-seconds passed since your last message, the class's 30 second timers ran out
-and yours reads `Hibernated` instead. That does not matter: the change is
-recorded in the agent's spec, there is no running pod to swap, and the next
-message brings the agent back already wearing your code.) Either way the next
-message reaches your handler.
+replacing its pod with one that starts with your code. The swap is quick, so
+if you waited a few seconds, yours reads `Running` again, now on your code.
+(If more than about 75 seconds passed since your last message, the class's 30
+second timers ran out and yours reads `Hibernated` instead. That does not
+matter: the change is recorded in the agent's spec, there is no running pod to
+swap, and the next message brings the agent back already wearing your code.)
+Either way the next message reaches your handler.
 
 ## Prove it is your code
 
