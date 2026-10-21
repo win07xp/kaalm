@@ -399,7 +399,8 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 
 	// Wake via annotation while the gateway still reports only the stale
 	// record: the waking message is not recorded until after delivery. The
-	// hour-long hibernationDelay lets the Idle hold below show that the
+	// hour-long hibernationDelay keeps the woken Pod through the Idle hold
+	// below. TestEvaluateActivity_WakeFloorsHibernationWindow shows that the
 	// delay counts from the wake, not from the record before the sleep.
 	woke := time.Now()
 	eventually(t, func() error {
@@ -445,6 +446,41 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 	}
 	if agentPod(t, "wake-act") == nil {
 		t.Error("Idle is a pod-bearing phase; the woken Pod must survive")
+	}
+}
+
+// An Idle Agent whose gateway record predates its sleep measures the
+// hibernation window from the wake (lastActivityTime), not from the record.
+// Once idleTimeout+hibernationDelay has passed since the wake, it hibernates.
+func TestEvaluateActivity_WakeFloorsHibernationWindow(t *testing.T) {
+	eff := effectiveAgentSpec{IdleTimeout: time.Minute, HibernationDelay: time.Hour, HibernationEnabled: true}
+	for _, tc := range []struct {
+		name    string
+		wokeAgo time.Duration
+		want    kaalmv1beta1.AgentPhase
+	}{
+		{"window from the wake not elapsed", 2 * time.Minute, kaalmv1beta1.AgentIdle},
+		{"window from the wake elapsed", 2 * time.Hour, kaalmv1beta1.AgentHibernating},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The record is older than idleTimeout+hibernationDelay, so only
+			// the wake floor can keep the Agent Idle.
+			r := &AgentReconciler{Activity: &stubActivity{
+				reachable: []ReplicaActivity{replicaWith(5*time.Hour, "woken", 3*time.Hour)}, total: 1,
+			}}
+			woke := metav1.NewTime(time.Now().Add(-tc.wokeAgo))
+			idleSince := metav1.NewTime(time.Now().Add(-time.Minute))
+			agent := &kaalmv1beta1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "woken", Namespace: "default"},
+				Status: kaalmv1beta1.AgentStatus{
+					Phase: kaalmv1beta1.AgentIdle, PhaseTransitionTime: &idleSince, LastActivityTime: &woke,
+				},
+			}
+			r.evaluateActivity(context.Background(), agent, eff, false)
+			if agent.Status.Phase != tc.want {
+				t.Errorf("phase = %s, want %s", agent.Status.Phase, tc.want)
+			}
+		})
 	}
 }
 
