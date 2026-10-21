@@ -220,10 +220,11 @@ func (g *GatewayActivityClient) ForgetUnreachable() {
 // per source), applies the activitySource filter, and then drops a result
 // older than created, the Agent's creationTimestamp. The merge comes before
 // the filter because the controller owns the policy. The cutoff exists
-// because the gateway keys records by namespace and Agent name and keeps them
-// until the replica restarts: a record older than the Agent belongs to a
-// deleted Agent of the same name, and reading it would idle the new Agent on
-// its first Ready pass. Dropping the newest value is the same as dropping
+// because the gateway keys records by namespace and Agent name: a replica
+// drops the record when it sees the Agent deleted, but a delivery or LLM
+// request in flight at that moment can record again after the drop. A record
+// older than the Agent then belongs to a deleted Agent of the same name, and
+// reading it would idle the new Agent on its first Ready pass. Dropping the newest value is the same as dropping
 // each old one, because the newest is the only one returned. creationTimestamp
 // has one-second resolution, so a record from the creation's own second is
 // kept; the old Pod's shutdown and the new Pod's start take longer than that.

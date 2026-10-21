@@ -78,6 +78,25 @@ func (s *ActivityStore) RecordHeartbeat(ns, agent string) {
 	s.entry(ns, agent).heartbeat = s.now()
 }
 
+// Forget drops an Agent's record when the Agent is deleted, so memory and
+// the /v1/activity response follow the Agents that exist. A delivery or LLM
+// request in flight at the delete can record again after this; the
+// controller ignores records older than the Agent's creation, which covers
+// that record. A namespace left with no Agents drops its map. Forgetting an
+// unknown entry does nothing.
+func (s *ActivityStore) Forget(ns, agent string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agents, ok := s.byNamespace[ns]
+	if !ok {
+		return
+	}
+	delete(agents, agent)
+	if len(agents) == 0 {
+		delete(s.byNamespace, ns)
+	}
+}
+
 // activityResponse is the GET /v1/activity wire shape.
 type activityResponse struct {
 	ReplicaStartedAt time.Time                 `json:"replicaStartedAt"`
