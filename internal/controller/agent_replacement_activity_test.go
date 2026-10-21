@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -27,6 +28,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -90,7 +94,29 @@ func TestConvergePod_WokenPodReadyFloorsLastActivity(t *testing.T) {
 	}
 }
 
-// First provisioning and a Pod that is already serving keep lastActivityTime.
+// A Pod that replaces a disrupted one gets a full idleTimeout from Ready,
+// like a drift replacement, and PodUpToDate clears to Current.
+func TestConvergePod_DisruptedReplacementPodReadyFloorsLastActivity(t *testing.T) {
+	agent := slotAgent("legacy", kaalmv1beta1.AgentProvisioning, kaalmv1beta1.ReasonPodDisrupted)
+	stale := metav1.NewTime(replacementClock.Add(-2 * time.Hour))
+	agent.Status.LastActivityTime = &stale
+
+	convergeReadyPod(t, agent)
+
+	if agent.Status.Phase != kaalmv1beta1.AgentRunning {
+		t.Errorf("phase = %s, want Running", agent.Status.Phase)
+	}
+	if cond := podUpToDate(agent); cond == nil || cond.Status != metav1.ConditionTrue ||
+		cond.Reason != kaalmv1beta1.ReasonPodCurrent {
+		t.Errorf("PodUpToDate = %+v, want True PodCurrent", cond)
+	}
+	if !lastActivityAt(agent, replacementClock) {
+		t.Errorf("lastActivityTime = %v, want the Ready time %v", agent.Status.LastActivityTime, replacementClock)
+	}
+}
+
+// First provisioning, a Pod that is already serving, and a Pod that turns
+// Ready again after a readiness flap keep lastActivityTime.
 func TestConvergePod_ReadyWithoutReplacementKeepsLastActivity(t *testing.T) {
 	earlier := metav1.NewTime(replacementClock.Add(-time.Hour))
 	for _, tc := range []struct {
@@ -101,9 +127,16 @@ func TestConvergePod_ReadyWithoutReplacementKeepsLastActivity(t *testing.T) {
 		{"first provisioning", kaalmv1beta1.AgentProvisioning, nil},
 		{"idle", kaalmv1beta1.AgentIdle, &earlier},
 		{"running", kaalmv1beta1.AgentRunning, &earlier},
+		// A readiness flap: the same Pod turns Ready again, with no
+		// replacement marker, so the idle clock keeps running.
+		{"readiness flap", kaalmv1beta1.AgentProvisioning, &earlier},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agent := slotAgent("legacy", tc.phase, "")
+			reason := ""
+			if tc.name == "readiness flap" {
+				reason = kaalmv1beta1.ReasonPodCurrent
+			}
+			agent := slotAgent("legacy", tc.phase, reason)
 			agent.Status.LastActivityTime = tc.last
 			convergeReadyPod(t, agent)
 			switch {
@@ -259,4 +292,130 @@ func TestAgent_DisruptedPodReplacementGetsAFullIdleTimeout(t *testing.T) {
 		})
 		expectRunningFromReady(t, name, expectNewPod(t, name, old.Name))
 	})
+}
+
+// disruptedAgent is a "slots" Agent with the fixed UID, so the Pods the tests
+// create are owned by it.
+func disruptedAgent(phase kaalmv1beta1.AgentPhase, reason string) *kaalmv1beta1.Agent {
+	ag := slotAgent("legacy", phase, reason)
+	ag.UID = tlsDriftUID
+	return ag
+}
+
+// convergePod marks an involuntary replacement only once a Pod has been
+// Ready (PodUpToDate present), and leaves a drift replacement's Replacing
+// alone.
+func TestConvergePod_MarksInvoluntaryReplacement(t *testing.T) {
+	terminal := func(t *testing.T, c client.Client, agent *kaalmv1beta1.Agent) {
+		mkHeldPod(t, c, agent, "legacy-tls-0f1e2d3c", func(p *corev1.Pod) { p.Status.Phase = corev1.PodFailed })
+	}
+	terminating := func(t *testing.T, c client.Client, agent *kaalmv1beta1.Agent) {
+		mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls-0f1e2d3c", func(p *corev1.Pod) {
+			p.Finalizers = []string{holdFinalizer} // the fake client keeps the Pod terminating
+		})
+		pods := ownedPodsOf(t, c, agent)
+		if err := c.Delete(context.Background(), &pods[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name       string
+		phase      kaalmv1beta1.AgentPhase
+		reason     string
+		pod        func(*testing.T, client.Client, *kaalmv1beta1.Agent)
+		wantReason string
+	}{
+		{"pod gone after Ready", kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonPodCurrent, nil, kaalmv1beta1.ReasonPodDisrupted},
+		{"first provisioning", kaalmv1beta1.AgentProvisioning, "", nil, ""},
+		{"drift replacement", kaalmv1beta1.AgentProvisioning, kaalmv1beta1.ReasonReplacing, nil, kaalmv1beta1.ReasonReplacing},
+		{"wake", kaalmv1beta1.AgentResuming, "", nil, ""},
+		{"pending drift", kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonReplacementPending, nil, kaalmv1beta1.ReasonPodDisrupted},
+		{"terminal pod", kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonPodCurrent, terminal, kaalmv1beta1.ReasonPodDisrupted},
+		{"terminating pod", kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonPodCurrent, terminating, kaalmv1beta1.ReasonPodDisrupted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := disruptedAgent(tc.phase, tc.reason)
+			c := slotClient(t, agent)
+			if tc.pod != nil {
+				tc.pod(t, c, agent)
+			}
+			r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+			if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
+				"legacy-tls-0f1e2d3c", false); err != nil {
+				t.Fatalf("convergePod: %v", err)
+			}
+			if got := podUpToDateReason(agent); got != tc.wantReason {
+				t.Errorf("PodUpToDate reason = %q, want %q", got, tc.wantReason)
+			}
+			if tc.phase != kaalmv1beta1.AgentResuming && agent.Status.Phase != kaalmv1beta1.AgentProvisioning {
+				t.Errorf("phase = %s, want Provisioning", agent.Status.Phase)
+			}
+			if tc.pod == nil {
+				if pods := ownedPodsOf(t, c, agent); len(pods) != 1 {
+					t.Fatalf("want 1 created Pod, got %d", len(pods))
+				}
+			}
+			if tc.name == "terminal pod" {
+				if pods := ownedPodsOf(t, c, agent); len(pods) != 0 {
+					t.Errorf("terminal Pod was kept")
+				}
+			}
+			if tc.name == "pod gone after Ready" {
+				// Persisted before the create, not only by the end-of-pass write.
+				var stored kaalmv1beta1.Agent
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(agent), &stored); err != nil {
+					t.Fatal(err)
+				}
+				if got := podUpToDateReason(&stored); got != kaalmv1beta1.ReasonPodDisrupted {
+					t.Errorf("stored PodUpToDate reason = %q, want PodDisrupted", got)
+				}
+			}
+		})
+	}
+}
+
+// A failed Pod create after the marker is set leaves the marker stored, so
+// the retry still floors the activity of the Pod it creates.
+func TestConvergePod_PersistsDisruptionBeforeCreate(t *testing.T) {
+	agent := disruptedAgent(kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonPodCurrent)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithStatusSubresource(&kaalmv1beta1.Agent{}).
+		WithObjects(agent).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+				return errors.New("connection refused")
+			},
+		}).Build()
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+
+	if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
+		"legacy-tls-0f1e2d3c", false); err == nil {
+		t.Fatal("convergePod returned no error for a failed create")
+	}
+	var stored kaalmv1beta1.Agent
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(agent), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if cond := podUpToDate(&stored); cond == nil || cond.Status != metav1.ConditionFalse ||
+		cond.Reason != kaalmv1beta1.ReasonPodDisrupted {
+		t.Errorf("stored PodUpToDate = %+v, want False PodDisrupted", cond)
+	}
+}
+
+// While the Certificate is held, TLS drift on a not-Ready replacement Pod
+// keeps PodDisrupted, so the floor still applies when that Pod turns Ready.
+func TestConvergePod_CertHeldKeepsDisruptionMarker(t *testing.T) {
+	agent := disruptedAgent(kaalmv1beta1.AgentProvisioning, kaalmv1beta1.ReasonPodDisrupted)
+	c := slotClient(t, agent)
+	mkHeldPod(t, c, agent, "legacy-tls", podNotReady)
+	r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
+
+	if _, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff,
+		"legacy-tls-0f1e2d3c", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := podUpToDateReason(agent); got != kaalmv1beta1.ReasonPodDisrupted {
+		t.Errorf("PodUpToDate reason = %q, want PodDisrupted", got)
+	}
 }

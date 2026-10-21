@@ -123,6 +123,19 @@ func TestDriftSlots_CountsReplacingAgents(t *testing.T) {
 	}
 }
 
+// An involuntary replacement (PodDisrupted) holds no drift slot, so a node
+// drain does not hold up a rollout.
+func TestDriftSlots_DisruptedAgentHoldsNoSlot(t *testing.T) {
+	drifted := slotAgent("drifted", kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonPodCurrent)
+	disrupted := slotAgent("disrupted", kaalmv1beta1.AgentProvisioning, kaalmv1beta1.ReasonPodDisrupted)
+	c := slotClient(t, drifted, disrupted)
+	var s driftSlots
+	ok, err := s.acquire(context.Background(), c, drifted, slotClass(ptrIntOrString(intstr.FromInt32(1))), time.Now())
+	if err != nil || !ok {
+		t.Fatalf("acquire beside a disrupted Agent = %v, %v; want granted", ok, err)
+	}
+}
+
 func TestDriftSlots_ReservationsCoverStaleCache(t *testing.T) {
 	// The cache has not yet seen any Replacing condition, so only the
 	// in-memory reservations keep concurrent reconciles under the cap.
