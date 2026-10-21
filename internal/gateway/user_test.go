@@ -942,6 +942,26 @@ func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
 	}
 }
 
+// The Pod wait stops its poll sleep at the deadline, so it ends at the
+// capped wakeTimeout rather than one poll interval after it. With a 1.1 s
+// wakeTimeout the last 250 ms sleep would otherwise end the wait at 1.25 s.
+func TestWaitAgentReachable_EndsAtTheDeadline(t *testing.T) {
+	s := NewServer(Config{
+		OperatorNamespace: "kaalm-system", AgentServiceHostOverride: "127.0.0.1",
+		AgentServicePortOverride: 1, AgentConnectTimeout: 50 * time.Millisecond,
+	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(1100*time.Millisecond), nil)
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("wait against a closed port must time out")
+	}
+	if took < 1100*time.Millisecond || took >= 1200*time.Millisecond {
+		t.Errorf("wait ended after %v, want it to end at the 1.1s wakeTimeout", took)
+	}
+}
+
 // A Service not created yet (a first start) answers NXDOMAIN: the wait
 // retries the lookup on the poll schedule and connects once it resolves.
 func TestWaitAgentReachable_RetriesTheLookupUntilTheServiceResolves(t *testing.T) {
