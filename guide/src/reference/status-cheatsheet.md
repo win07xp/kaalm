@@ -42,7 +42,9 @@ Certificate's TLS Secret ([Change propagation](https://github.com/win07xp/kaalm/
 `Replacing` while the Agent holds one of the class's `maxUnavailableOnDrift`
 slots, `ReplacementPending` while it waits for one, or `CertificateNotReady`
 while the replacement waits for the certificate; in the last two cases the current Pod
-keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
+keeps running; `False` with `PodDisrupted` while an evicted, deleted, or failed
+Pod is replaced, which takes no drift slot and clears to `Current` when the new
+Pod is Ready). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
 changes the phase.
 
 `Ready=False` reasons that move the phase to `Degraded` (the message names

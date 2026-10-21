@@ -51,6 +51,8 @@ An Agent in `Running` or `Idle` returns to `Provisioning` when its Pod goes away
 - **Deleted out of band**: node drain or the eviction API, a manual `kubectl delete`, or node loss followed by Pod garbage collection. The owned-Pod watch fires, so the reconciler creates a replacement at once.
 - **Present but terminal**: node-pressure eviction leaves the Pod object at `status.phase: Failed`, `reason: Evicted`. `restartPolicy: Always` does not resurrect it, because the kubelet restarts containers inside a live Pod, never a dead one, and crash-loop detection never sees it (the eviction increments no `restartCount`). The reconciler emits a `PodDisrupted` warning, deletes the dead Pod, and re-enters `Provisioning`.
 
+While the replacement runs, `PodUpToDate` is `False` with reason `PodDisrupted` ([Agent status](../resources/agent.md#status)), and the new Pod gets a full `idleTimeout` from the moment it is Ready ([why](hibernation-and-wake.md#manual-wake)).
+
 Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the reconciler is the self-healing loop. The PVC, Service, and Certificate are preserved, as in the spec-drift replacement.
 
 If the API server rejects the replacement Pod, the Agent stays `Provisioning` with `Ready=False, reason=PodCreateRejected` ([AgentReconciler](reconcilers/agent.md#what-it-reports)).
