@@ -426,9 +426,10 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		t.Fatalf("the wake must set lastActivityTime; got %v", got.Status.LastActivityTime)
 	}
 
-	// Running holds for idleTimeout from the wake, then Idle; the stale
-	// record must not carry it on to Hibernating, because the delay counts
-	// from the wake too.
+	// Running holds for idleTimeout from the wake, then goes Idle. The
+	// hour-long hibernationDelay keeps the Agent Idle with its Pod through
+	// the hold; TestEvaluateActivity_WakeFloorsHibernationWindow covers the
+	// hibernation half.
 	eventually(t, func() error {
 		touchAgent(t, "wake-act")
 		time.Sleep(500 * time.Millisecond)
@@ -441,7 +442,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		touchAgent(t, "wake-act")
 		time.Sleep(300 * time.Millisecond)
 		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1beta1.AgentIdle {
-			t.Fatalf("pass %d: phase=%s, the wake floor must hold the agent Idle for hibernationDelay", i, got.Status.Phase)
+			t.Fatalf("pass %d: phase=%s, want Idle while hibernationDelay runs", i, got.Status.Phase)
 		}
 	}
 	if agentPod(t, "wake-act") == nil {
