@@ -969,3 +969,20 @@ func TestModelProvider_BudgetFoldCountsDrainingReplicaOnce(t *testing.T) {
 		t.Errorf("_canonical = %s, want 17.00 (5 live + 12 retired once)", got.Data[gateway.CanonicalKey])
 	}
 }
+
+// A budget ConfigMap written by 2.0.0 has no spend label. The reducer adds
+// it on its next pass, so the gateway's labeled list finds the ConfigMap,
+// and a later pass with nothing new writes nothing.
+func TestReconcileBudget_LabelsUnlabeledConfigMap(t *testing.T) {
+	current := gateway.PeriodKey("monthly", time.Now())
+	h := newArchiveHarness(t, map[string]string{"gw-0": partialJSON(current, "team-a", "1.00")}, nil)
+	h.pass("gw-0")
+	cm := h.cm()
+	if got := cm.Labels[gateway.SpendConfigMapLabel]; got != gateway.SpendLabelBudget {
+		t.Fatalf("label %s = %q, want %q", gateway.SpendConfigMapLabel, got, gateway.SpendLabelBudget)
+	}
+	h.pass("gw-0")
+	if after := h.cm().ResourceVersion; after != cm.ResourceVersion {
+		t.Errorf("second pass wrote the ConfigMap: resourceVersion %s -> %s", cm.ResourceVersion, after)
+	}
+}

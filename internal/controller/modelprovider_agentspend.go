@@ -58,7 +58,7 @@ func (r *ModelProviderReconciler) reconcileAgentSpend(
 
 	current := map[string]float64{}
 	retired := map[string]float64{}
-	changed, retiredChanged := false, false
+	changed, retiredChanged := ensureSpendLabel(&cm, gateway.SpendLabelAgentSpend), false
 	sum := func(dst, src map[string]float64) {
 		for k, v := range src {
 			dst[k] += v

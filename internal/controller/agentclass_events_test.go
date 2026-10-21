@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -81,16 +80,6 @@ func TestAgentClass_AdvisoryWarningsFollowTheStatusWrite(t *testing.T) {
 // and the workload indexes the AgentClass reconciler lists by.
 func classClientBuilder(t *testing.T, ac *kaalmv1beta1.AgentClass) *fake.ClientBuilder {
 	t.Helper()
-	byClass := func(o client.Object) []string {
-		switch w := o.(type) {
-		case *kaalmv1beta1.Agent:
-			return []string{w.Spec.AgentClassRef.Name}
-		case *kaalmv1beta1.AgentTask:
-			return []string{w.Spec.AgentClassRef.Name}
-		}
-		return nil
-	}
-	return fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ac).WithStatusSubresource(ac).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexAgentClassRef, byClass).
-		WithIndex(&kaalmv1beta1.AgentTask{}, IndexAgentClassRef, byClass)
+	return withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
+		WithObjects(ac).WithStatusSubresource(ac)
 }

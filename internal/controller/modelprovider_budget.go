@@ -209,9 +209,10 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		return err
 	}
 
+	labeled := ensureSpendLabel(&cm, gateway.SpendLabelBudget)
 	fold := foldBudgetKeys(&cm, liveGateways, currentPeriod, string(mp.UID))
 	current := fold.current
-	changed := fold.changed
+	changed := fold.changed || labeled
 
 	// current-period spend everyone must see = live partials + retired.
 	for ns, v := range fold.retired {
@@ -287,6 +288,21 @@ func (r *ModelProviderReconciler) reconcileBudget(
 	mp.Status.ClusterSpentUSD = strconv.FormatFloat(clusterTotal, 'f', 2, 64)
 	setBudgetCanonical(mp.Name, currentPeriod, current)
 	return nil
+}
+
+// ensureSpendLabel sets the spend label to value on cm when it differs and
+// reports whether it changed anything. A ConfigMap written before the label
+// existed gains it on the reducer's next pass, so the gateway's labeled list
+// finds it.
+func ensureSpendLabel(cm *corev1.ConfigMap, value string) bool {
+	if cm.Labels[gateway.SpendConfigMapLabel] == value {
+		return false
+	}
+	if cm.Labels == nil {
+		cm.Labels = map[string]string{}
+	}
+	cm.Labels[gateway.SpendConfigMapLabel] = value
+	return true
 }
 
 // budgetFold is foldBudgetKeys' result: the reducer's view of one budget

@@ -88,7 +88,7 @@ func TestChannelHealthStore_CutsLongFailureText(t *testing.T) {
 			c.RecordFailure(path, healthReasonDispatchFailed, tc.text)
 
 			c.mu.Lock()
-			stored := c.observations[path][0].lastError
+			stored := c.observations[path].failures[0].lastError
 			c.mu.Unlock()
 			served := *c.Snapshot("team-a").Channels[path].LastError
 
@@ -130,13 +130,39 @@ func TestChannelHealthStore_KeepsNewest256(t *testing.T) {
 		c.RecordFailure(path, healthReasonDispatchFailed, fmt.Sprint(i))
 	}
 	c.mu.Lock()
-	list := c.observations[path]
+	list := c.observations[path].failures
 	c.mu.Unlock()
 	if len(list) != 256 {
-		t.Fatalf("kept %d observations, want 256", len(list))
+		t.Fatalf("kept %d failures, want 256", len(list))
 	}
 	if first, last := list[0].lastError, list[len(list)-1].lastError; first != "44" || last != "299" {
 		t.Fatalf("kept %q through %q, want the newest 256 (\"44\" through \"299\")", first, last)
+	}
+}
+
+// A flood of failures inside the window cannot push out the path's newest
+// success: anyone who knows a channel path can send badly authenticated
+// requests, and the success must still be reported.
+func TestChannelHealthStore_FailureFloodKeepsSuccess(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := t0
+	c := NewChannelHealthStore(time.Minute)
+	c.now = func() time.Time { return now }
+	path := "/channels/team-a/flooded"
+	c.RecordSuccess(path)
+	for i := range 300 {
+		now = t0.Add(time.Duration(i+1) * 100 * time.Millisecond)
+		c.RecordFailure(path, healthReasonAuthFailed, fmt.Sprint("bad signature ", i))
+	}
+	entry, ok := c.Snapshot("team-a").Channels[path]
+	if !ok {
+		t.Fatalf("no entry for %s", path)
+	}
+	if entry.State != "success" || entry.Reason == nil || *entry.Reason != healthReasonWebhookReady {
+		t.Fatalf("entry = state %q reason %v, want success %s", entry.State, entry.Reason, healthReasonWebhookReady)
+	}
+	if entry.LastError == nil || *entry.LastError != "bad signature 299" {
+		t.Errorf("lastError = %v, want the newest failure's text", entry.LastError)
 	}
 }
 

@@ -29,9 +29,12 @@ import (
 	"github.com/win07xp/kaalm/internal/eventrec"
 )
 
-// The gateway accepts a completion body of up to 1 MiB, and a condition
-// message is capped at 32768 characters by its schema. A long agent message
-// must still let the task settle, with the stored copies bounded.
+// The gateway caps a completion's message plus artifact values at 32 KiB
+// (maxArtifactTotalBytes in internal/gateway/completion.go). This test
+// writes a longer message straight into the mailbox because, whatever the
+// mailbox holds, the task must settle with its stored copies bounded: the
+// status copy at maxAgentMessageBytes and each condition message under its
+// schema's 32768-character limit.
 func TestTask_LongAgentMessageStillSettles(t *testing.T) {
 	mkWorkloadClass(t, "tc-long", nil)
 	provisionRunningTask(t, "t-long", "tc-long", nil)

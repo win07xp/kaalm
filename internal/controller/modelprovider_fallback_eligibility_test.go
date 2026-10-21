@@ -163,21 +163,10 @@ func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 			}},
 		}
 	}
-	byProviderRef := func(o client.Object) []string {
-		switch w := o.(type) {
-		case *kaalmv1beta1.Agent:
-			return providerRefNames(w.Spec.Providers)
-		case *kaalmv1beta1.AgentTask:
-			return providerRefNames(w.Spec.Providers)
-		}
-		return nil
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithObjects(primary, backup, providerKey("mp-elig"),
 			agentIn("a", "team-a"), agentIn("b", "team-b"), agentIn("x", "outsider")).
 		WithStatusSubresource(primary).
-		WithIndex(&kaalmv1beta1.Agent{}, IndexProviderRef, byProviderRef).
-		WithIndex(&kaalmv1beta1.AgentTask{}, IndexProviderRef, byProviderRef).
 		Build()
 	rec := events.NewFakeRecorder(10)
 	r := &ModelProviderReconciler{

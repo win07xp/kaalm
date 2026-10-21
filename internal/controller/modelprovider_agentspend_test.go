@@ -228,3 +228,41 @@ func TestModelProvider_AgentSpendFoldCountsDrainingReplicaOnce(t *testing.T) {
 		t.Errorf("_canonical = %s, want 17.00 (5 live + 12 retired once)", got.Data[gateway.CanonicalKey])
 	}
 }
+
+// An agent-spend ConfigMap written by 2.0.0 has no spend label. The reducer
+// adds it on its next pass, and a later pass with nothing new writes
+// nothing.
+func TestReconcileAgentSpend_LabelsUnlabeledConfigMap(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.AgentSpendConfigMapName("label"), Namespace: testOperatorNamespace},
+		Data:       map[string]string{"gw-0": fmt.Sprintf(`{"period":%q,"team-a/agent/x":"5.00"}`, period)},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cm).Build()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	mp := eventsProvider("label", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	live := map[string]bool{"gw-0": true}
+	get := func() corev1.ConfigMap {
+		var got corev1.ConfigMap
+		if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if err := r.reconcileAgentSpend(ctx, mp, live); err != nil {
+		t.Fatal(err)
+	}
+	first := get()
+	if got := first.Labels[gateway.SpendConfigMapLabel]; got != gateway.SpendLabelAgentSpend {
+		t.Fatalf("label %s = %q, want %q", gateway.SpendConfigMapLabel, got, gateway.SpendLabelAgentSpend)
+	}
+	if err := r.reconcileAgentSpend(ctx, mp, live); err != nil {
+		t.Fatal(err)
+	}
+	if after := get().ResourceVersion; after != first.ResourceVersion {
+		t.Errorf("second pass wrote the ConfigMap: resourceVersion %s -> %s", first.ResourceVersion, after)
+	}
+}

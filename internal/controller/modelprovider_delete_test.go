@@ -62,16 +62,13 @@ func spendConfigMaps(name string) []client.Object {
 }
 
 // deleteReconciler builds a ModelProviderReconciler over a fake client with
-// the three referrer indexes registered from the same field vars the
-// manager uses, so the cached and live rules match.
+// the referrer indexes registered from the same table the manager uses, so
+// the cached and live rules match.
 func deleteReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *ModelProviderReconciler {
 	t.Helper()
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.ModelProvider{}).
-		WithIndex(&kaalmv1beta1.Agent{}, providerRefField.key, providerRefField.extract).
-		WithIndex(&kaalmv1beta1.AgentTask{}, providerRefField.key, providerRefField.extract).
-		WithIndex(&kaalmv1beta1.AgentClass{}, allowedProvidersField.key, allowedProvidersField.extract).
 		WithInterceptorFuncs(funcs).
 		Build()
 	return &ModelProviderReconciler{

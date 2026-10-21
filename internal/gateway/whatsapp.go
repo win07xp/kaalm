@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -311,12 +312,14 @@ func (w *whatsAppAdapter) buildMessage(
 	}}
 }
 
-// apiBaseURL is the operator-set base URL replies go to.
+// apiBaseURL is the operator-set base URL replies go to, with one trailing
+// slash dropped so the reply path appended to it has no doubled slash.
 func (w *whatsAppAdapter) apiBaseURL() string {
-	if w.s.Config.WhatsAppAPIBaseURL != "" {
-		return w.s.Config.WhatsAppAPIBaseURL
+	base := w.s.Config.WhatsAppAPIBaseURL
+	if base == "" {
+		base = DefaultWhatsAppAPIBaseURL
 	}
-	return DefaultWhatsAppAPIBaseURL
+	return strings.TrimSuffix(base, "/")
 }
 
 // classifyWhatsAppReply is the shared table plus Meta's one exception: the

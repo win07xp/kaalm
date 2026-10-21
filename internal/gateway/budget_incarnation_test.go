@@ -65,7 +65,7 @@ func TestBudgetPublisher_PublishSkipsPreviousIncarnation(t *testing.T) {
 		PodName: "gw-0", Providers: providersFn(pB)}
 
 	ledger.Add(pA, "team-a", "agent/x", 42)
-	pub.publish(ctx, pB)
+	pub.publish(ctx, pB, nil)
 	cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestBudgetPublisher_PublishSkipsPreviousIncarnation(t *testing.T) {
 	}
 
 	ledger.Add(pB, "team-a", "agent/x", 3)
-	pub.publish(ctx, pB)
+	pub.publish(ctx, pB, nil)
 	cm, err = client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
