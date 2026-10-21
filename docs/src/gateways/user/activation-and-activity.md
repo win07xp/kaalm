@@ -76,7 +76,7 @@ Each replica records only the traffic it handled, so a query to the gateway Serv
 1. The reconciler reads a per-namespace cache with a 15-second window, so the activity data a pass reads can be up to 15 seconds old, and the fan-out runs once per namespace per window rather than once per Agent.
 2. On a miss it issues one `GET /v1/activity?namespace={ns}` per gateway Pod IP in parallel, with a five-second client timeout. A replica that is unreachable, times out, or answers anything but `200` is skipped; the reachable replicas are used.
 3. The reachable replicas are cached for the window. An answer with no reachable replica is cached too; the controller drops those answers when a gateway Pod turns Ready ([Gateway unavailability](../../controller/hibernation-and-wake.md#when-activity-data-is-missing)).
-4. For an Agent, the newest timestamp per source across replicas is taken, then `activitySource` selects `gatewayTraffic`, `heartbeat`, or the newer of the two.
+4. For an Agent, the newest timestamp per source across replicas is taken, then `activitySource` selects `gatewayTraffic`, `heartbeat`, or the newer of the two. A result older than the Agent's `creationTimestamp` is ignored ([Fan-out and merge](../../controller/hibernation-and-wake.md#fan-out-and-merge)).
 
 ### TLS verification on per-Pod-IP dials
 
