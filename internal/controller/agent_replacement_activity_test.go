@@ -254,8 +254,9 @@ func TestAgent_DisruptedPodReplacementGetsAFullIdleTimeout(t *testing.T) {
 		forceDeletePod(t, old)
 		fresh := expectNewPod(t, name, old.Name)
 
-		// Last traffic an hour ago: past idleTimeout + hibernationDelay.
-		fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, name, time.Hour)}, 1)
+		// Last traffic at creation, waited past idleTimeout + hibernationDelay.
+		fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, name, 3*time.Hour)}, 1)
+		waitSinceCreation(t, name, 6*time.Second)
 		expectRunningFromReady(t, name, fresh)
 	})
 
@@ -267,10 +268,12 @@ func TestAgent_DisruptedPodReplacementGetsAFullIdleTimeout(t *testing.T) {
 			ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: 5 * time.Second}
 			ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Hour}
 		})
-		// Activity from 30 minutes ago: past idleTimeout, inside hibernationDelay.
-		fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, name, 30*time.Minute)}, 1)
+		// Activity at creation, waited past idleTimeout: inside hibernationDelay.
+		fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, name, 3*time.Hour)}, 1)
+		waitSinceCreation(t, name, 5*time.Second)
 		touchAgent(t, name)
 		expectAgentPhase(t, name, kaalmv1beta1.AgentIdle)
+		expectLastActivityAtCreation(t, name)
 
 		old := agentPod(t, name)
 		old.Status.Phase = corev1.PodFailed
