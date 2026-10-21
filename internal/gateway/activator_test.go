@@ -185,14 +185,20 @@ func TestKubeTokenReviewer_Review(t *testing.T) {
 	}
 }
 
-// fakeActivator records wake calls and returns a configurable error.
+// fakeActivator records wake calls and returns a configurable error. onWake,
+// when set, runs on each call before it returns: a test starts the woken
+// agent backend there.
 type fakeActivator struct {
-	calls []string
-	err   error
+	calls  []string
+	err    error
+	onWake func()
 }
 
 func (f *fakeActivator) Wake(_ context.Context, ns, name string) error {
 	f.calls = append(f.calls, ns+"/"+name)
+	if f.onWake != nil {
+		f.onWake()
+	}
 	return f.err
 }
 

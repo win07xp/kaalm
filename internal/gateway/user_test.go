@@ -43,6 +43,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -718,7 +719,7 @@ func TestDeliverToAgentCountsEveryAttemptByOutcome(t *testing.T) {
 
 	// Every attempt answers 503: four attempts, all "status", none "ok".
 	s := deliveryServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
-	if _, err := s.deliverToAgent(context.Background(), agent, env, false); err == nil {
+	if _, err := s.deliverToAgent(context.Background(), "", agent, env, false); err == nil {
 		t.Fatal("delivery against a 503 agent must fail")
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeStatus)); got != 4 {
@@ -737,7 +738,7 @@ func TestDeliverToAgentCountsEveryAttemptByOutcome(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"content":"hi"}`))
 	})
-	if _, err := s.deliverToAgent(context.Background(), agent, env, false); err != nil {
+	if _, err := s.deliverToAgent(context.Background(), "", agent, env, false); err != nil {
 		t.Fatalf("delivery must succeed on the second attempt: %v", err)
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeStatus)); got != 1 {
@@ -771,7 +772,7 @@ func TestDeliverToAgentReusesTheConnection(t *testing.T) {
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 
 	for i := 0; i < 5; i++ {
-		if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: fmt.Sprintf("m%d", i)}, false); err != nil {
+		if _, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: fmt.Sprintf("m%d", i)}, false); err != nil {
 			t.Fatalf("delivery %d: %v", i, err)
 		}
 	}
@@ -796,7 +797,7 @@ func TestDeliverToAgentRedialsWithinTheAttempt(t *testing.T) {
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, false)
+	_, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m1"}, false)
 	took := time.Since(start)
 	if err == nil {
 		t.Fatal("delivery to a blackhole must fail")
@@ -903,7 +904,7 @@ func TestWaitAgentReachable_PollsFastAtTheStart(t *testing.T) {
 	})
 
 	start := time.Now()
-	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second))
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil)
 	took := time.Since(start)
 	if err != nil {
 		t.Fatalf("wait = %v, want reachable", err)
@@ -925,7 +926,7 @@ func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	err := s.waitAgentReachable(context.Background(), podWaitAgent(time.Second))
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(time.Second), nil)
 	took := time.Since(start)
 	if err == nil {
 		t.Fatal("wait against a closed port must time out")
@@ -957,7 +958,7 @@ func TestWaitAgentReachable_RetriesTheLookupUntilTheServiceResolves(t *testing.T
 	s.AgentResolver = resolver
 
 	start := time.Now()
-	err = s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second))
+	err = s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil)
 	took := time.Since(start)
 	if err != nil {
 		t.Fatalf("wait = %v, want reachable once the Service resolves", err)
@@ -995,7 +996,7 @@ func TestDeliverToAgentResolutionTimeoutIsDNS(t *testing.T) {
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 	s.AgentResolver = &stallingResolver{}
 
-	if _, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, false); err == nil {
+	if _, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m1"}, false); err == nil {
 		t.Fatal("delivery with a stalled resolver must fail")
 	}
 	if got := testutil.ToFloat64(s.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeDNS)); got != 2 {
@@ -1152,6 +1153,15 @@ const agentBackAfter = 300 * time.Millisecond
 // Service of an Agent whose Pod is being replaced or resumed.
 func startAgentLater(t *testing.T, h *userHarness) {
 	t.Helper()
+	agentServiceLater(t, h)()
+}
+
+// agentServiceLater points agent delivery at a free port where nothing
+// listens yet. The returned start func, which runs once however often it is
+// called, starts the harness agent backend there after agentBackAfter: a
+// test calls it when the Pod should come back, such as from a wake.
+func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1161,22 +1171,85 @@ func startAgentLater(t *testing.T, h *userHarness) {
 	h.server.Config.AgentServicePortOverride = int32(port)
 
 	srv := httptest.NewUnstartedServer(h.agentSrv.Config.Handler)
-	started := make(chan struct{})
-	go func() {
-		defer close(started)
-		time.Sleep(agentBackAfter)
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			t.Errorf("agent backend could not listen on %d: %v", port, err)
+	var (
+		once    sync.Once
+		mu      sync.Mutex
+		started chan struct{}
+	)
+	t.Cleanup(func() {
+		mu.Lock()
+		ch := started
+		mu.Unlock()
+		if ch == nil {
 			return
 		}
-		srv.Listener = ln
-		srv.StartTLS()
-	}()
-	t.Cleanup(func() {
-		<-started
+		<-ch
 		srv.Close()
 	})
+	return func() {
+		once.Do(func() {
+			ch := make(chan struct{})
+			mu.Lock()
+			started = ch
+			mu.Unlock()
+			go func() {
+				defer close(ch)
+				time.Sleep(agentBackAfter)
+				ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+				if err != nil {
+					t.Errorf("agent backend could not listen on %d: %v", port, err)
+					return
+				}
+				srv.Listener = ln
+				srv.StartTLS()
+			}()
+		})
+	}
+}
+
+// phaseStore serves the fakeStore Agents with a phase a test can change
+// while a Pod wait polls: the gateway's cached Agent catching up with the
+// controller.
+type phaseStore struct {
+	*fakeStore
+	phase atomic.Value // kaalmv1beta1.AgentPhase
+}
+
+func newPhaseStore(f *fakeStore, phase kaalmv1beta1.AgentPhase) *phaseStore {
+	ps := &phaseStore{fakeStore: f}
+	ps.phase.Store(phase)
+	return ps
+}
+
+func (p *phaseStore) setPhase(phase kaalmv1beta1.AgentPhase) { p.phase.Store(phase) }
+
+func (p *phaseStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1beta1.Agent, bool) {
+	a, ok := p.fakeStore.AgentByName(ctx, ns, name)
+	if !ok {
+		return nil, false
+	}
+	c := a.DeepCopy()
+	c.Status.Phase = p.phase.Load().(kaalmv1beta1.AgentPhase)
+	return c, true
+}
+
+// staleAgent is the Agent a message was routed on: the harness Agent with
+// phase, which the cache no longer reads, and wakeTimeout.
+func staleAgent(h *userHarness, phase kaalmv1beta1.AgentPhase, wakeTimeout time.Duration) *kaalmv1beta1.Agent {
+	agent := h.store.agents["team-a/sup"].DeepCopy()
+	agent.Status.Phase = phase
+	agent.Status.EffectiveWakeTimeout = &metav1.Duration{Duration: wakeTimeout}
+	return agent
+}
+
+// wakeDurationCount is how many wake durations were observed with result.
+func wakeDurationCount(t *testing.T, m *Metrics, result string) uint64 {
+	t.Helper()
+	var out dto.Metric
+	if err := m.channelWakeDur.WithLabelValues("team-a", result).(prometheus.Metric).Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.GetHistogram().GetSampleCount()
 }
 
 // A message for an Agent whose Pod is being created or resumed waits for the
@@ -1224,6 +1297,8 @@ func TestWakeAndDeliver_WaitsAfterARefusedConnect(t *testing.T) {
 	})
 	h.seedChannel("sync")
 	h.server.Metrics = NewMetrics(prometheus.NewRegistry())
+	act := &fakeActivator{}
+	h.server.Activator = act
 	startAgentLater(t, h)
 
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
@@ -1234,11 +1309,162 @@ func TestWakeAndDeliver_WaitsAfterARefusedConnect(t *testing.T) {
 	if n := len(h.agentHits); n != 1 {
 		t.Errorf("agent hits = %d, want 1", n)
 	}
+	// The cached phase stays Running: the wait never requests a wake.
+	if len(act.calls) != 0 {
+		t.Errorf("activator calls = %v, want none for a Running Agent", act.calls)
+	}
 	if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 1 {
 		t.Errorf("connect attempts = %v, want 1", got)
 	}
 	if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeOK)); got != 1 {
 		t.Errorf("ok attempts = %v, want 1", got)
+	}
+}
+
+// The routed phase reads Running or Idle, but the controller has already
+// written Hibernating and deleted the Pod. The refused connect starts the Pod
+// wait, which finds the cached phase Hibernating, requests one wake, and
+// delivers to the woken Pod.
+func TestWakeAndDeliver_WakesWhenThePodWaitFindsTheAgentHibernating(t *testing.T) {
+	for _, phase := range []kaalmv1beta1.AgentPhase{kaalmv1beta1.AgentRunning, kaalmv1beta1.AgentIdle} {
+		t.Run(string(phase), func(t *testing.T) {
+			h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"content":"awake"}`))
+			})
+			h.seedChannel("sync")
+			h.server.Metrics = NewMetrics(prometheus.NewRegistry())
+			// The cache keeps reading Hibernating after the wake, as it does
+			// until the controller settles the Agent and sets Resuming.
+			h.server.Store = newPhaseStore(h.store, kaalmv1beta1.AgentHibernating)
+			act := &fakeActivator{onWake: agentServiceLater(t, h)}
+			h.server.Activator = act
+
+			body, errType, err := h.server.wakeAndDeliver(context.Background(), "/channels/team-a/support",
+				staleAgent(h, phase, 3*time.Second), MessageEnvelope{MessageID: "m1"})
+			if err != nil || errType != "" {
+				t.Fatalf("wakeAndDeliver = %q, %v; want delivery", errType, err)
+			}
+			var reply ResponseEnvelope
+			if err := json.Unmarshal(body, &reply); err != nil || reply.Content == nil || *reply.Content != "awake" {
+				t.Fatalf("reply = %s err=%v", body, err)
+			}
+			if len(act.calls) != 1 {
+				t.Errorf("activator calls = %v, want exactly one", act.calls)
+			}
+			if n := len(h.agentHits); n != 1 {
+				t.Errorf("agent hits = %d, want 1", n)
+			}
+			if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 1 {
+				t.Errorf("connect attempts = %v, want 1", got)
+			}
+		})
+	}
+}
+
+// The cache can still read Running when the wait starts and catch up some
+// polls later. The wait checks the cached phase at each missed poll, so it
+// wakes the Agent when the phase turns Hibernating.
+func TestWakeAndDeliver_WakesWhenTheCachedPhaseTurnsHibernatingDuringTheWait(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"awake"}`))
+	})
+	h.seedChannel("sync")
+	ps := newPhaseStore(h.store, kaalmv1beta1.AgentRunning)
+	h.server.Store = ps
+	act := &fakeActivator{onWake: agentServiceLater(t, h)}
+	h.server.Activator = act
+	flip := time.AfterFunc(600*time.Millisecond, func() { ps.setPhase(kaalmv1beta1.AgentHibernating) })
+	t.Cleanup(func() { flip.Stop() })
+
+	_, errType, err := h.server.wakeAndDeliver(context.Background(), "/channels/team-a/support",
+		staleAgent(h, kaalmv1beta1.AgentRunning, 3*time.Second), MessageEnvelope{MessageID: "m1"})
+	if err != nil || errType != "" {
+		t.Fatalf("wakeAndDeliver = %q, %v; want delivery", errType, err)
+	}
+	if len(act.calls) != 1 {
+		t.Errorf("activator calls = %v, want exactly one", act.calls)
+	}
+	if n := len(h.agentHits); n != 1 {
+		t.Errorf("agent hits = %d, want 1", n)
+	}
+}
+
+// A wake requested during a Pod wait gets the rest of that wait's
+// wakeTimeout, not a fresh one, and a wait that requested a wake ends like a
+// wake: wake_timeout, metered as one, without the delivery attempt's error.
+func TestWakeAndDeliver_PodWaitWakeKeepsTheWaitsDeadline(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("sync")
+	h.server.Metrics = NewMetrics(prometheus.NewRegistry())
+	ps := newPhaseStore(h.store, kaalmv1beta1.AgentRunning)
+	h.server.Store = ps
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+	act := &fakeActivator{} // the Pod never comes back
+	h.server.Activator = act
+	flip := time.AfterFunc(1500*time.Millisecond, func() { ps.setPhase(kaalmv1beta1.AgentHibernating) })
+	t.Cleanup(func() { flip.Stop() })
+
+	start := time.Now()
+	_, errType, err := h.server.wakeAndDeliver(context.Background(), "/channels/team-a/support",
+		staleAgent(h, kaalmv1beta1.AgentRunning, 2*time.Second), MessageEnvelope{MessageID: "m1"})
+	if errType != errWakeTimeout || err == nil {
+		t.Fatalf("wakeAndDeliver = %q, %v; want %q", errType, err, errWakeTimeout)
+	}
+	if !strings.Contains(err.Error(), "wakeTimeout") || strings.Contains(err.Error(), "last attempt") {
+		t.Errorf("message %q must name wakeTimeout and not carry the delivery attempt's error", err)
+	}
+	if d := time.Since(start); d >= 3*time.Second {
+		t.Errorf("the wait took %s; the wake must keep the wait's 2s deadline", d)
+	}
+	if len(act.calls) != 1 {
+		t.Errorf("activator calls = %v, want exactly one", act.calls)
+	}
+	if reason, ok := healthReason(h, "/channels/team-a/support"); ok || reason != healthReasonDispatchFailed {
+		t.Errorf("health = %q ok=%v, want %q", reason, ok, healthReasonDispatchFailed)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.channelWake.WithLabelValues("team-a")); got != 1 {
+		t.Errorf("wakes = %v, want 1", got)
+	}
+	if got := wakeDurationCount(t, h.server.Metrics, "wake_timeout"); got != 1 {
+		t.Errorf("wake_timeout durations = %d, want 1", got)
+	}
+}
+
+// A wake request a Pod wait makes fails the way the wake path's does:
+// controller_unavailable at once, with AgentNotReady channel health.
+func TestWakeAndDeliver_PodWaitWakeRequestFails(t *testing.T) {
+	for name, act := range map[string]ActivatorClient{
+		"activator error": &fakeActivator{err: errors.New("activator answered 503")},
+		"no activator":    nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+			h.seedChannel("sync")
+			h.server.Metrics = NewMetrics(prometheus.NewRegistry())
+			h.server.Store = newPhaseStore(h.store, kaalmv1beta1.AgentHibernating)
+			h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+			h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+			h.server.Activator = act
+
+			start := time.Now()
+			_, errType, err := h.server.wakeAndDeliver(context.Background(), "/channels/team-a/support",
+				staleAgent(h, kaalmv1beta1.AgentRunning, 3*time.Second), MessageEnvelope{MessageID: "m1"})
+			if errType != errControllerDown || err == nil {
+				t.Fatalf("wakeAndDeliver = %q, %v; want %q", errType, err, errControllerDown)
+			}
+			if d := time.Since(start); d >= 1500*time.Millisecond {
+				t.Errorf("took %s; a failed wake request must end the message at once", d)
+			}
+			if reason, ok := healthReason(h, "/channels/team-a/support"); ok || reason != healthReasonAgentNotReady {
+				t.Errorf("health = %q ok=%v, want %q", reason, ok, healthReasonAgentNotReady)
+			}
+			if got := testutil.ToFloat64(h.server.Metrics.channelDelivery.WithLabelValues("team-a", deliveryOutcomeConnect)); got != 1 {
+				t.Errorf("connect attempts = %v, want 1", got)
+			}
+		})
 	}
 }
 
@@ -1300,7 +1526,7 @@ func TestDeliverToAgentWaitsOnceForARefusedConnect(t *testing.T) {
 	s.Config.AgentServicePortOverride = 1 // nothing listens on :1
 	s.Config.AgentConnectTimeout = 20 * time.Millisecond
 
-	_, err := s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m1"}, true)
+	_, err := s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m1"}, true)
 	if err == nil || !strings.Contains(err.Error(), "wakeTimeout") {
 		t.Fatalf("err = %v, want one naming wakeTimeout", err)
 	}
@@ -1310,7 +1536,7 @@ func TestDeliverToAgentWaitsOnceForARefusedConnect(t *testing.T) {
 
 	s.Metrics = NewMetrics(prometheus.NewRegistry())
 	start := time.Now()
-	_, err = s.deliverToAgent(context.Background(), agent, MessageEnvelope{MessageID: "m2"}, false)
+	_, err = s.deliverToAgent(context.Background(), "", agent, MessageEnvelope{MessageID: "m2"}, false)
 	if err == nil || strings.Contains(err.Error(), "wakeTimeout") {
 		t.Fatalf("err = %v, want an exhausted schedule", err)
 	}

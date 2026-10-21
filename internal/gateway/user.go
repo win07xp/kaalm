@@ -250,7 +250,9 @@ func (s *Server) writeSyncError(w http.ResponseWriter, ctx context.Context, name
 // Each message gets at most one Pod wait, bounded by the capped wakeTimeout
 // and ctx: after a wake, before delivery when the Agent is Provisioning or
 // Resuming, or after a delivery attempt fails to connect (the cached phase
-// can lag the controller deleting the Pod).
+// can lag the controller deleting the Pod). It also requests at most one
+// wake: before the wait when the routed phase reads Hibernating or
+// Hibernated, or during a wait that finds the cached phase so.
 // healthPath is the channel webhook path for channel-health recording; the
 // test-chat path passes "" so /console/... traffic never enters a channel
 // health report. The delivery outcome and duration are metered here for
@@ -274,42 +276,23 @@ func (s *Server) wakeAndDeliver(
 	waited := false
 	// Hibernating counts too: its Pod is going away, and the controller keeps
 	// a wake requested in that window until the Agent settles Hibernated.
-	if agent.Status.Phase == kaalmv1beta1.AgentHibernated || agent.Status.Phase == kaalmv1beta1.AgentHibernating {
-		if s.Activator == nil {
-			s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
-				"agent hibernated and no activator configured")
-			return nil, errControllerDown, fmt.Errorf("no activator configured")
+	if needsWake(agent.Status.Phase) {
+		if f := s.awaitPod(ctx, healthPath, agent, env.MessageID, true); f != nil {
+			return nil, f.errType, s.podWaitFailed(healthPath, f, f.err)
 		}
-		s.Metrics.ChannelWake(agent.Namespace)
-		wakeStart := time.Now()
-		if err := s.Activator.Wake(ctx, agent.Namespace, agent.Name); err != nil {
-			s.Metrics.ChannelWakeDuration(agent.Namespace, "controller_unavailable", time.Since(wakeStart).Seconds())
-			s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
-				"activator unreachable: "+err.Error())
-			return nil, errControllerDown, err
-		}
-		if err := s.waitAgentReachable(ctx, agent); err != nil {
-			elapsed := time.Since(wakeStart)
-			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", elapsed.Seconds())
-			e := s.podWaitError(ctx, agent, elapsed)
-			s.recordChannelFailure(healthPath, healthReasonDispatchFailed, e.Error())
-			return nil, errWakeTimeout, e
-		}
-		s.Metrics.ChannelWakeDuration(agent.Namespace, "ready", time.Since(wakeStart).Seconds())
 		waited = true
 	}
-	// A Pod being created (first start or a replacement after a spec change)
-	// or resumed has no endpoints yet: wait for it rather than spend the
-	// retry schedule against an empty Service. No wake is needed, so the
-	// activator is not called.
+	// A Pod being created has no endpoints yet: on a first start, a
+	// replacement after a spec change, or an involuntary replacement (after
+	// an eviction, a drain, a deletion, or a terminal Pod). A resumed Pod has
+	// none either. Wait for it rather than spend the retry schedule against
+	// an empty Service. No wake is needed, so the activator is not called,
+	// unless the wait finds the cached phase Hibernating or Hibernated.
 	if phase := agent.Status.Phase; phase == kaalmv1beta1.AgentProvisioning || phase == kaalmv1beta1.AgentResuming {
 		slog.Info("agent Pod not ready; waiting for it before delivery",
 			"namespace", agent.Namespace, "agent", agent.Name, "messageId", env.MessageID, "phase", phase)
-		waitStart := time.Now()
-		if err := s.waitAgentReachable(ctx, agent); err != nil {
-			e := s.podWaitError(ctx, agent, time.Since(waitStart))
-			s.recordChannelFailure(healthPath, healthReasonDispatchFailed, e.Error())
-			return nil, errDeliveryFailed, e
+		if f := s.awaitPod(ctx, healthPath, agent, env.MessageID, false); f != nil {
+			return nil, f.errType, s.podWaitFailed(healthPath, f, f.err)
 		}
 		waited = true
 	}
@@ -317,11 +300,18 @@ func (s *Server) wakeAndDeliver(
 		attribute.String("kaalm.namespace", agent.Namespace),
 		attribute.String("kaalm.agent", agent.Name),
 		attribute.String("kaalm.message_id", env.MessageID))
-	respBody, err = s.deliverToAgent(dctx, agent, env, !waited)
+	respBody, err = s.deliverToAgent(dctx, healthPath, agent, env, !waited)
 	endDeliver(err)
 	if err != nil {
 		if strings.Contains(err.Error(), "response body exceeded") {
 			return nil, errResponseTooLarge, err
+		}
+		// A Pod wait during delivery that requested a wake ends like a wake.
+		// Channel health keeps the full text, last attempt included; the
+		// caller gets the wait's own error, which platform replies forward.
+		var f *podWaitFailure
+		if errors.As(err, &f) && f.errType != errDeliveryFailed {
+			return nil, f.errType, s.podWaitFailed(healthPath, f, err)
 		}
 		s.recordChannelFailure(healthPath, healthReasonDispatchFailed, err.Error())
 		return nil, errDeliveryFailed, err
@@ -335,6 +325,112 @@ func (s *Server) wakeAndDeliver(
 		s.ChannelHealth.RecordSuccess(healthPath)
 	}
 	return respBody, "", nil
+}
+
+// podWaitFailed records a failed Pod wait in channel health as
+// DispatchFailed, with detail as the message, and returns the wait's error. A
+// failed wake request is not recorded again: requestWake recorded it as
+// AgentNotReady.
+func (s *Server) podWaitFailed(healthPath string, f *podWaitFailure, detail error) error {
+	if f.errType != errControllerDown {
+		s.recordChannelFailure(healthPath, healthReasonDispatchFailed, detail.Error())
+	}
+	return f.err
+}
+
+// needsWake reports whether an Agent in phase needs the activator before its
+// Pod can serve: Hibernated, or Hibernating, whose Pod is going away.
+func needsWake(phase kaalmv1beta1.AgentPhase) bool {
+	return phase == kaalmv1beta1.AgentHibernated || phase == kaalmv1beta1.AgentHibernating
+}
+
+// requestWake calls the activator for agent, metering the call. A failure
+// is recorded in channel health as AgentNotReady and returned with the
+// controller_unavailable error type.
+func (s *Server) requestWake(ctx context.Context, healthPath string, agent *kaalmv1beta1.Agent) (errType string, err error) {
+	if s.Activator == nil {
+		s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
+			"agent hibernated and no activator configured")
+		return errControllerDown, fmt.Errorf("no activator configured")
+	}
+	s.Metrics.ChannelWake(agent.Namespace)
+	wakeStart := time.Now()
+	if err := s.Activator.Wake(ctx, agent.Namespace, agent.Name); err != nil {
+		s.Metrics.ChannelWakeDuration(agent.Namespace, "controller_unavailable", time.Since(wakeStart).Seconds())
+		s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
+			"activator unreachable: "+err.Error())
+		return errControllerDown, err
+	}
+	return "", nil
+}
+
+// podWaitFailure is a Pod wait that ended without the Pod becoming
+// reachable, and the error type it gives the message.
+type podWaitFailure struct {
+	errType string
+	err     error
+}
+
+func (f *podWaitFailure) Error() string { return f.err.Error() }
+func (f *podWaitFailure) Unwrap() error { return f.err }
+
+// awaitPod runs a message's one Pod wait, bounded by the capped wakeTimeout
+// and ctx. With wake set, it requests the wake first. Without it, the wait
+// re-reads the cached Agent after each poll that does not connect, and
+// requests the wake once if the phase reads Hibernating or Hibernated: the
+// phase the message was routed on can lag the controller, and a Pod deleted
+// for hibernation comes back only after a wake. A wake requested inside the
+// wait gets the rest of the wait's deadline, so the single wake leg of
+// backgroundPipelineBound covers it.
+//
+// It returns nil once the Pod is reachable. A failure carries
+// controller_unavailable when the wake request failed, wake_timeout when a
+// requested wake did not bring the Pod back in time, and delivery_failed when
+// the wait requested no wake.
+func (s *Server) awaitPod(
+	ctx context.Context, healthPath string, agent *kaalmv1beta1.Agent, messageID string, wake bool,
+) *podWaitFailure {
+	start := time.Now()
+	var wakeStart time.Time
+	var missed func(context.Context) error
+	if wake {
+		wakeStart = start
+		if errType, err := s.requestWake(ctx, healthPath, agent); err != nil {
+			return &podWaitFailure{errType: errType, err: err}
+		}
+	} else {
+		missed = func(ctx context.Context) error {
+			if !wakeStart.IsZero() {
+				return nil
+			}
+			cur, ok := s.Store.AgentByName(ctx, agent.Namespace, agent.Name)
+			if !ok || !needsWake(cur.Status.Phase) {
+				return nil
+			}
+			slog.Info("agent is hibernating; requesting a wake during the Pod wait",
+				"namespace", agent.Namespace, "agent", agent.Name, "messageId", messageID, "phase", cur.Status.Phase)
+			wakeStart = time.Now()
+			if errType, err := s.requestWake(ctx, healthPath, agent); err != nil {
+				return &podWaitFailure{errType: errType, err: err}
+			}
+			return nil
+		}
+	}
+	if err := s.waitAgentReachable(ctx, agent, missed); err != nil {
+		var f *podWaitFailure
+		if errors.As(err, &f) {
+			return f
+		}
+		if wakeStart.IsZero() {
+			return &podWaitFailure{errType: errDeliveryFailed, err: s.podWaitError(ctx, agent, time.Since(start))}
+		}
+		s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", time.Since(wakeStart).Seconds())
+		return &podWaitFailure{errType: errWakeTimeout, err: s.podWaitError(ctx, agent, time.Since(start))}
+	}
+	if !wakeStart.IsZero() {
+		s.Metrics.ChannelWakeDuration(agent.Namespace, "ready", time.Since(wakeStart).Seconds())
+	}
+	return nil
 }
 
 // recordChannelFailure records a channel-health failure unless the delivery
@@ -408,7 +504,12 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 // NXDOMAIN). Go does not cache lookups, so resolving at every connect would
 // send every poll to the cluster DNS server. Each poll's lookup and connect
 // share one AgentConnectTimeout.
-func (s *Server) waitAgentReachable(ctx context.Context, agent *kaalmv1beta1.Agent) error {
+//
+// missed, when set, runs with ctx after each poll that does not connect, and
+// an error from it ends the wait.
+func (s *Server) waitAgentReachable(
+	ctx context.Context, agent *kaalmv1beta1.Agent, missed func(context.Context) error,
+) error {
 	start := time.Now()
 	deadline := start.Add(s.wakeTimeout(agent))
 	host := s.agentServiceHost(agent)
@@ -433,6 +534,11 @@ func (s *Server) waitAgentReachable(ctx context.Context, agent *kaalmv1beta1.Age
 			}
 		}
 		cancel()
+		if missed != nil {
+			if err := missed(ctx); err != nil {
+				return err
+			}
+		}
 		timer := time.NewTimer(wakePollDelay(time.Since(start)))
 		select {
 		case <-ctx.Done():
@@ -471,9 +577,11 @@ func (s *Server) agentServicePort(agent *kaalmv1beta1.Agent) int32 {
 // another attempt is left, waits for the Agent's Pod in place of that
 // attempt's backoff delay. A failed connect means the request never reached
 // the agent, so waiting cannot deliver twice, and the wait takes a backoff
-// slot rather than adding an attempt.
+// slot rather than adding an attempt. The wait requests a wake if it finds
+// the cached Agent Hibernating or Hibernated (see awaitPod); its error then
+// carries the *podWaitFailure with the wake's error type.
 func (s *Server) deliverToAgent(
-	ctx context.Context, agent *kaalmv1beta1.Agent, env MessageEnvelope, podWait bool,
+	ctx context.Context, healthPath string, agent *kaalmv1beta1.Agent, env MessageEnvelope, podWait bool,
 ) ([]byte, error) {
 	payload, err := json.Marshal(env)
 	if err != nil {
@@ -512,9 +620,8 @@ func (s *Server) deliverToAgent(
 			podWait = false
 			slog.Info("agent connect failed; waiting for its Pod before the next attempt",
 				"namespace", agent.Namespace, "agent", agent.Name, "messageId", env.MessageID)
-			waitStart := time.Now()
-			if werr := s.waitAgentReachable(ctx, agent); werr != nil {
-				return nil, fmt.Errorf("%w; last attempt: %v", s.podWaitError(ctx, agent, time.Since(waitStart)), lastErr)
+			if werr := s.awaitPod(ctx, healthPath, agent, env.MessageID, false); werr != nil {
+				return nil, fmt.Errorf("%w; last attempt: %v", werr, lastErr)
 			}
 			skipDelay = true
 		}
