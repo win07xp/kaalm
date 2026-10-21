@@ -45,3 +45,25 @@ make e2e                                # full k3d e2e suite
   they state the reason, and git history keeps the link. `make docs-check`
   fails on a `#NNN` in code, build files, scripts, and workflows.
 - Bugs are fixed test first: a failing test that shows the bug, then the fix.
+
+## Project facts
+
+- Names: Go module `github.com/win07xp/kaalm`, namespace `kaalm-system`,
+  environment variable prefix `KAALM_`, chart `charts/kaalm`, and images
+  `ghcr.io/win07xp/kaalm-{controller,gateway,console,agent-python,agent-go}`.
+  The `version` and `appVersion` in `charts/kaalm/Chart.yaml` are
+  placeholders; packaging overrides them with the release version.
+- `go.work` is hand-written. It spans `.`, `./agentruntime`, and
+  `./examples/starter-go`, and its `go` line matches the root `go.mod`. Never
+  run a bare `go work init`: it writes the local toolchain version into the file.
+- `examples/starter-go/go.mod` has no `require` line on purpose. The
+  workspace resolves the `agentruntime` import, and a copy of the template
+  runs `go mod tidy`.
+- `make cover-check` runs with `GOWORK=off`. Workspace mode changes how
+  `-coverpkg` attributes coverage, so the union reads about 75% instead of
+  about 87% with the same tests. The target also deletes a stale `cover.out`
+  and runs with `-count=1`, so a low reading is a real drop.
+- CI is path-filtered. A change confined to `docs/`, `guide/`, `learn/`,
+  `hack/docs/`, or Markdown files skips the build-test, lint, chart, and e2e
+  jobs, so a docs-only PR (or a PR stacked on one) can pass without them. The
+  `books` job always runs.

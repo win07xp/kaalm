@@ -17,9 +17,10 @@ Do the steps in this order:
 2. Add `releases/vX.Y.Z.md`.
 3. Open the PR against `main`.
 4. Run the checks in [Before you merge the release PR](#before-you-merge-the-release-pr):
-   wait for the upgrade check to pass on the PR, and run the performance
-   harness.
+   the upgrade check, the performance harness, the audit re-walk, the first
+   pass over the learn book, and the version pins.
 5. Merge the PR.
+6. Do the steps in [After the release is published](#after-the-release-is-published).
 
 Any merge method works. The workflow tags the commit that the merge puts on
 `main` as `vX.Y.Z`, then publishes.
@@ -106,6 +107,46 @@ Run these checks on the open release PR, because merging publishes at once.
 
    Compare the new summary with the files in `test/perf/baseline/`, leg by leg. The numbers only mean something on the same environment, which is why this is a local check and not a CI job. [Performance and scale](docs/src/operations/performance-and-scale.md#the-baseline-environment) describes that environment.
 
+3. Re-walk the audit verdicts that changed. The release PR carries the result, so the audit record stays current for the version you ship.
+
+   ```bash
+   make audit-drift
+   ```
+
+   The target runs [`hack/audit/drift-check.sh`](hack/audit/drift-check.sh) against `hack/audit/manifest.txt`. It lists each verdict whose examined files changed since the manifest's `# audited-commit:`. CI runs the same check without blocking the build.
+
+   For each drifted verdict, fill in the placeholders of [`hack/audit/brief.md`](hack/audit/brief.md), give it to a read-only agent, and walk the verdict against [`hack/audit/checklist.md`](hack/audit/checklist.md). A verdict that no longer holds gets its own issue and is fixed before the release. Then, in the release PR:
+
+   - Set `# audited-commit:` in `manifest.txt` to the commit the walk examined.
+   - Add any newly examined files to the verdict's line in `manifest.txt`.
+   - Add a line to [`hack/audit/verdicts.md`](hack/audit/verdicts.md).
+
+   [The audit README](hack/audit/README.md) describes each file.
+
+4. Walk the learn book against the release commit (pass one). The release PR moves the learn book's version pin and walks every chapter against artifacts built from the release commit, as [the learn book's AGENTS.md](learn/AGENTS.md) describes. The walk script does the mechanical parts:
+
+   ```bash
+   hack/learn-walk.sh build X.Y.Z
+   hack/learn-walk.sh import X.Y.Z
+   hack/learn-walk.sh run LOGNAME 'COMMAND'
+   ```
+
+   - `build` builds the five images and writes `dist/kaalm-X.Y.Z.tgz`.
+   - `import` loads the five images into the k3d cluster. Run it after the book's cluster command. Install the chart from `dist/kaalm-X.Y.Z.tgz` in place of the OCI chart.
+   - `run` runs one book command and appends its output to a log named `LOGNAME`, so every output block on the pages comes from the walk.
+
+   The page changes and the Status record in `learn/AGENTS.md` land in the release PR. Pass two happens after the release is published.
+
+5. Move every pinned version to the new one in the release PR. The files are:
+
+   - The root `README.md` and the root `AGENTS.md`.
+   - The guide pages that show a version, including the installation and upgrading pages.
+   - The `ARG BASE` line of each `examples/*/Dockerfile`.
+   - `images/agent-python/pyproject.toml`.
+   - The learn book's version pin.
+
+   The previous release's commit "release: move the version pins to X.Y.Z" shows the full set.
+
 ### What the release run checks
 
 The release run reads the newest run of the upgrade check on the PR's head
@@ -117,6 +158,19 @@ A release PR that changes nothing under `releases/` (for example, because the
 notes are already on `main`) gets no upgrade check, so it is not released.
 Before you merge, edit the notes on the branch so the check runs. After the
 merge, this fix no longer works: see [When a run fails](#when-a-run-fails).
+
+## After the release is published
+
+Do these steps once the release run finishes. They check the published
+artifacts, which the checks before the merge cannot reach.
+
+- **Learn book, pass two.** On a fresh cluster, walk every chapter again with `hack/learn-walk.sh run` only. Skip the image import: the chart comes from the OCI registry, and the cluster pulls the published images. A mismatch between a page and the walk is a bug, so file an issue. Record the walk result in the Status section of `learn/AGENTS.md` in the next release PR.
+- **Smoke test.** Create a fresh k3d cluster and install cert-manager and trust-manager, as [Installation](guide/src/getting-started/installation.md) says. Install the published chart, create an Agent, and send it a message. The reply comes back. Then let the Agent hibernate, send another message, and check that the reply comes back after the wake.
+- **Close the milestone** once its issues are closed.
+
+These steps check a real release. [Smoke-testing safely](#smoke-testing-safely)
+is a different step: it publishes a pre-release version to exercise the
+pipeline itself.
 
 ## When a run fails
 
