@@ -10,7 +10,7 @@ and watch it fall asleep when nobody needs it and wake up when you say hello
 again, still remembering the conversation you had before it slept.
 
 Every command in the chapters that need no account was run, in order, on a
-fresh cluster against Kaalm 2.0.0, and the output you see is the output it
+fresh cluster against Kaalm 2.0.1, and the output you see is the output it
 printed. One chapter needs a provider account, and it says so.
 
 ## Two notes before you start

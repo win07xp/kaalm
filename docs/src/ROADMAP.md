@@ -10,9 +10,11 @@ single `helm install` from the published OCI chart. It has no upgrade path
 from 1.x or 0.x: a cluster on an earlier release removes it and installs
 2.0.0 ([Moving from 1.x or 0.x](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/upgrading.md#moving-from-1x-or-0x)).
 Upgrades within 2.x are two documented steps, the new CRDs and then
-`helm upgrade`. Every acceptance scenario (S1 to S25) has a test that proves
-it on a real cluster. S21, the in-place upgrade, needs a 2.x release to
-upgrade from, so it starts guarding once 2.0.0 is published.
+`helm upgrade`. The latest release is v2.0.1, a patch release on 2.0.0 with
+no API, CRD schema, or chart value changes. Every acceptance scenario
+(S1 to S25) has a test that proves it on a real cluster. S21, the in-place
+upgrade, runs on every release PR, and the release tags only after it passed
+on the PR's head commit.
 
 Every component of the design ships: all six CRDs, the reconciling
 controller (lifecycle, hibernation and wake, budgets, health probes,

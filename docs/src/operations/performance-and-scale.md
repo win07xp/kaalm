@@ -28,8 +28,8 @@ The default run drives non-streaming chat completions through the agent fleet an
 
 Two more phases run only when `-phases` names them, because each takes long enough that the default run should not grow by it unasked:
 
-- **Many namespaces** (`-phases namespaces`, 7 minutes 10 seconds). The ramp, hold, and teardown on 400 agents spread over 20 namespaces (`-namespaces-agents` and `-namespaces-count`). It reports the same figures as those phases, so they compare with the one-namespace rows. The namespaces are `perf-00` to `perf-19`, named after `-namespace`. Each carries the label `perf.kaalm.io/phase=namespaces` and gets copies of the `perf-hook` and `perf-callback-hmac` Secrets. The phase deletes the namespaces when it ends, on failure too. It refuses to run while the ramp fleet is up, because both fleets together pass the machine's pod ceiling.
-- **Many providers and classes** (`-phases providers`, 5 minutes 43 seconds). 50 ModelProviders and 50 AgentClasses (`-providers-count`), each class allowing every provider. Both sets are named `perf-many-00` to `perf-many-49`. The phase records time to Ready, the `modelprovider` and `agentclass` reconcile counts and latency, a steady control-plane audit over `-idle-duration`, and the first two gateway legs (token tier and mTLS, immediate upstream), which compare with the [gateway table](#gateway). The peak controller and gateway usage it reports covers the whole setup, from creating the providers until every class is Ready, plus the audit window, so it is not a reading taken after setup.
+- **Many namespaces** (`-phases namespaces`, 6 minutes 53 seconds). The ramp, hold, and teardown on 400 agents spread over 20 namespaces (`-namespaces-agents` and `-namespaces-count`). It reports the same figures as those phases, so they compare with the one-namespace rows. The namespaces are `perf-00` to `perf-19`, named after `-namespace`. Each carries the label `perf.kaalm.io/phase=namespaces` and gets copies of the `perf-hook` and `perf-callback-hmac` Secrets. The phase deletes the namespaces when it ends, on failure too. It refuses to run while the ramp fleet is up, because both fleets together pass the machine's pod ceiling.
+- **Many providers and classes** (`-phases providers`, 5 minutes 41 seconds). 50 ModelProviders and 50 AgentClasses (`-providers-count`), each class allowing every provider. Both sets are named `perf-many-00` to `perf-many-49`. The phase records time to Ready, the `modelprovider` and `agentclass` reconcile counts and latency, a steady control-plane audit over `-idle-duration`, and the first two gateway legs (token tier and mTLS, immediate upstream), which compare with the [gateway table](#gateway). The peak controller and gateway usage it reports covers the whole setup, from creating the providers until every class is Ready, plus the audit window, so it is not a reading taken after setup.
 
 Timings that come from API objects (time-to-Ready, task completion) have one-second granularity, so the distributions come from the Prometheus histograms and the objects supply the coarse per-agent numbers. Client-side percentiles are exact, from every sample the load generator recorded; gateway-side and delivery percentiles are interpolated from histogram bucket bounds, so they can sit above the client figure for the same leg, and a value at the top finite bucket reads as that bucket's bound.
 
@@ -47,7 +47,7 @@ make perf-run PERF_FLAGS='-phases providers'   # 50 providers and 50 classes
 make perf-down                  # delete the cluster
 ```
 
-`make perf` takes about 49 minutes on the baseline machine, from deleting the old cluster and creating the new one to the last phase (the timed run of October 20, 2026: 48 minutes 32 seconds). The harness itself reports 46 minutes 11 seconds, which starts after the cluster, images, and chart are up. Results land in `test/perf/results/` as JSON, which is not committed; the published baseline lives in `test/perf/baseline/`. The flags in `test/perf/config.go` change the fleet size, the wave size, the phase list, the sizes of the opt-in phases, and every duration. The defaults are the baseline settings. `make perf-deploy` also opens the [Profiling](observability.md#profiling) listeners on both components (`PERF_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the gateway's request paths with no cluster at all: the pure functions on those paths, and the whole in-process proxy path (`BenchmarkLLMProxyMTLS`, plus `BenchmarkLLMProxyMTLSRateLimited` and `BenchmarkLLMProxyMTLSRateLimitedParallel` with both limits on, sequential and with many callers on one key). Other groups cover the LLM and MCP stream relays, the buffered MCP relay, `tools/list` filtering, request body preparation, and stream usage reading. Save two runs and compare them with `benchstat` before and after a change to one of those paths.
+`make perf` takes about 45 minutes on the baseline machine, from deleting the old cluster and creating the new one to the last phase (the timed run of October 21, 2026: 45 minutes 26 seconds). The harness itself reports 43 minutes 4 seconds, which starts after the cluster, images, and chart are up. Results land in `test/perf/results/` as JSON, which is not committed; the published baseline lives in `test/perf/baseline/`. The flags in `test/perf/config.go` change the fleet size, the wave size, the phase list, the sizes of the opt-in phases, and every duration. The defaults are the baseline settings. `make perf-deploy` also opens the [Profiling](observability.md#profiling) listeners on both components (`PERF_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the gateway's request paths with no cluster at all: the pure functions on those paths, and the whole in-process proxy path (`BenchmarkLLMProxyMTLS`, plus `BenchmarkLLMProxyMTLSRateLimited` and `BenchmarkLLMProxyMTLSRateLimitedParallel` with both limits on, sequential and with many callers on one key). Other groups cover the LLM and MCP stream relays, the buffered MCP relay, `tools/list` filtering, request body preparation, and stream usage reading. Save two runs and compare them with `benchstat` before and after a change to one of those paths.
 
 The harness checks one host prerequisite before it starts: `fs.inotify.max_user_instances` of at least 512 and `fs.inotify.max_user_watches` of at least 524288. The k3d nodes share the host kernel, and a few hundred Pods exhaust the defaults with confusing symptoms. It also records the node count, allocatable Pods, and kubelet version without enforcing them; `make perf-up` creates one server and two agents at 250 Pods each, because the kubelet default of 110 caps a fleet long before memory does.
 
@@ -62,13 +62,13 @@ The harness is a local check you run at release time, listed in the [release che
 | Chart | 2 gateway replicas, 2 controller replicas, the chart's default resources (requests of 100m CPU and 128Mi memory, a 512Mi memory limit, no CPU limit), the mock provider trusted for upstream and callbacks, pprof on, console and tracing off |
 | cert-manager | one replica with `--kube-api-qps=100` and `--kube-api-burst=200` (`PERF_CERT_MANAGER_QPS` and `PERF_CERT_MANAGER_BURST` in the `Makefile`, applied by `hack/k3d-up.sh`) |
 | Agent image | the e2e starter-go agent (the Go base image plus the starter handler), BestEffort |
-| Product code | `2f13349d` |
-| Run | October 20, 2026, `make perf` with every default, then the providers and namespaces phases on the same cluster |
-| Baseline files | `test/perf/baseline/2026-10-20.json` (the default run), `2026-10-20-providers.json`, and `2026-10-20-namespaces.json`, one run each |
+| Product code | `62538a58` |
+| Run | October 21, 2026, `make perf` with every default, then the providers and namespaces phases on the same cluster |
+| Baseline files | `test/perf/baseline/2026-10-21.json` (the default run), `2026-10-21-providers.json`, and `2026-10-21-namespaces.json`, one run each |
 
 ## Baseline numbers
 
-Every table except the soak and the older runs under [Many namespaces](#many-namespaces) (the October 8 runs and the Cilium run) comes from the baseline files, reproduced as the harness printed them. The soak and those older runs were measured on a 16-CPU WSL2 VM, not on the baseline environment, so do not compare their figures directly with the other tables on this page. Unless a section says otherwise, the figures are from `2026-10-20.json`: one `make perf` with every default on October 20, 2026. The [Many providers and classes](#many-providers-and-classes) and [Many namespaces](#many-namespaces) tables are from `2026-10-20-providers.json` and `2026-10-20-namespaces.json`: `make perf-run PERF_FLAGS='-phases providers'` and then `make perf-run PERF_FLAGS='-phases namespaces'` on the same cluster right after the default run. All three files come from one product commit.
+Every table except the soak and the older runs under [Many namespaces](#many-namespaces) (the October 8 runs and the Cilium run) comes from the baseline files, reproduced as the harness printed them. The soak and those older runs were measured on a 16-CPU WSL2 VM, not on the baseline environment, so do not compare their figures directly with the other tables on this page. Unless a section says otherwise, the figures are from `2026-10-21.json`: one `make perf` with every default on October 21, 2026. The [Many providers and classes](#many-providers-and-classes) and [Many namespaces](#many-namespaces) tables are from `2026-10-21-providers.json` and `2026-10-21-namespaces.json`: `make perf-run PERF_FLAGS='-phases providers'` and then `make perf-run PERF_FLAGS='-phases namespaces'` on the same cluster right after the default run. All three files come from one product commit.
 
 ### Gateway
 
@@ -76,13 +76,13 @@ Five legs of 60 s at 32 concurrent callers in an in-cluster load generator:
 
 | Leg | rps | Client p50 / p95 / p99 (ms) | Gateway-side p50 / p95 / p99 (ms) | Gateway peak |
 |---|---|---|---|---|
-| Token tier, soft budget, immediate upstream | 9536 | 2.7 / 7.9 / 11.4 | 2.6 / 4.9 / 8.5 | 3.7 cores, 51 MiB |
-| mTLS, soft budget, immediate upstream | 10632 | 2.5 / 6.9 / 10.0 | 2.6 / 4.9 / 8.1 | 3.9 cores, 53 MiB |
-| mTLS, soft budget, 50 ms upstream | 619 | 51.6 / 52.6 / 53.3 | 75.0 / 97.5 / 99.5 | 3.9 cores, 53 MiB |
-| mTLS, hard budget, immediate upstream | 10480 | 2.6 / 6.9 / 9.8 | 2.6 / 4.9 / 8.1 | 4.0 cores, 54 MiB |
-| mTLS, rate limits on, immediate upstream | 10010 | 2.6 / 7.7 / 11.4 | 2.6 / 4.9 / 8.7 | 3.9 cores, 57 MiB |
+| Token tier, soft budget, immediate upstream | 9962 | 2.7 / 7.1 / 10.0 | 2.6 / 4.9 / 8.0 | 3.9 cores, 48 MiB |
+| mTLS, soft budget, immediate upstream | 10615 | 2.6 / 6.7 / 9.6 | 2.6 / 4.9 / 8.0 | 3.9 cores, 54 MiB |
+| mTLS, soft budget, 50 ms upstream | 619 | 51.6 / 52.6 / 53.4 | 75.0 / 97.5 / 99.5 | 3.9 cores, 52 MiB |
+| mTLS, hard budget, immediate upstream | 10455 | 2.6 / 6.6 / 9.4 | 2.6 / 4.9 / 7.8 | 4.0 cores, 52 MiB |
+| mTLS, rate limits on, immediate upstream | 10591 | 2.6 / 6.6 / 9.4 | 2.6 / 4.9 / 7.7 | 4.0 cores, 54 MiB |
 
-Every response on every leg was a 200. The gateway's per-request cost is about 0.37 ms of CPU on the immediate legs (0.364 to 0.388 ms). Rate limits add no measurable per-request cost: the rate-limits leg used 0.375 ms, the plain mTLS leg used 0.364 ms in this run and 0.375 ms in the providers phase's rerun, and the rate-limits leg's 622 requests per second fewer is about the 598 that the token-tier leg moved between the two runs. The 50 ms leg is bound by the 32 callers times the upstream delay. The immediate legs vary between runs on this machine: the providers phase measured the first two legs again, at 10134 and 10870 requests per second ([Many providers and classes](#many-providers-and-classes)).
+Every response on every leg was a 200. The gateway's per-request cost is about 0.38 ms of CPU on the immediate legs (0.368 to 0.384 ms). Rate limits add little per-request cost: the rate-limits leg used 0.376 ms and the plain mTLS leg used 0.368 ms in this run and 0.367 ms in the providers phase's rerun, a gap smaller than the 0.016 ms spread across the immediate legs. The rate-limits leg served 24 requests per second fewer than the plain mTLS leg, well inside the 574 that the token-tier leg moved between the two runs. The 50 ms leg is bound by the 32 callers times the upstream delay. The immediate legs vary between runs on this machine: the providers phase measured the first two legs again, at 9388 and 10933 requests per second ([Many providers and classes](#many-providers-and-classes)).
 
 ### Max-active ramp
 
@@ -90,17 +90,17 @@ Waves of 50 agents, persistence and hibernation off, until the environment's fir
 
 | Wave | Fleet Ready | Wall (s) | Time-to-Ready p50 / p95 / max (s) | Certificate p50 / p95 (s) | Pod start p50 (s) | Start-to-Ready p50 / p95 (s) | Reconcile p50 / p99 (ms) | Controller / gateway MiB | Host available MiB |
 |---|---|---|---|---|---|---|---|---|---|
-| 0 | 50 | 17 | 7 / 9 / 15 | 3 / 6 | 5 | 2 / 3 | 132.8 / 455.0 | 47 / 47 | 11373 |
-| 1 | 100 | 13 | 7 / 9 / 13 | 3 / 7 | 5 | 2 / 3 | 154.1 / 524.0 | 47 / 47 | 10681 |
-| 2 | 150 | 11 | 9 / 10 / 11 | 5 / 8 | 6 | 2 / 3 | 70.0 / 587.5 | 51 / 48 | 9937 |
-| 3 | 200 | 12 | 9 / 11 / 11 | 5 / 8 | 6 | 2 / 4 | 60.7 / 660.0 | 56 / 50 | 9148 |
-| 4 | 250 | 29 | 13 / 16 / 25 | 6 / 11 | 8 | 4 / 12 | 46.0 / 1146.9 | 63 / 59 | 8442 |
-| 5 | 300 | 19 | 11 / 12 / 17 | 4 / 9 | 6 | 4 / 7 | 39.7 / 764.0 | 66 / 63 | 7646 |
-| 6 | 350 | 26 | 13 / 13 / 23 | 5 / 9 | 6 | 5 / 7 | 29.8 / 655.0 | 73 / 67 | 6736 |
-| 7 | 400 | 40 | 17 / 38 / 39 | 6 / 13 | 9 | 8 / 24 | 37.0 / 1375.0 | 82 / 81 | 5837 |
-| 8 | 443, trimmed to 400 | 157 | 38 / 122 / 153 | 4 / 9 | 6 | 33 / 115 | 4.9 / 645.2 | 81 / 87 | 4288 |
+| 0 | 50 | 10 | 9 / 10 / 10 | 4 / 6 | 6 | 3 / 4 | 158.8 / 429.1 | 37 / 52 | 9716 |
+| 1 | 100 | 14 | 9 / 11 / 11 | 4 / 8 | 6 | 3 / 4 | 75.0 / 687.3 | 49 / 46 | 8962 |
+| 2 | 150 | 15 | 9 / 11 / 11 | 3 / 7 | 6 | 3 / 4 | 36.8 / 682.7 | 54 / 47 | 8250 |
+| 3 | 200 | 15 | 9 / 11 / 11 | 4 / 7 | 5 | 3 / 5 | 36.4 / 736.0 | 59 / 50 | 7368 |
+| 4 | 250 | 20 | 13 / 16 / 16 | 6 / 12 | 7 | 4 / 7 | 20.8 / 1045.6 | 63 / 55 | 6617 |
+| 5 | 300 | 16 | 12 / 14 / 14 | 5 / 9 | 6 | 5 / 8 | 14.7 / 735.2 | 66 / 58 | 5737 |
+| 6 | 350 | 17 | 12 / 13 / 14 | 5 / 9 | 7 | 5 / 8 | 23.6 / 894.0 | 68 / 63 | 5042 |
+| 7 | 400 | 17 | 14 / 15 / 16 | 4 / 9 | 7 | 7 / 9 | 27.2 / 944.5 | 77 / 73 | 4120 |
+| 8 | 441, trimmed to 400 | 69 | 30 / 64 / 69 | 6 / 9 | 9 | 21 / 55 | 4.7 / 753.7 | 90 / 87 | 3007 |
 
-The ramp stopped in wave 8 when one agent Pod went into CrashLoopBackOff. Host memory was 4288 MiB available then, above the 3072 MiB floor. 43 of the wave's 50 agents were Ready after 157 s, and the fleet the later phases ran on is the 400 agents of waves 0 to 7. Memory per running agent is 18.7 MiB of host memory (the starter agent, BestEffort). Time-to-Ready p50 rises from 7 s in wave 0 to 17 s in wave 7, and the wave wall time from 11 to 17 s in waves 0 to 3 to 40 s in wave 7. Certificate issuance p50 stays at 3 to 6 s, so the rise comes from Pod start (5 to 9 s at p50) and start to Ready (2 s growing to 8 s at p50). Reconcile p50 is 30 to 154 ms in waves 0 to 7, and p99 is 455 to 1375 ms. The reconcile count per wave is 276 to 400 while the fleet grows from 50 to 400 agents: a class's in-use count and a provider's spend counters do not re-enqueue every agent that references them.
+The ramp stopped in wave 8 at the memory floor: host memory was 3007 MiB available after 69 s, below the 3072 MiB floor. 41 of the wave's 50 agents were Ready by then, and the fleet the later phases ran on is the 400 agents of waves 0 to 7. Memory per running agent is 18.2 MiB of host memory (the starter agent, BestEffort). Time-to-Ready p50 rises from 9 s in wave 0 to 14 s in wave 7, and the wave wall time from 10 to 15 s in waves 0 to 3 to 16 to 20 s in waves 4 to 7. Certificate issuance p50 stays at 3 to 6 s, so the rise comes from Pod start (5 to 7 s at p50) and start to Ready (3 s growing to 7 s at p50). Reconcile p50 is 14.7 to 158.8 ms in waves 0 to 7, and p99 is 429 to 1046 ms. The reconcile count per wave is 292 to 459 while the fleet grows from 50 to 400 agents: a class's in-use count and a provider's spend counters do not re-enqueue every agent that references them.
 
 ### Hold and serve
 
@@ -108,16 +108,16 @@ One message per agent per minute for three minutes, through each agent's async w
 
 | Measure | Value |
 |---|---|
-| Delivered / failed | 1171 / 30 (97.5% delivered, 2.5% failed after four attempts) |
-| Delivery attempts by outcome | connect 397, ok 1171, timeout 144 |
-| Callbacks delivered | 1201 |
-| Delivery time | p50 8.7 ms, p95 10000 ms |
+| Delivered / failed | 1202 / 0 (every message delivered, none failed after four attempts) |
+| Delivery attempts by outcome | connect 41, ok 1202, timeout 12 |
+| Callbacks delivered | 1202 |
+| Delivery time | p50 4.1 ms, p95 5346 ms |
 | Channels active | all 400 in 1 s |
 | Fleet during the hold | 400 Ready before, 400 after, 0 container restarts, 0 readiness flaps |
-| Gateway peak | 99 mCPU, 128 MiB |
-| Controller peak | 85 mCPU, 88 MiB |
+| Gateway peak | 131 mCPU, 121 MiB |
+| Controller peak | 132 mCPU, 100 MiB |
 
-The delivery tail is failed attempts on the gateway's call to the agent: 397 connects and 144 timeouts, none of them an answer from an agent. A message fails after four failed attempts. The failure count swings between runs, so read it as a range: this hold failed 30 of 1,201 messages, and the 20-namespace hold that ran later on the same cluster failed none ([Many namespaces](#many-namespaces)).
+The delivery tail is failed attempts on the gateway's call to the agent: 41 connects and 12 timeouts, none of them an answer from an agent. A message fails after four failed attempts, and a retry recovered every message here. The failure count swings between runs, so read it as a range: this hold failed none, the 20-namespace hold that ran later on the same cluster failed none, and the earlier runs under [Many namespaces](#many-namespaces) failed 0 to 146 messages.
 
 ### Control-plane traffic
 
@@ -125,12 +125,12 @@ What the operator asked of the apiserver, read from both components' client-side
 
 | Window | Controller | Gateway | Largest apiserver rows |
 |---|---|---|---|
-| Hold, 400 active agents, 297 s | 2.2 req/s, 0.28 writes per agent per minute | 7.7 req/s, 0.85 writes per agent per minute | POST configmaps 1201, GET configmaps 600, APPLY configmaps 480, PUT leases 455, PUT agentchannels/status 408, GET leases 93 |
-| Idle, 100 hibernated agents, 181 s | 0.9 req/s, 0.30 writes per agent per minute | 2.3 req/s, 0.12 writes per agent per minute | GET configmaps 360, PUT leases 277, GET leases 56, APPLY configmaps 36, GET /openapi/v3 36, GET endpoints 18 |
+| Hold, 400 active agents, 232 s | 2.6 req/s, 0.33 writes per agent per minute | 5.4 req/s, 0.78 writes per agent per minute | POST configmaps 1202, PUT agentchannels/status 400, PUT leases 354, DELETE endpoints 86, GET leases 72, GET endpointslices 69 |
+| Idle, 100 hibernated agents, 181 s | 0.9 req/s, 0.30 writes per agent per minute | 0.2 req/s, 0.00 writes per agent per minute | PUT leases 273, GET leases 56, GET certificates 52, GET endpointslices 41, LIST configmaps 36, GET /openapi/v3 36 |
 
-The apiserver rows count every client on the cluster, not only the operator. In the idle window the controller made no DELETE request, so any DELETE row is another component's work, and `PUT leases` includes their lease renewals too. The harness waits for the churn channels to read `NoRecentTraffic` before it opens the idle window (50 s in this run), so the window holds no one-time `PUT agentchannels/status` writes: the controller's 91 PUTs are Lease renewals, one every 2 s.
+The apiserver rows count every client on the cluster, not only the operator. In the idle window the controller made no DELETE request, so any DELETE row is another component's work, and `PUT leases` includes their lease renewals too. The harness waits for the churn channels to read `NoRecentTraffic` before it opens the idle window (35 s in this run), so the window holds no one-time `PUT agentchannels/status` writes: the controller's 90 PUTs are Lease renewals, one every 2 s. The gateway's requests at idle are its budget exchange: each of the two replicas lists the spend ConfigMaps once every 10 s, which accounts for the 36 `LIST configmaps` rows ([The budget counter exchange](../gateways/llm/budgets-and-rate-limits.md#the-budget-counter-exchange)).
 
-The per-agent rates divide every write the component made by the fleet size, including writes that do not scale with agents (the controller leader renews its Lease every 2 s, which is about 90 of the controller's 91 PUTs in the idle window and about 150 of its 557 in the hold, and the gateway's budget exchange is per provider per replica), so a small fleet shows a higher per-agent figure than a large one. Per agent, the gateway's hold traffic is one ConfigMap create per async message, which the design specifies. The controller's is `PlatformConnected` status writes on channels: 408 in this hold, about one per channel, and 5,360 over the hour of the soak. The condition message carries the latest attempt's error text, so each change of it is a write, not only each final failure.
+The per-agent rates divide every write the component made by the fleet size, including writes that do not scale with agents (the controller leader renews its Lease every 2 s, which is the controller's 90 PUTs in the idle window and about 115 of its 516 in the hold, and the gateway's budget exchange costs one list per replica per tick whatever the fleet size), so a small fleet shows a higher per-agent figure than a large one. Per agent, the gateway's hold traffic is one ConfigMap create per async message, which the design specifies. The controller's is `PlatformConnected` status writes on channels: 400 in this hold, one per channel, and 5,360 over the hour of the soak. The condition message carries the latest attempt's error text, so each change of it is a write, not only each final failure.
 
 ### Restart under load
 
@@ -138,17 +138,17 @@ A rolling restart of each component with the ramp fleet of 400 agents up:
 
 | Measure | Value |
 |---|---|
-| Controller rollout with 400 agents up | 16 s to both replicas Ready; first reconcile of the new leader at 16 s |
-| Gateway rollout under a 60 s token-tier leg | 12 s; 19 of 398479 requests failed |
+| Controller rollout with 400 agents up | 21 s to both replicas Ready; first reconcile of the new leader at 21 s |
+| Gateway rollout under a 60 s token-tier leg | 18 s; 2 of 360043 requests failed |
 
-The first reconcile of the new leader is what the fleet waits for. Its 16 s divides into two parts:
+The first reconcile of the new leader is what the fleet waits for. Its 21 s divides into two parts:
 
-1. **About 16 s of rollout.** The old leader is the last old Pod to exit, and the rollout finishes when it does.
-2. **Under 1 s of handoff and first reconcile after it.** The old leader releases the Lease as it shuts down, so the new Pod acquires it on its next retry (2 s) instead of waiting out the Lease duration, 15 s by default. The harness starts polling the reconcile counter when the rollout finishes, and its first poll, 0.3 s later, already saw a reconcile, so it cannot say how much earlier the first reconcile happened.
+1. **About 21 s of rollout.** The old leader is the last old Pod to exit, and the rollout finishes when it does.
+2. **Under 1 s of handoff and first reconcile after it.** The old leader releases the Lease as it shuts down, so the new Pod acquires it on its next retry (2 s) instead of waiting out the Lease duration, 15 s by default. The harness starts polling the reconcile counter when the rollout finishes, and its first poll, 0.2 s later, already saw a reconcile, so it cannot say how much earlier the first reconcile happened.
 
 ### Fleet teardown
 
-Deleting all 400 agents and their channels: 400 agents gone in 58 s.
+Deleting all 400 agents and their channels: 400 agents gone in 57 s.
 
 ### Hibernation churn
 
@@ -156,14 +156,14 @@ A persistence-enabled fleet of 100 with a 10 s idle timer, one message per agent
 
 | Measure | Value |
 |---|---|
-| Fleet up | all 100 in 187 s; time-to-Ready p50 95 s, p95 176 s |
-| First hibernation | Ready to Hibernated p50 16 s, p95 17 s; all hibernated 15 s after the last came up. The floor is activity data that can be up to 15 s old, not the 10 s idle timer |
+| Fleet up | all 100 in 190 s; time-to-Ready p50 100 s, p95 179 s |
+| First hibernation | Ready to Hibernated p50 16 s, p95 18 s; all hibernated 15 s after the last came up. The floor is activity data that can be up to 15 s old, not the 10 s idle timer |
 | Messages | 667 sent at 1.11 per second, delivered 668, 668 callbacks |
 | Wakes | 667 (by result ready 667); 667 hibernations followed |
-| Wake latency | p50 1.9 s, p95 4.6 s |
+| Wake latency | p50 3.7 s, p95 4.9 s; every wake within the 5 s bucket |
 | Teardown | 100 agents and their Pods gone in 10 s; PVC deletion is not timed |
 
-Wake latency is the Pod's start on this machine plus the NetworkPolicy programming lag described under [What a real cluster changes](#what-a-real-cluster-changes); the breakdown is what transfers, not the value.
+Wake latency runs from the gateway's wake request until it can connect to the agent. It is made of the Pod's start on this machine, the startup probe that makes a listening agent Ready within about a second ([Injected environment and probes](../controller/reconcilers/agent.md#injected-environment-and-probes)), and the gateway's connect polling, every 250 ms for the first 5 s and every 2 s after ([Waiting for a Pod that is not reachable yet](../gateways/user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)). The NetworkPolicy programming lag described under [What a real cluster changes](#what-a-real-cluster-changes) adds to it when it occurs. The breakdown is what transfers, not the value.
 
 ### Concurrent tasks
 
@@ -172,12 +172,12 @@ Wake latency is the Pod's start on this machine plus the NetworkPolicy programmi
 | Measure | Value |
 |---|---|
 | Outcome | 200 Succeeded, 0 retries |
-| Makespan | 64 s for the batch, 188 tasks per minute |
-| Creation to start | p50 41 s, p95 45 s |
-| Start to completion | p50 13 s, p95 16 s |
-| Teardown | 200 tasks gone in 19 s |
+| Makespan | 77 s for the batch, 156 tasks per minute |
+| Creation to start | p50 55 s, p95 59 s |
+| Start to completion | p50 14 s, p95 26 s |
+| Teardown | 200 tasks gone in 21 s |
 
-A task waits longer to start (41 s at p50) than it runs (13 s at p50), so the batch's pace is set by provisioning, not by the task.
+A task waits longer to start (55 s at p50) than it runs (14 s at p50), so the batch's pace is set by provisioning, not by the task.
 
 ### Soak
 
@@ -201,9 +201,9 @@ Three legs of 60 s at 32 concurrent callers against an immediate tool server. Th
 
 | Leg | rps | Client p50 / p95 / p99 (ms) | Broker p50 / p95 / p99 (ms) | Client 200 / broker ok | Gateway CPU per request (ms) | Gateway peak |
 |---|---|---|---|---|---|---|
-| Token tier, 2026-07-28 | 5493.6 | 4.7 / 13.8 / 21.2 | 2.8 / 8.1 / 17.4 | 329640 / 329641 | 0.452 | 2836 mCPU, 63 MiB |
-| mTLS, 2026-07-28 | 8250.4 | 3.3 / 8.4 / 12.0 | 2.6 / 5.6 / 9.4 | 495050 / 495051 | 0.453 | 3763 mCPU, 70 MiB |
-| mTLS, legacy session | 8326.7 | 3.2 / 8.9 / 13.0 | 2.7 / 6.2 / 9.8 | 499634 / 499635 | 0.430 | 3717 mCPU, 68 MiB |
+| Token tier, 2026-07-28 | 4610.5 | 5.2 / 17.8 / 27.9 | 3.1 / 10.8 / 23.0 | 276644 / 276645 | 0.512 | 2537 mCPU, 75 MiB |
+| mTLS, 2026-07-28 | 7900.8 | 3.4 / 9.2 / 13.3 | 2.7 / 6.5 / 9.8 | 474084 / 474085 | 0.447 | 3534 mCPU, 79 MiB |
+| mTLS, legacy session | 8058.2 | 3.3 / 9.1 / 13.0 | 2.7 / 6.5 / 9.8 | 483529 / 483530 | 0.443 | 3609 mCPU, 79 MiB |
 
 Every call returned 200, and the mock tool server accepts calls only with the injected credential, so every success carried it. On each leg the broker counts one call more than the client, the warmup call.
 
@@ -213,9 +213,9 @@ Three token-tier legs of 60 s at 32 concurrent callers, each reading the stream 
 
 | Leg | rps | Time to first byte p50 / p95 / p99 (ms) | Time to last byte p50 / p95 / p99 (ms) | Client 200 | Usage missing | Gateway CPU per request (ms) | Gateway peak memory |
 |---|---|---|---|---|---|---|---|
-| OpenAI, immediate upstream | 5441.7 | 3.9 / 11.6 / 17.8 | 4.6 / 13.1 / 19.7 | 326531 | 0 | 0.661 | 72 MiB |
-| Anthropic, immediate upstream | 5378.2 | 4.0 / 11.3 / 17.1 | 4.8 / 12.8 / 19.0 | 322761 | 0 | 0.684 | 71 MiB |
-| OpenAI, 10 ms between events | 735.8 | 0.9 / 1.7 / 2.5 | 43.3 / 44.8 / 45.7 | 44173 | 0 | 1.127 | 69 MiB |
+| OpenAI, immediate upstream | 5981.3 | 3.8 / 9.7 / 14.3 | 4.4 / 11.0 / 15.8 | 358914 | 0 | 0.631 | 84 MiB |
+| Anthropic, immediate upstream | 5628.3 | 3.9 / 10.2 / 14.9 | 4.7 / 11.7 / 16.7 | 337755 | 0 | 0.682 | 86 MiB |
+| OpenAI, 10 ms between events | 735.1 | 0.9 / 1.7 / 2.5 | 43.3 / 44.8 / 45.8 | 44137 | 0 | 1.147 | 82 MiB |
 
 No stream ended without its terminator (no `incomplete` status), and no answer was settled without usage. On the paced leg the p50 time to first byte is 0.9 ms and the p50 time to last byte is 43.3 ms, the gap near 40 ms that the phase description names.
 
@@ -225,31 +225,31 @@ No stream ended without its terminator (no `incomplete` status), and no answer w
 
 | Measure | 20 namespaces | One namespace, default run |
 |---|---|---|
-| Ramp | 400 Ready (target 400); waves of 50 Ready in 12 to 21 s each | 400 Ready (target 500, wave 8 trimmed to 400); waves 0 to 7 Ready in 11 to 40 s each |
-| Host memory per agent | 14.1 MiB | 18.7 MiB |
-| Messages | 1201 at 6.7 per second | 1200 at 6.7 per second |
-| Gateway statuses | delivered 1202 | delivered 1171, delivery_failed 30 |
-| Delivery attempts by outcome | connect 9, ok 1202 | connect 397, ok 1171, timeout 144 |
-| Callbacks | 1202 | 1201 |
-| Delivery time | p50 4 ms, p95 18 ms | p50 9 ms, p95 10000 ms |
+| Ramp | 400 Ready (target 400); waves of 50 Ready in 11 to 17 s each | 400 Ready (target 500, wave 8 trimmed to 400); waves 0 to 7 Ready in 10 to 20 s each |
+| Host memory per agent | 13.5 MiB | 18.2 MiB |
+| Messages | 1201 at 6.7 per second | 1201 at 6.7 per second |
+| Gateway statuses | delivered 1202 | delivered 1202 |
+| Delivery attempts by outcome | connect 25, ok 1202 | connect 41, ok 1202, timeout 12 |
+| Callbacks | 1202 | 1202 |
+| Delivery time | p50 4 ms, p95 1292 ms | p50 4 ms, p95 5346 ms |
 | Fleet during the hold | 400 Ready before, 400 after, 0 restarts, 0 flaps | 400 Ready before, 400 after, 0 restarts, 0 flaps |
-| Control plane over the hold | 217 s: controller 2.8 req/s, 0.35 writes per agent per minute; gateway 9.6 req/s, 1.01 writes per agent per minute | 297 s: controller 2.2 req/s, 0.28 writes per agent per minute; gateway 7.7 req/s, 0.85 writes per agent per minute |
-| Largest apiserver rows | POST configmaps 1202, GET configmaps 528, PUT agentchannels/status 400, PUT leases 329, APPLY configmaps 264, GET leases 66 | POST configmaps 1201, GET configmaps 600, APPLY configmaps 480, PUT leases 455, PUT agentchannels/status 408, GET leases 93 |
-| Teardown | 400 agents gone in 61 s | 400 agents gone in 58 s |
+| Control plane over the hold | 217 s: controller 2.7 req/s, 0.35 writes per agent per minute; gateway 6.2 req/s, 0.83 writes per agent per minute | 232 s: controller 2.6 req/s, 0.33 writes per agent per minute; gateway 5.4 req/s, 0.78 writes per agent per minute |
+| Largest apiserver rows | POST configmaps 1202, PUT agentchannels/status 400, PUT leases 331, GET leases 67, LIST configmaps 44, GET /openapi/v3 43 | POST configmaps 1202, PUT agentchannels/status 400, PUT leases 354, DELETE endpoints 86, GET leases 72, GET endpointslices 69 |
+| Teardown | 400 agents gone in 68 s | 400 agents gone in 57 s |
 
-The 20-namespace hold failed none of its 1,201 messages and the one-namespace hold failed 30 of 1,201. Failed delivery attempts: 9 in the 20-namespace hold (all connects) and 541 in the one-namespace hold (397 connects and 144 timeouts). A message fails after four attempts, so a retry recovered most of them. Both holds fall inside the spread between repeated 20-namespace runs in the table below (0 to 146 failed messages), so these holds do not show failures depending on the namespace count. The controller's request and write rates differ between the holds because their windows differ, not because of the namespace count: each made about one `PUT agentchannels/status` per channel (400 and 408), and the 297 s window spreads those writes and the Lease renewals over more minutes than the 217 s window.
+Neither hold failed a message. Failed delivery attempts: 25 in the 20-namespace hold (all connects) and 53 in the one-namespace hold (41 connects and 12 timeouts). A message fails after four attempts, so a retry recovered every one of them. Both holds fall inside the spread between repeated 20-namespace runs in the table below (0 to 146 failed messages), so these holds do not show failures depending on the namespace count. The controller's request and write rates differ between the holds because their windows differ, not because of the namespace count: each made one `PUT agentchannels/status` per channel (400), and the 232 s window spreads those writes and the Lease renewals over more minutes than the 217 s window.
 
 Three runs of `-phases namespaces` on the default perf cluster (October 8, 2026; product code `084f2ea` for the first, `e36cbf8` for the other two) and one on a cluster created with `CNI=cilium make perf-up`, which replaces flannel and k3s's NetworkPolicy controller with Cilium, compare the CNIs. The October 8 runs and the Cilium run were measured on the 16-CPU WSL2 VM, so their timings and rates do not compare with the baseline run's. The baseline run's row is there for its failure counts. A failed attempt is a delivery attempt whose outcome is not `ok`:
 
 | Run | Host | Cluster CNI | Failed messages | Failed delivery attempts |
 |---|---|---|---|---|
-| October 20 baseline run, above | dedicated VM | flannel and kube-router | 0 | 9 (connect 9) |
+| October 21 baseline run, above | dedicated VM | flannel and kube-router | 0 | 25 (connect 25) |
 | October 8, first run | WSL2 VM | flannel and kube-router | 146 | 782 (connect 718, timeout 64) |
 | October 8, second run | WSL2 VM | flannel and kube-router | 35 | 303 (connect 245, timeout 58) |
 | October 8, third run | WSL2 VM | flannel and kube-router | 0 | 45 (connect 20, timeout 25), each recovered by a retry |
 | Cilium run | WSL2 VM | Cilium | 0 | 0 (1201 messages, 1202 delivery attempts, each delivered on the first attempt) |
 
-Every run on k3s's embedded NetworkPolicy enforcement (kube-router) had failed attempts, 9 to 782 of them, and the failed-message count ranged from 0 to 146. The Cilium run had none. In the first October 8 run, the 146 failed messages fell on 120 of the 400 agents, spread over all 20 namespaces, so no one namespace explains them. Nothing in Kaalm differs per namespace: every agent's NetworkPolicy is the same in every namespace (ingress on the agent port from the gateway Pods in `kaalm-system`).
+Every run on k3s's embedded NetworkPolicy enforcement (kube-router) had failed attempts, 25 to 782 of them, and the failed-message count ranged from 0 to 146. The Cilium run had none. In the first October 8 run, the 146 failed messages fell on 120 of the 400 agents, spread over all 20 namespaces, so no one namespace explains them. Nothing in Kaalm differs per namespace: every agent's NetworkPolicy is the same in every namespace (ingress on the agent port from the gateway Pods in `kaalm-system`).
 
 In the October 8 run that labeled the gateway logs by replica, the failures followed the gateway replica's node: every failed attempt went from the gateway replica on the k3d server node (`k3d-kaalm-perf-server-0`) to an agent Pod on that same node. The other replica, on an agent node, reached the server node's agents without a failure, and the server-node replica reached the agents on the other two nodes without a failure. The agents were spread evenly over the three nodes, and the failing ones were 88 to 574 s old. kube-router's ipsets on the server node held both gateway Pod IPs, so the allow rules existed.
 
@@ -270,29 +270,29 @@ The result files of the October 8 runs and the Cilium run are not committed, so 
 
 | Measure | Value |
 |---|---|
-| `agentclass` reconciles | 150; p50 9.2 ms, p95 89.0 ms, p99 97.8 ms |
-| `modelprovider` reconciles | 304; p50 3.4 ms, p95 77.0 ms, p99 95.4 ms |
-| Control plane over 181 s, no agents | controller 0.9 req/s (GET 74, PUT 90); gateway 13.6 req/s (GET 2240, PATCH 216) |
-| Largest apiserver rows over 181 s | GET configmaps 2232, PUT leases 276, APPLY configmaps 216, GET leases 57, GET /openapi/v3 36, GET endpointslices 19 |
-| Peak usage, setup plus audit window | controller 31 mCPU, 85 MiB; gateway 818 mCPU, 67 MiB |
+| `agentclass` reconciles | 150; p50 9.0 ms, p95 88.3 ms, p99 97.7 ms |
+| `modelprovider` reconciles | 381; p50 3.2 ms, p95 73.5 ms, p99 94.7 ms |
+| Control plane over 181 s, no agents | controller 0.9 req/s (GET 65, PUT 90); gateway 0.3 req/s (GET 46) |
+| Largest apiserver rows over 181 s | PUT leases 275, GET leases 55, LIST configmaps 38, GET /openapi/v3 36, GET endpointslices 18, GET endpoints 18 |
+| Peak usage, setup plus audit window | controller 30 mCPU, 71 MiB; gateway 21 mCPU, 81 MiB |
 
 The two gateway legs run with the 50 providers in place, 60 s each at 32 callers against an immediate upstream:
 
 | Leg | rps | Client p50 / p95 / p99 (ms) | Gateway-side p50 / p95 / p99 (ms) | Client 200 | Gateway CPU per request (ms) | Gateway peak |
 |---|---|---|---|---|---|---|
-| Token tier, soft budget | 10133.5 | 2.7 / 6.8 / 9.8 | 2.6 / 4.9 / 8.3 | 608055 | 0.389 | 3976 mCPU, 65 MiB |
-| mTLS, soft budget | 10870.4 | 2.5 / 6.3 / 9.2 | 2.6 / 4.9 / 8.1 | 652253 | 0.375 | 4102 mCPU, 66 MiB |
+| Token tier, soft budget | 9388.1 | 2.9 / 7.3 / 10.6 | 2.6 / 4.9 / 8.7 | 563381 | 0.412 | 3914 mCPU, 80 MiB |
+| mTLS, soft budget | 10932.6 | 2.5 / 6.4 / 9.3 | 2.6 / 4.9 / 8.2 | 655989 | 0.367 | 4084 mCPU, 79 MiB |
 
-The same two legs in the [gateway table](#gateway), from the default run, served 9536 and 10632 requests per second with a client p99 of 11.4 and 10.0 ms and 0.388 and 0.364 ms of gateway CPU per request.
+The same two legs in the [gateway table](#gateway), from the default run, served 9962 and 10615 requests per second with a client p99 of 10.0 and 9.6 ms and 0.384 and 0.368 ms of gateway CPU per request.
 
 ## What a real cluster changes
 
 The baseline is one dedicated VM. The numbers that transfer are the per-unit ones (memory per running agent, the gateway's per-request cost, the wake latency breakdown); the absolute fleet ceiling does not.
 
 - **Provider latency.** Real providers answer in hundreds of milliseconds to seconds, so the gateway's own cost, which the immediate legs isolate, is a small fraction of every request. Compare against the 50 ms leg.
-- **Memory and nodes.** The ramp stops at the first limit of one machine: in the baseline run, one agent Pod in CrashLoopBackOff at 400 Ready agents, with 4288 MiB of host memory still available. On a real cluster the fleet ceiling depends on node capacity divided by the per-agent figure, plus whatever the agent image itself needs beyond the starter, and other limits can come first, as the baseline run shows.
+- **Memory and nodes.** The ramp stops at the first limit of one machine: in the baseline run, host memory fell to 3007 MiB, below the 3072 MiB floor, with 441 agents Ready. On a real cluster the fleet ceiling depends on node capacity divided by the per-agent figure, plus whatever the agent image itself needs beyond the starter, and other limits can come first, such as the crash-looping Pods, node memory pressure, and scheduler refusals that also stop the ramp.
 - **Certificate issuance.** Every agent waits for its cert-manager Certificate to be Ready before its Pod is created, so starting a fleet is paced by cert-manager's issuance rate. A production cert-manager can be tuned and scaled; the baseline runs one replica with the raised API client limit listed in [the baseline environment](#the-baseline-environment).
-- **The CNI.** k3s enforces NetworkPolicy with its embedded kube-router policy controller, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. It also drops some same-node traffic: every kube-router run of the namespaces phase had failed delivery attempts, two of the four had failed messages, and the Cilium run had none ([Many namespaces](#many-namespaces)). Cilium and Calico program policies differently and typically faster.
+- **The CNI.** k3s enforces NetworkPolicy with its embedded kube-router policy controller, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which can land inside wake latency when it occurs. It also drops some same-node traffic: every kube-router run of the namespaces phase had failed delivery attempts, two of the four had failed messages, and the Cilium run had none ([Many namespaces](#many-namespaces)). Cilium and Calico program policies differently and typically faster.
 - **Storage.** The local-path provisioner backs the churn fleet's PVCs and provisions each volume through a helper Pod. A CSI driver changes both the provisioning latency and the hibernate-and-wake cost.
 - **The apiserver.** k3s runs a single embedded apiserver on SQLite-backed storage. The controller's reconcile latency and the hold phase's callback records are apiserver-bound at scale; a multi-member etcd behaves differently under the same write rate.
 - **The knobs.** `controller.maxConcurrentReconciles` (default 4), the two replica counts, and the API client rate limits are the chart values that change throughput ([Configuration reference](deployment.md#configuration-reference)). The rate limits are per replica: `controller.client.qps` and `controller.client.burst` default to controller-runtime's 20 requests per second with a burst of 30, and `gateway.client.qps` and `gateway.client.burst` default to 100 per second with a burst of 200.

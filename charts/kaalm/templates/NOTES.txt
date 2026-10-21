@@ -13,9 +13,12 @@ The chart installs:
 {{- if and .Values.standardAgentClass.enabled (not .Values.standardAgentClass.allowedProviders) }}
 
 The "standard" AgentClass allows no ModelProvider, so an Agent that names one
-goes Degraded with ClassConstraintViolation. Create a ModelProvider (the
-repository's config/samples/ has a manifest per kind), then name it:
-  helm upgrade {{ .Release.Name }} <the chart you installed> -n {{ .Release.Namespace }} \
+goes Degraded with ClassConstraintViolation. Create a ModelProvider (see
+"Providing LLM access":
+https://github.com/win07xp/kaalm/blob/v{{ .Chart.Version }}/guide/src/platform/llm-access.md),
+then name it:
+  helm upgrade {{ .Release.Name }} oci://ghcr.io/win07xp/charts/kaalm --version {{ .Chart.Version }} \
+    -n {{ .Release.Namespace }} --reuse-values \
     --set standardAgentClass.allowedProviders={YOUR-PROVIDER-NAME}
 {{- end }}
 
@@ -36,5 +39,9 @@ If they never become Ready, verify the kaalm-ca-issuer ClusterIssuer is
 Ready and that certManager.clusterResourceNamespace matches your cert-manager
 and trust-manager configuration.
 
-CRD upgrades are never applied by `helm upgrade`. Before upgrading, run:
-  kubectl apply --server-side --force-conflicts -f charts/kaalm/crds/
+CRD upgrades are never applied by `helm upgrade`. Before upgrading, pull the
+chart version you are upgrading to and apply its crds/ directory:
+  helm pull oci://ghcr.io/win07xp/charts/kaalm --version NEW_VERSION --untar
+  kubectl apply --server-side --force-conflicts -f kaalm/crds/
+The upgrading page has the full steps:
+https://github.com/win07xp/kaalm/blob/v{{ .Chart.Version }}/guide/src/getting-started/upgrading.md

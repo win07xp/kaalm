@@ -18,8 +18,8 @@ doesn't depend on your k3d release.
 That takes about 15 seconds and ends with:
 
 ```
-INFO[0015] Cluster 'kaalm-tutorial' created successfully!
-INFO[0015] You can now use it like this:
+INFO[0016] Cluster 'kaalm-tutorial' created successfully!
+INFO[0016] You can now use it like this:
 kubectl cluster-info
 ```
 
@@ -79,13 +79,13 @@ leaving credentials behind when you delete an agent.
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 2.0.0 \
+  --version 2.0.1 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager \
   --wait
 ```
 
-`2.0.0` is the release this book was walked against. Newer releases are on the
+`2.0.1` is the release this book was walked against. Newer releases are on the
 [releases page](https://github.com/win07xp/kaalm/releases) and install the same
 way.
 
@@ -99,10 +99,10 @@ kubectl get pods -n kaalm-system
 
 ```
 NAME                                READY   STATUS    RESTARTS   AGE
-kaalm-controller-597cff96f9-g7rzh   1/1     Running   0          19s
-kaalm-controller-597cff96f9-hl6pk   1/1     Running   0          19s
-kaalm-gateway-585c579b8b-b9mpt      1/1     Running   0          19s
-kaalm-gateway-585c579b8b-qqdrl      1/1     Running   0          19s
+kaalm-controller-74ffd49bb4-nldn6   1/1     Running   0          18s
+kaalm-controller-74ffd49bb4-zqqrc   1/1     Running   0          18s
+kaalm-gateway-9dfb9df9f-6vsbc       1/1     Running   0          18s
+kaalm-gateway-9dfb9df9f-xr9jl       1/1     Running   0          18s
 ```
 
 > **A pod** is one running instance of your program, the smallest thing

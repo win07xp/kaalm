@@ -32,7 +32,7 @@ kubectl get agents
 
 ```
 NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   3m25s
+helper   Hibernated   False   tutorial   2m31s
 ```
 
 And so does its storage:
@@ -43,7 +43,7 @@ kubectl get pvc
 
 ```
 NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-helper-memory   Bound    pvc-531f991d-d41d-46fb-a5ca-c3eebeb40344   1Gi        RWO            local-path     <unset>                 3m25s
+helper-memory   Bound    pvc-cb87ed98-0038-42db-b92f-f2b6d5ccdec0   1Gi        RWO            local-path     <unset>                 2m30s
 ```
 
 That is hibernation in one screen: the expensive part (a running program) is
@@ -73,7 +73,7 @@ different program, in a different container, started seconds ago because your
 message arrived. It picked up the count from the volume Kaalm reattached, and
 carried on.
 
-On the walk that produced this book, the reply took about 12 seconds to come
+On the walk that produced this book, the reply took about 3 seconds to come
 back. Your caller waited; nothing was lost; the agent answered. While it
 waited, the agent's phase was `Resuming` with `READY` False, and it turned
 `Running` when the new container passed its readiness check.
@@ -93,7 +93,7 @@ kubectl get agents
 
 ```
 NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   3m44s
+helper   Running   True    tutorial   2m41s
 ```
 
 Awake again.
@@ -101,7 +101,7 @@ Awake again.
 ## Watch it fall asleep again
 
 The timers are 30 seconds each, set back in the class. On the walk, the agent
-went idle about 43 seconds after the reply and was asleep about 75 seconds
+went idle about 44 seconds after the reply and was asleep about 75 seconds
 after it. Send nothing more and watch:
 
 ```bash
@@ -115,11 +115,11 @@ in a second or two, and settles at `Hibernated`. Press Ctrl-C when it settles:
 
 ```
 NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   3m49s
-helper   Idle      True    tutorial   4m25s
-helper   Hibernating   True    tutorial   4m55s
-helper   Hibernating   True    tutorial   4m55s
-helper   Hibernated    False   tutorial   4m57s
+helper   Running   True    tutorial   2m41s
+helper   Idle      True    tutorial   3m25s
+helper   Hibernating   True    tutorial   3m55s
+helper   Hibernating   True    tutorial   3m55s
+helper   Hibernated    False   tutorial   3m56s
 ```
 
 The columns shift on the later rows because `-w` prints each change as it

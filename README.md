@@ -49,7 +49,7 @@ NetworkPolicy. With those in place:
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 2.0.0 \
+  --version 2.0.1 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager \
   --wait

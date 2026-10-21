@@ -43,7 +43,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-python:2.0.0
+  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1
   persistence:
     enabled: true
   lifecycle:
@@ -92,7 +92,7 @@ kubectl get agents
 
 ```
 NAME     PHASE          READY   CLASS      AGE
-helper   Provisioning   False   tutorial   2s
+helper   Provisioning   False   tutorial   1s
 ```
 
 The phase is blank for an instant after you apply, then `Provisioning` while
@@ -123,7 +123,7 @@ kubectl get pvc
 
 ```
 NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-helper-memory   Bound    pvc-531f991d-d41d-46fb-a5ca-c3eebeb40344   1Gi        RWO            local-path     <unset>                 17s
+helper-memory   Bound    pvc-cb87ed98-0038-42db-b92f-f2b6d5ccdec0   1Gi        RWO            local-path     <unset>                 30s
 ```
 
 `Bound` means real disk is attached and ready. Note the name: `helper-memory`,
