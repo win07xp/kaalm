@@ -1257,8 +1257,8 @@ func (r *AgentReconciler) convergePod(
 }
 
 // createAgentPod creates the Agent's Pod when it has none. When the Agent
-// lost a Pod that had been Ready, it first marks and persists the
-// involuntary replacement (markDisrupted). It reports whether the API server
+// lost a Pod and has PodUpToDate set (see markDisrupted), it first marks and
+// persists the involuntary replacement. It reports whether the API server
 // rejected the create; any other create error is returned.
 func (r *AgentReconciler) createAgentPod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, tlsSecret string,
@@ -1305,9 +1305,12 @@ func floorsActivityAtReady(reason string) bool {
 // only after delivery, so without the marker a long-silent Agent would go
 // Idle, or hibernate, before that message lands; the marker gives the new Pod
 // the activity floor at Ready. It lives in status so it survives a
-// controller restart in the middle of the replacement. It is set only once a
-// Pod has been Ready since the Agent was created or woken (PodUpToDate
-// present), so first provisioning keeps its idle timing. A drift replacement
+// controller restart in the middle of the replacement. It is set only when
+// PodUpToDate is present, which means a Pod has been Ready since the Agent
+// was created or woken, or a drift was seen (ReplacementPending, or
+// CertificateNotReady while a Certificate holds the Pod). First provisioning
+// without drift keeps its idle timing; a first Pod that drifted and was then
+// lost gets the floor, as a Replacing first Pod already does. A drift replacement
 // keeps Replacing and its slot; a pending drift stops waiting, because the
 // new Pod is built from the current spec.
 func (r *AgentReconciler) markDisrupted(agent *kaalmv1beta1.Agent, msg string) bool {
