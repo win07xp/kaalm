@@ -4,14 +4,18 @@ name: Release on merge
 # named release/vX.Y.Z (or release/vX.Y.Z-rc.N for a pre-release) and adds
 # the notes as releases/vX.Y.Z.md. The version comes from the branch name.
 #
-# The tag job creates the version tag at the commit the merge put on main,
-# then the publish jobs (release-publish.yml) and the upgrade e2e run in this
+# The tag job first checks that the upgrade e2e (upgrade.yml) passed on the
+# release PR's head commit, then creates the version tag at the commit the
+# merge put on main, then the publish jobs (release-publish.yml) run in this
 # same run: a tag pushed with GITHUB_TOKEN starts no other workflow, so
-# release.yml does not run for it and nothing publishes twice.
+# release.yml does not run for it and nothing publishes twice. The upgrade
+# e2e does not run again after the merge.
 #
 # Only a branch in this repository releases: a run for a fork's PR gets no
-# write token. A rerun accepts a tag that already points at the merge
-# commit, and fails when the tag points anywhere else. See RELEASING.md.
+# write token. A rerun checks the upgrade e2e again, so once it passes on
+# the PR, rerunning the failed jobs releases. A rerun accepts a tag that
+# already points at the merge commit, and fails when the tag points anywhere
+# else. See RELEASING.md.
 
 on:
   pull_request:
@@ -30,6 +34,7 @@ jobs:
     runs-on: ubuntu-26.04
     permissions:
       contents: write # push the version tag
+      checks: read # read the release PR's check runs
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ steps.version.outputs.sha }}
@@ -61,6 +66,25 @@ jobs:
             echo "::error::releases/${VERSION}.md is missing or empty; the release PR adds the release notes"
             exit 1
           fi
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The upgrade e2e's check run is on the PR's head commit. The newest
+      # GitHub Actions run with exactly this name must have passed; a
+      # pending, failed, skipped, or missing run fails this job, so nothing
+      # is tagged or published. It is not a required status check because
+      # upgrade.yml is path-filtered, and a required check would block every
+      # PR it skips.
+      - name: Check that the upgrade e2e passed on the release PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECK_NAME: e2e-upgrade (from the latest release)
+          GOWORK: "off"
+        run: go run ./hack/checkrun
 
       # The last ls-remote line is the peeled ^{} entry when the tag is
       # annotated, so it names the commit either way.
@@ -99,12 +123,3 @@ jobs:
     with:
       version: ${{ needs.tag.outputs.version }}
       sha: ${{ needs.tag.outputs.sha }}
-
-  # Runs next to publish; a failure here does not stop the release.
-  upgrade:
-    needs: tag
-    permissions:
-      contents: read
-    uses: ./.github/workflows/upgrade.yml
-    with:
-      ref: ${{ needs.tag.outputs.sha }}
