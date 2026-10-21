@@ -8,23 +8,35 @@ details. Build with `make books` (which runs `make docs-check` first);
 ## Status
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
-recently for 2.0.1: pass one against locally built 2.0.1 artifacts on
-2026-10-21 walked every chapter clean, and every command and block of output
-now comes from that run, in order, on a fresh k3d cluster. The only real
-change was the wake time in the sleep chapter (about 3 seconds, was about 12),
-and the replacement in "Make it yours" delivers the message sent while it
-runs. A confirmation walk the same day, against the same artifacts, ran every
-chapter clean on a fresh k3d cluster (wake 3.06 seconds); its one catch was
-the "Make it yours" state after the patch, where a reader who waits a few
-seconds sees `Running`, now covered. The 2.0.0 walks caught the channel Secret missing the
+recently for 2.0.1.
+
+Pass one for 2.0.1 (2026-10-21, against locally built artifacts) walked every
+chapter clean on a fresh k3d cluster, and every command and block of output
+now comes from that run, in order. The only real change was the wake time in
+the sleep chapter (about 3 seconds, was about 12), and the replacement in
+"Make it yours" delivers the message sent while it runs. A second walk against
+the same artifacts caught the "Make it yours" state after the patch, where a
+reader who waits a few seconds sees `Running`, now covered.
+
+Pass two for 2.0.1 (2026-10-21, after the tag) walked every chapter clean on a
+fresh k3d cluster, with the chart from the OCI registry and every image pulled
+from ghcr.io. The wake took 3.05 seconds. One difference was "Giving it a
+job": the task reached `Succeeded` at 14 seconds, where the page shows about
+3, because the cluster pulled the Go image for the first time. The page fix is
+tracked in the v2.1.0 polish list.
+
+The 2.0.0 walks caught the channel Secret missing the
 `kaalm.io/channel-credential` label (every request returned 401), the provider
 Secret missing its `kaalm.io/provider-credential` label and
 `kaalm.io/provider-hosts` annotation, the `REPLACING` column on
 `kubectl get agentclasses`, and the sleep chapter's starting state (the agent
-is already hibernated after "Giving it a job"). A re-walk is two passes:
-pre-release against locally built artifacts, then confirmation against the
-published ones after the tag.
-The walk history (what each pass caught) is in issues #77, #99, #115,
+is already hibernated after "Giving it a job").
+
+A re-walk is two passes. Pass one runs before the release, against artifacts
+built from the release commit. Pass two runs after the tag, against the
+published artifacts. `hack/learn-walk.sh` builds, imports, and logs for both
+passes, and [RELEASING.md](../RELEASING.md) lists where each pass falls in the
+release. The walk history (what each pass caught) is in issues #77, #99, #115,
 #130, and #143.
 
 The install is pinned to `--version 2.0.1` on purpose: the pin is what makes
