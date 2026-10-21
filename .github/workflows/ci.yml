@@ -166,7 +166,7 @@ jobs:
         run: |
           make chart-sync
           helm lint charts/kaalm
-          make chart-package # the release workflow packages the same way; fail here, not at a tag
+          make chart-package # the release workflow packages the same way; fail here, not when the release PR merges
 
   books:
     runs-on: ubuntu-26.04
