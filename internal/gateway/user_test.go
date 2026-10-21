@@ -1595,8 +1595,8 @@ func TestWakeAndDeliver_PendingPodWaitIsBounded(t *testing.T) {
 	if errType != errDeliveryFailed || err == nil || !strings.Contains(err.Error(), "within wakeTimeout") {
 		t.Fatalf("wakeAndDeliver = %q, %v; want %q naming wakeTimeout", errType, err, errDeliveryFailed)
 	}
-	// The last poll can overrun wakeTimeout by one poll interval.
-	if d := time.Since(start); d > wakePollInterval+time.Second {
+	// The wait ends at the wakeTimeout plus at most one connect in flight.
+	if d := time.Since(start); d > 80*time.Millisecond+h.server.Config.AgentConnectTimeout+time.Second {
 		t.Errorf("the wait took %s, want it bounded by the 80ms wakeTimeout", d)
 	}
 	if reason, ok := healthReason(h, "/channels/team-a/support"); ok || reason != healthReasonDispatchFailed {

@@ -224,11 +224,11 @@ func (g *GatewayActivityClient) ForgetUnreachable() {
 // drops the record when it sees the Agent deleted, but a delivery or LLM
 // request in flight at that moment can record again after the drop. A record
 // older than the Agent then belongs to a deleted Agent of the same name, and
-// reading it would idle the new Agent on its first Ready pass. Dropping the newest value is the same as dropping
-// each old one, because the newest is the only one returned. creationTimestamp
-// has one-second resolution, so a record from the creation's own second is
-// kept; the old Pod's shutdown and the new Pod's start take longer than that.
-// A zero created cuts nothing.
+// reading it would idle the new Agent on its first Ready pass. Dropping the
+// newest value is the same as dropping each old one, because the newest is
+// the only one returned. creationTimestamp has one-second resolution, so a
+// record from the creation's own second is kept; the old Pod's shutdown and
+// the new Pod's start take longer than that. A zero created cuts nothing.
 func mergedActivity(reachable []ReplicaActivity, agentName, source string, created time.Time) *time.Time {
 	var traffic, heartbeat *time.Time
 	newer := func(current, candidate *time.Time) *time.Time {
