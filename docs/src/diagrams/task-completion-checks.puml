@@ -40,6 +40,11 @@ partition "handler: admission" {
 }
 
 partition "handler: validation and write" {
+  if (body within 1 MiB?) then (no)
+    :**413** request_too_large;
+    kill
+  else (yes)
+  endif
   if (body and artifact names valid?) then (no)
     :**400** invalid_request;
     kill

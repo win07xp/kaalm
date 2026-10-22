@@ -104,21 +104,21 @@ The earliest and latest times assume a reachable Agent Service. When the Agent h
 
 The background pipeline of an async webhook message or a platform channel message runs under one wall-clock bound. The gateway sets the bound to the sum of the budgets the run contains, so the bound never cuts a stage short. The wake part uses the same capped `wakeTimeout` as the wake wait. The sum has four parts:
 
-- **Wake.** The activator call, the Agent's effective `wakeTimeout` capped at `gateway.maxWakeTimeout`, and one extra readiness check. This part covers a message's Pod wait, whether or not it needed a wake; a message gets at most one. The activator call is the message's one call, whether it comes before the Pod wait or during it, and a wake during a wait does not extend the wait ([Waiting for a Pod that is not reachable yet](../user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)). The activator call takes up to 20s: two attempts of 10s each. The extra check is `gateway.agentDeliveryConnectTimeout` plus the longest [poll interval](../user/activation-and-activity.md#the-wake-sequence), 2s, because the last check before the timeout can run past it.
+- **Wake.** The activator call, the Agent's effective `wakeTimeout` capped at `gateway.maxWakeTimeout`, and one extra readiness check. This part covers a message's Pod wait, whether or not it needed a wake; a message gets at most one. The activator call is the message's one call, whether it comes before the Pod wait or during it, and a wake during a wait does not extend the wait ([Waiting for a Pod that is not reachable yet](../user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)). The activator call takes up to 20s: two attempts of 10s each. The extra check is `gateway.agentDeliveryConnectTimeout`, because a check that starts shortly before the timeout runs to its connect bound.
 - **Delivery.** One full agent-delivery schedule, with every attempt at `gateway.agentReadTimeout`.
 - **Response.** Full callback schedules, with every attempt at `gateway.callbackReadTimeout`. An async webhook counts two schedules: one for the callback and one for the polling-record `Patch`, which uses the same schedule. A platform channel counts one schedule per platform API request the reply makes: one per chunk, plus one for Discord's switch to a channel message.
 - **Margin.** A fixed 30s for Secret reads and the DNS lookup before each callback attempt.
 
-Under defaults, an async webhook run is bounded at 386s, about 6.5 minutes:
+Under defaults, an async webhook run is bounded at 384s, about 6.4 minutes:
 
 | Part | Default |
 |---|---|
-| Wake | 143s: 20s activator call, 120s `wakeTimeout`, 3s extra readiness check |
+| Wake | 141s: 20s activator call, 120s `wakeTimeout`, 1s extra readiness check |
 | Delivery | 71s |
 | Response | 142s: two callback schedules of 71s |
 | Margin | 30s |
 
-A larger `wakeTimeout` raises the bound by the same amount, up to `gateway.maxWakeTimeout`. Under defaults, an async webhook run is bounded at 1166s, about 19.4 minutes, at most: a 15-minute (900s) wake in place of the 120s one. The cap is what keeps a tenant's `wakeTimeout` from setting how long one message holds the gateway ([The activator](../user/activation-and-activity.md#the-activator)).
+A larger `wakeTimeout` raises the bound by the same amount, up to `gateway.maxWakeTimeout`. Under defaults, an async webhook run is bounded at 1164s, about 19.4 minutes, at most: a 15-minute (900s) wake in place of the 120s one. The cap is what keeps a tenant's `wakeTimeout` from setting how long one message holds the gateway ([The activator](../user/activation-and-activity.md#the-activator)).
 
 ## Response persistence
 

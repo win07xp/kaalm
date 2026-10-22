@@ -29,8 +29,7 @@ const wakePollInterval = 2 * time.Second
 // wakePollFastInterval is the wait between readiness connects for the first
 // wakePollFastWindow of a Pod wait. A woken Pod is usually reachable within a
 // few seconds, so the wait checks often at first and delivers soon after the
-// Pod is Ready. It must not exceed wakePollInterval: backgroundPipelineBound
-// counts wakePollInterval as the last poll's overshoot.
+// Pod is Ready.
 const wakePollFastInterval = 250 * time.Millisecond
 
 // wakePollFastWindow is how long a Pod wait polls every wakePollFastInterval.
@@ -78,8 +77,7 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 // for as long as a tenant sets. It sums:
 //
 //   - the activator call and the capped wakeTimeout, plus one readiness
-//     connect and the longest poll interval, which the last poll can
-//     overrun. This leg
+//     connect, which can be in flight when the deadline passes. This leg
 //     covers the one Pod wait any message gets: a wake, a wait for a Pod
 //     being created or resumed, or a wait after a refused connect, which
 //     takes the place of a retry delay. The activator call is the one call a
@@ -98,7 +96,7 @@ func (s *Server) backgroundPipelineBound(agent *kaalmv1beta1.Agent, responseRequ
 	bound := pipelineMargin +
 		time.Duration(responseRequests)*retryScheduleWorstCase(s.Config.CallbackBackoff, s.callbackReadTimeout())
 	if agent != nil {
-		bound += activatorWorstCase + s.wakeTimeout(agent) + s.Config.AgentConnectTimeout + wakePollInterval +
+		bound += activatorWorstCase + s.wakeTimeout(agent) + s.Config.AgentConnectTimeout +
 			retryScheduleWorstCase(s.Config.DeliveryBackoff, s.Config.AgentReadTimeout)
 	}
 	return bound

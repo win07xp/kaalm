@@ -160,12 +160,8 @@ func (h *readinessHarness) readyz(t *testing.T, cluster, user net.Addr) (int, st
 
 func TestReadyz_ListenerDownFails(t *testing.T) {
 	h := newReadinessHarness(t)
-	dead, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadAddr := dead.Addr()
-	_ = dead.Close() // nothing listens here any more
+	port, _ := holdPort(t) // bound, never listening: a connect is refused
+	deadAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}
 
 	code, body, _ := h.readyz(t, h.ls.main.Addr(), deadAddr)
 	if code != http.StatusServiceUnavailable {

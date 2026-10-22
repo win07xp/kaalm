@@ -493,7 +493,9 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 }
 
 // waitAgentReachable polls the agent Service with TCP connects until it
-// accepts, bounded by the capped wakeTimeout and ctx. It is the one Pod wait
+// accepts, bounded by the capped wakeTimeout and ctx. The poll sleep stops at
+// the deadline, so the wait ends at the capped wakeTimeout, plus at most one
+// connect in flight when the deadline passes. It is the one Pod wait
 // a message gets: after a wake, for a Pod being created or resumed, or after
 // a refused connect. Connect success is the readiness signal.
 //
@@ -539,7 +541,11 @@ func (s *Server) waitAgentReachable(
 				return err
 			}
 		}
-		timer := time.NewTimer(wakePollDelay(time.Since(start)))
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		timer := time.NewTimer(min(wakePollDelay(time.Since(start)), remaining))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

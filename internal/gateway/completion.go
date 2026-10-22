@@ -19,6 +19,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +43,11 @@ const (
 	// the message and artifact VALUES (keys are bounded by ConfigMap rules).
 	maxArtifactBytes      = 4 << 10
 	maxArtifactTotalBytes = 32 << 10
+
+	// maxCompletionBodyBytes caps the whole request body. The mailbox is a
+	// ConfigMap, whose object limit is about 1 MiB, so a larger body could
+	// never be stored; the cap answers 413 like the gateway's other body caps.
+	maxCompletionBodyBytes = 1 << 20
 )
 
 // CompletionMailboxName returns the per-task mailbox ConfigMap name.
@@ -133,8 +139,15 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCompletionBodyBytes))
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, errorBody{
+				Type:    errRequestTooLarge,
+				Message: fmt.Sprintf("request body exceeds %d bytes", maxCompletionBodyBytes)}, 0)
+			return
+		}
 		badRequest(w, "reading request body: "+err.Error())
 		return
 	}

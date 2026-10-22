@@ -313,6 +313,31 @@ func TestTaskComplete_BadRequestsAndPatchFailure(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+func TestTaskComplete_BodyOverCapIs413(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	completions := newFakeCompletions()
+	h.server.Completions = completions
+	seedTask(h, "fix-42", func(task *kaalmv1beta1.AgentTask) { task.Spec.Artifacts = nil })
+	cert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
+
+	// Valid JSON whose message alone is 1 MiB, so the whole body is over the cap.
+	body := `{"status":"success","message":"` + strings.Repeat("x", 1<<20) + `"}`
+	req, _ := http.NewRequest(http.MethodPost, h.url("/v1/task/complete"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.client(&cert).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-cap body = %d (%s), want 413", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), errRequestTooLarge) || !strings.Contains(string(raw), "request body exceeds") {
+		t.Errorf("over-cap body error = %s, want %s and \"request body exceeds\"", raw, errRequestTooLarge)
+	}
+}
+
 func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.server.Completions = newFakeCompletions()

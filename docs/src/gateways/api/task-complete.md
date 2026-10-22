@@ -19,7 +19,7 @@ The gateway writes the pre-existing `{taskName}-completion` ConfigMap in the tas
 
 Every call passes the checks below in order, and every rejection fires before the ConfigMap `Patch` is attempted, so only a `503` means the write itself failed. Checks 1 to 3 are the mTLS profile shared by the agent-report paths, specified under [Per-path client auth enforcement](../listener-tls.md#per-path-client-auth-enforcement) and [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes). Checks 4 to 7 read `spec.completion`, `status.phase`, and `status.currentPodUID` from the gateway's cluster-wide AgentTask watch, so a status change reaches them after an informer lag (see [Race windows](#race-windows)).
 
-![Flowchart of the checks on POST /v1/task/complete in order: client certificate, SAN kind, source IP resolves to a Pod, an AgentTask backs the caller, the condition is agentReported, the phase is not terminal, the Pod UID matches status.currentPodUID, the body and artifact names are valid, the size caps hold, and the Patch succeeds. Each failed check ends in its status code and reason; the Pod UID and Patch checks are marked retryable.](../../diagrams/task-completion-checks.svg)
+![Flowchart of the checks on POST /v1/task/complete in order: client certificate, SAN kind, source IP resolves to a Pod, an AgentTask backs the caller, the condition is agentReported, the phase is not terminal, the Pod UID matches status.currentPodUID, the body is within 1 MiB, the body and artifact names are valid, the size caps hold, and the Patch succeeds. Each failed check ends in its status code and reason; the Pod UID and Patch checks are marked retryable.](../../diagrams/task-completion-checks.svg)
 
 | Order | Check | Rejection | `retryable` |
 |---|---|---|---|
@@ -30,7 +30,7 @@ Every call passes the checks below in order, and every rejection fires before th
 | 5 | `completion.condition` is `agentReported` | `403 access_denied`, `TaskNotAgentReported` | `false` |
 | 6 | `status.phase` is not terminal (`Succeeded`, `Failed`, `TimedOut`) | `403 access_denied`, `TaskAlreadyCompleted` | `false` |
 | 7 | The calling Pod's UID equals `status.currentPodUID` | `409 stale_pod`, `StalePodCompletion` | `true` |
-| 8 | The body parses and the artifact names pass the per-status rule | `400 invalid_request` | `false` |
+| 8 | The body is within 1 MiB, parses, and the artifact names pass the per-status rule | `413 request_too_large` over 1 MiB, otherwise `400 invalid_request` | `false` |
 | 9 | Every artifact value is within 4 KiB and the combined payload within 32 KiB | `413 request_too_large` | `false` |
 | 10 | The ConfigMap `Patch` succeeds | `503 internal_unavailable`, `Retry-After: 1` | `true` |
 
@@ -78,7 +78,7 @@ The gateway reads `spec.artifacts` from its AgentTask watch, so the check runs s
 | `403 Forbidden` | `access_denied` | `false` | One of three reasons, see [403 Forbidden](#403-forbidden) |
 | `405 Method Not Allowed` | `invalid_request` | `false` | The method is not `POST`. The response carries `Allow: POST`. |
 | `409 Conflict` | `stale_pod` | `true` | The calling Pod is not the task's current Pod, see [409 Conflict](#409-conflict) |
-| `413 Payload Too Large` | `request_too_large` | `false` | Per-artifact or combined size cap exceeded |
+| `413 Payload Too Large` | `request_too_large` | `false` | Body over 1 MiB, or per-artifact or combined size cap exceeded |
 | `503 Service Unavailable` | `internal_unavailable` | `true` | The ConfigMap `Patch` itself failed |
 
 The `error.type` names reuse the vocabulary of the [LLM Gateway](errors.md#llm-gateway-error-responses) and [User Gateway](errors.md#user-gateway-error-responses) error tables. A client certificate whose SAN does not parse returns `403` with `error.type: invalid_cert` from the shared mTLS profile; see [Mode 1: mTLS client certificate](../llm/workload-identity.md#mode-1-mtls-client-certificate).
@@ -109,7 +109,7 @@ Returned when the calling Pod's UID does not match `status.currentPodUID`, or th
 
 ### 413 Payload Too Large
 
-Returned when any single artifact value exceeds 4 KiB or when the sum of `message` plus all artifact values exceeds 32 KiB. Sizes are measured in UTF-8 bytes of the value strings only; keys are bounded by ConfigMap key naming rules and are not counted. The combined cap exists because the body is buffered in gateway memory and then patched into the per-task ConfigMap, which has the Kubernetes object limit of about 1 MiB. Large artifacts should be stored externally and referenced by URL in the value.
+Returned when the request body exceeds 1 MiB, when any single artifact value exceeds 4 KiB, or when the sum of `message` plus all artifact values exceeds 32 KiB. The body cap exists because the gateway buffers the body in memory and patches it into the per-task ConfigMap, whose Kubernetes object limit is about 1 MiB, so a larger body could never be stored. It applies before the body is parsed, so an oversized body gets `413` even if it is not valid JSON. The artifact caps are far lower because the reconciler copies the values into the AgentTask's `status.artifactValues`, and they keep that status small (see [Artifact collection](../../controller/task-lifecycle.md#artifact-collection)). They measure UTF-8 bytes of the value strings only; keys are bounded by ConfigMap key naming rules and are not counted. Large artifacts should be stored externally and referenced by URL in the value.
 
 ### 503 Service Unavailable
 

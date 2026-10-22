@@ -1,0 +1,6 @@
+# actionlint's built-in runner label list predates ubuntu-26.04, so it reports
+# that label as unknown. Labels under self-hosted-runner count as known even
+# though these runners are GitHub-hosted.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

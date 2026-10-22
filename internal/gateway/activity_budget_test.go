@@ -61,6 +61,35 @@ func TestActivityStore_SourcesAndSnapshot(t *testing.T) {
 	}
 }
 
+// A deleted Agent's record leaves the store: the response lists only the
+// Agents the replica still knows, an emptied namespace drops its map, and
+// forgetting an unknown entry does nothing.
+func TestActivityStore_ForgetDropsTheAgent(t *testing.T) {
+	s := NewActivityStore()
+	s.RecordTraffic("team-a", "sup")
+	s.RecordHeartbeat("team-a", "other")
+
+	s.Forget("team-a", "sup")
+	snap := s.Snapshot("team-a")
+	if _, ok := snap.Agents["sup"]; ok || len(snap.Agents) != 1 {
+		t.Fatalf("after Forget(sup) agents = %v, want only other", snap.Agents)
+	}
+
+	s.Forget("team-a", "other")
+	if snap := s.Snapshot("team-a"); len(snap.Agents) != 0 {
+		t.Errorf("after forgetting every agent, agents = %v, want none", snap.Agents)
+	}
+	if _, ok := s.byNamespace["team-a"]; ok {
+		t.Error("an emptied namespace must drop its map")
+	}
+
+	s.Forget("team-a", "unknown")
+	s.Forget("none", "x")
+	if len(s.byNamespace) != 0 {
+		t.Errorf("forgetting unknown entries changed the store: %v", s.byNamespace)
+	}
+}
+
 func TestHeartbeatFeedsActivityEndpoint(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedRoute()

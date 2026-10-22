@@ -854,18 +854,6 @@ func (r *scriptedResolver) recordedHosts() []string {
 	return append([]string(nil), r.hosts...)
 }
 
-// reservedClosedPort returns a local port that nothing listens on.
-func reservedClosedPort(t *testing.T) int32 {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return int32(port)
-}
-
 func podWaitAgent(wakeTimeout time.Duration) *kaalmv1beta1.Agent {
 	return &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
@@ -881,15 +869,15 @@ func TestWaitAgentReachable_PollsFastAtTheStart(t *testing.T) {
 		OperatorNamespace: "kaalm-system", AgentServiceHostOverride: "127.0.0.1",
 		AgentConnectTimeout: 100 * time.Millisecond,
 	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
-	port := reservedClosedPort(t)
-	s.Config.AgentServicePortOverride = port
+	port, listen := holdPort(t)
+	s.Config.AgentServicePortOverride = int32(port)
 
 	var ln net.Listener
 	started := make(chan struct{})
 	go func() {
 		defer close(started)
 		time.Sleep(agentBackAfter)
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		l, err := listen()
 		if err != nil {
 			t.Errorf("agent could not listen on %d: %v", port, err)
 			return
@@ -921,7 +909,8 @@ func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
 	s := NewServer(Config{
 		OperatorNamespace: "kaalm-system", AgentConnectTimeout: 50 * time.Millisecond,
 	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
-	s.Config.AgentServicePortOverride = reservedClosedPort(t)
+	port, _ := holdPort(t)
+	s.Config.AgentServicePortOverride = int32(port)
 	resolver := &scriptedResolver{ip: net.ParseIP("127.0.0.1")}
 	s.AgentResolver = resolver
 
@@ -939,6 +928,26 @@ func TestWaitAgentReachable_ResolvesTheServiceOncePerWait(t *testing.T) {
 	}
 	if hosts := resolver.recordedHosts(); len(hosts) == 0 || hosts[0] != "sup.team-a.svc.cluster.local." {
 		t.Errorf("resolved %q, want the absolute Service name", hosts)
+	}
+}
+
+// The Pod wait stops its poll sleep at the deadline, so it ends at the
+// capped wakeTimeout rather than one poll interval after it. With a 1.1 s
+// wakeTimeout the last 250 ms sleep would otherwise end the wait at 1.25 s.
+func TestWaitAgentReachable_EndsAtTheDeadline(t *testing.T) {
+	s := NewServer(Config{
+		OperatorNamespace: "kaalm-system", AgentServiceHostOverride: "127.0.0.1",
+		AgentServicePortOverride: 1, AgentConnectTimeout: 50 * time.Millisecond,
+	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(1100*time.Millisecond), nil)
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("wait against a closed port must time out")
+	}
+	if took < 1100*time.Millisecond || took >= 1200*time.Millisecond {
+		t.Errorf("wait ended after %v, want it to end at the 1.1s wakeTimeout", took)
 	}
 }
 
@@ -1156,18 +1165,13 @@ func startAgentLater(t *testing.T, h *userHarness) {
 	agentServiceLater(t, h)()
 }
 
-// agentServiceLater points agent delivery at a free port where nothing
-// listens yet. The returned start func, which runs once however often it is
-// called, starts the harness agent backend there after agentBackAfter: a
+// agentServiceLater points agent delivery at a port held by holdPort, where
+// nothing listens yet. The returned start func, which runs once however often
+// it is called, starts the harness agent backend there after agentBackAfter: a
 // test calls it when the Pod should come back, such as from a wake.
 func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+	port, listen := holdPort(t)
 	h.server.Config.AgentServicePortOverride = int32(port)
 
 	srv := httptest.NewUnstartedServer(h.agentSrv.Config.Handler)
@@ -1195,7 +1199,7 @@ func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
 			go func() {
 				defer close(ch)
 				time.Sleep(agentBackAfter)
-				ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+				ln, err := listen()
 				if err != nil {
 					t.Errorf("agent backend could not listen on %d: %v", port, err)
 					return
@@ -1204,6 +1208,38 @@ func agentServiceLater(t *testing.T, h *userHarness) (start func()) {
 				srv.StartTLS()
 			}()
 		})
+	}
+}
+
+// agentServiceLater keeps its port from other processes until start, and
+// refuses connects to it until then: a foreign listener on the port would end
+// the Pod wait at once and send delivery to the wrong server.
+func TestAgentServiceLater_HoldsThePortUntilStart(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	start := agentServiceLater(t, h)
+	addr := fmt.Sprintf("127.0.0.1:%d", h.server.Config.AgentServicePortOverride)
+
+	if ln, err := net.Listen("tcp", addr); err == nil {
+		_ = ln.Close()
+		t.Fatalf("another listener bound %s before start: the port is not held", addr)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		_ = conn.Close()
+		t.Fatalf("a connect to %s was accepted before start", addr)
+	}
+
+	start()
+	deadline := time.Now().Add(agentBackAfter + 5*time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no connect to %s after start: %v", addr, err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -1505,8 +1541,8 @@ func TestWakeAndDeliver_PendingPodWaitIsBounded(t *testing.T) {
 	if errType != errDeliveryFailed || err == nil || !strings.Contains(err.Error(), "within wakeTimeout") {
 		t.Fatalf("wakeAndDeliver = %q, %v; want %q naming wakeTimeout", errType, err, errDeliveryFailed)
 	}
-	// The last poll can overrun wakeTimeout by one poll interval.
-	if d := time.Since(start); d > wakePollInterval+time.Second {
+	// The wait ends at the wakeTimeout plus at most one connect in flight.
+	if d := time.Since(start); d > 80*time.Millisecond+h.server.Config.AgentConnectTimeout+time.Second {
 		t.Errorf("the wait took %s, want it bounded by the 80ms wakeTimeout", d)
 	}
 	if reason, ok := healthReason(h, "/channels/team-a/support"); ok || reason != healthReasonDispatchFailed {

@@ -166,7 +166,7 @@ jobs:
         run: |
           make chart-sync
           helm lint charts/kaalm
-          make chart-package # the release workflow packages the same way; fail here, not at a tag
+          make chart-package # the release workflow packages the same way; fail here, not when the release PR merges
 
   books:
     runs-on: ubuntu-26.04
@@ -258,17 +258,51 @@ jobs:
         with:
           version: v4.3.1
 
+      # The job log is not a reliable record, so the output also goes to a
+      # file for the artifact. bash gives pipefail, so tee cannot hide a
+      # failed make.
       - name: Run e2e suite
-        run: make e2e
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e"
+          make e2e 2>&1 | tee "$RUNNER_TEMP/e2e/make-e2e.log"
 
+      # make e2e deletes the cluster only before it starts, so this step
+      # sees the cluster as the failure left it. Every command writes its own
+      # file for the artifact.
       - name: Dump diagnostics on failure
         if: failure()
+        shell: bash
         run: |
-          kubectl get all -A || true
-          kubectl describe pods -n kaalm-system || true
-          kubectl describe pods -n e2e || true
-          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 || true
-          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=200 || true
+          d="$RUNNER_TEMP/e2e"
+          mkdir -p "$d"
+          k3d cluster list > "$d/k3d-clusters.txt" 2>&1 || true
+          docker ps -a > "$d/docker-ps.txt" 2>&1 || true
+          kubectl config current-context > "$d/kube-context.txt" 2>&1 || true
+          kubectl get all -A 2>&1 | tee "$d/all.txt" || true
+          kubectl describe pods -n kaalm-system 2>&1 | tee "$d/describe-kaalm-system.txt" || true
+          kubectl describe pods -n e2e 2>&1 | tee "$d/describe-e2e.txt" || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=200 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > "$d/events.txt" 2>&1 || true
+          kubectl get agents,agenttasks,agentchannels,modelproviders,toolproviders -n e2e -o yaml > "$d/e2e-resources.yaml" 2>&1 || true
+          kubectl get agentclasses -o yaml > "$d/agentclasses.yaml" 2>&1 || true
+          helm list -A > "$d/helm-list.txt" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=-1 --prefix > "$d/controller.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=-1 --prefix --previous > "$d/controller-previous.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=-1 --prefix > "$d/gateway.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=-1 --prefix --previous > "$d/gateway-previous.log" 2>&1 || true
+          kubectl describe pods -n cert-manager > "$d/describe-cert-manager.txt" 2>&1 || true
+          ls -la "$d"
+
+      # The attempt number keeps a rerun's artifact apart from the first
+      # attempt's in the same run.
+      - name: Upload the test output and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2e
 
   # FQDN egress proof on Cilium. Not a required check: it runs only
   # when the FQDN policy path changes.
@@ -305,14 +339,49 @@ jobs:
         with:
           version: v4.3.1
 
+      # The job log is not a reliable record, so the output also goes to a
+      # file for the artifact. bash gives pipefail, so tee cannot hide a
+      # failed make.
       - name: Run the FQDN spec on Cilium
-        run: make e2e-cilium
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e-cilium"
+          make e2e-cilium 2>&1 | tee "$RUNNER_TEMP/e2e-cilium/make-e2e-cilium.log"
 
+      # make e2e-cilium deletes the cluster only before it starts, so this step
+      # sees the cluster as the failure left it. Every command writes its own
+      # file for the artifact.
       - name: Dump diagnostics on failure
         if: failure()
+        shell: bash
         run: |
-          kubectl get pods -A || true
-          kubectl get ciliumnetworkpolicies -A -o yaml || true
-          kubectl describe pods -n e2e || true
-          kubectl -n kube-system logs ds/cilium -c cilium-agent --tail=200 || true
-          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 || true
+          d="$RUNNER_TEMP/e2e-cilium"
+          mkdir -p "$d"
+          k3d cluster list > "$d/k3d-clusters.txt" 2>&1 || true
+          docker ps -a > "$d/docker-ps.txt" 2>&1 || true
+          kubectl config current-context > "$d/kube-context.txt" 2>&1 || true
+          kubectl get pods -A 2>&1 | tee "$d/pods.txt" || true
+          kubectl get ciliumnetworkpolicies -A -o yaml > "$d/ciliumnetworkpolicies.yaml" 2>&1 || true
+          kubectl describe pods -n e2e 2>&1 | tee "$d/describe-e2e.txt" || true
+          kubectl -n kube-system logs ds/cilium -c cilium-agent --tail=200 2>&1 || true
+          kubectl -n kube-system logs ds/cilium -c cilium-agent --tail=-1 > "$d/cilium-agent.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > "$d/events.txt" 2>&1 || true
+          kubectl get agents,agenttasks,agentchannels,modelproviders,toolproviders -n e2e -o yaml > "$d/e2e-resources.yaml" 2>&1 || true
+          kubectl get agentclasses -o yaml > "$d/agentclasses.yaml" 2>&1 || true
+          helm list -A > "$d/helm-list.txt" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=-1 --prefix > "$d/controller.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=-1 --prefix --previous > "$d/controller-previous.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=-1 --prefix > "$d/gateway.log" 2>&1 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=-1 --prefix --previous > "$d/gateway-previous.log" 2>&1 || true
+          kubectl describe pods -n cert-manager > "$d/describe-cert-manager.txt" 2>&1 || true
+          ls -la "$d"
+
+      # The attempt number keeps a rerun's artifact apart from the first
+      # attempt's in the same run.
+      - name: Upload the test output and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-cilium-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2e-cilium

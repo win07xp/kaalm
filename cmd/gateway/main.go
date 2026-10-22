@@ -429,6 +429,11 @@ func main() {
 		_, _ = informer.AddEventHandler(channelDisconnectHandler(runCtx, cl.GetClient(), logger))
 	}
 
+	// A deleted Agent's activity record leaves this replica's store.
+	if informer, err := cl.GetCache().GetInformer(runCtx, &kaalmv1beta1.Agent{}); err == nil {
+		_, _ = informer.AddEventHandler(agentDeleteHandler(server.Activity))
+	}
+
 	logger.Info("kaalm gateway starting",
 		"listen", f.listenAddr, "health", f.healthAddr, "operator_namespace", operatorNamespace,
 		"source_ip_check_disabled", f.disableSourceIPCheck)
