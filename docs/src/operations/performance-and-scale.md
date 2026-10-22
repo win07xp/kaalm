@@ -163,7 +163,7 @@ A persistence-enabled fleet of 100 with a 10 s idle timer, one message per agent
 | Wake latency | p50 3.7 s, p95 4.9 s; every wake within the 5 s bucket |
 | Teardown | 100 agents and their Pods gone in 10 s; PVC deletion is not timed |
 
-Wake latency runs from the gateway's wake request until it can connect to the agent. It is made of the Pod's start on this machine, the startup probe that makes a listening agent Ready within about a second ([Injected environment and probes](../controller/reconcilers/agent.md#injected-environment-and-probes)), and the gateway's connect polling, every 250 ms for the first 5 s and every 2 s after ([Waiting for a Pod that is not reachable yet](../gateways/user/activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)). The NetworkPolicy programming lag described under [What a real cluster changes](#what-a-real-cluster-changes) adds to it when it occurs. The breakdown is what transfers, not the value.
+Wake latency runs from the gateway's wake request until it can connect to the agent. It is made of the Pod's start on this machine, the startup probe that makes a listening agent Ready within about a second ([Injected environment and probes](../controller/reconcilers/agent.md#injected-environment-and-probes)), and the gateway's confirm connects, which start when its Pod watch reports the Pod Ready ([The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence), step 4). The NetworkPolicy programming lag described under [What a real cluster changes](#what-a-real-cluster-changes) adds to it when it occurs. The breakdown is what transfers, not the value.
 
 ### Concurrent tasks
 

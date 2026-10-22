@@ -5,7 +5,9 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 )
 
@@ -304,5 +307,19 @@ func TestClusterOptionsShareRequestPathObjects(t *testing.T) {
 	}
 	if cm.UnsafeDisableDeepCopy != nil {
 		t.Error("ConfigMap reads must keep their deep copy")
+	}
+}
+
+// The Pod wait's tracker rides on the request path's Pod informer and counts
+// as synced through its handler registration; when the informer is not
+// available the tracker stays unsynced, so waits poll.
+func TestPodReadyTrackerUsesThePodInformer(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	if tr := podReadyTracker(&informertest.FakeInformers{}, logger); tr.Synced == nil {
+		t.Error("tracker has no sync check after registering on the Pod informer")
+	}
+	failing := &informertest.FakeInformers{Error: errors.New("no Pod informer")}
+	if tr := podReadyTracker(failing, logger); tr == nil || tr.Synced != nil {
+		t.Errorf("tracker = %+v, want one with no sync check when the informer is unavailable", tr)
 	}
 }

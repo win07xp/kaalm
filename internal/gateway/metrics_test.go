@@ -28,6 +28,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -400,5 +401,37 @@ func TestProxy_UntranslatableResponseCountsError(t *testing.T) {
 	}
 	if count("error") != 1 || count("ok") != 0 {
 		t.Errorf("error = %v, ok = %v; want 1 and 0", count("error"), count("ok"))
+	}
+}
+
+// A wake takes about two seconds, and changes to it move it by fractions of
+// a second, so the wake histogram resolves quarter seconds where wakes land.
+func TestMetrics_WakeDurationBucketsResolveQuarterSeconds(t *testing.T) {
+	m := NewMetrics(prometheus.NewRegistry())
+	m.ChannelWakeDuration("team-a", "ready", 2.0)
+	m.ChannelWakeDuration("team-a", "ready", 2.4)
+
+	var metric dto.Metric
+	obs, err := m.channelWakeDur.GetMetricWithLabelValues("team-a", "ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := obs.(prometheus.Metric).Write(&metric); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[float64]uint64{}
+	for _, b := range metric.GetHistogram().GetBucket() {
+		counts[b.GetUpperBound()] = b.GetCumulativeCount()
+	}
+	if got, ok := counts[2.25]; !ok || got != 1 {
+		t.Errorf("bucket le=2.25: count %d (present %v), want 1", got, ok)
+	}
+	if got, ok := counts[2.5]; !ok || got != 2 {
+		t.Errorf("bucket le=2.5: count %d (present %v), want 2", got, ok)
+	}
+	for _, kept := range []float64{0.5, 1, 2.5, 5, 10} {
+		if _, ok := counts[kept]; !ok {
+			t.Errorf("bucket le=%v dropped; dashboards and alerts may reference it", kept)
+		}
 	}
 }

@@ -492,23 +492,38 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 	return 120 * time.Second
 }
 
-// waitAgentReachable polls the agent Service with TCP connects until it
-// accepts, bounded by the capped wakeTimeout and ctx. The poll sleep stops at
-// the deadline, so the wait ends at the capped wakeTimeout, plus at most one
-// connect in flight when the deadline passes. It is the one Pod wait
-// a message gets: after a wake, for a Pod being created or resumed, or after
-// a refused connect. Connect success is the readiness signal.
+// waitAgentReachable waits until the agent Service accepts a TCP connect,
+// bounded by the capped wakeTimeout and ctx. It is the one Pod wait a message
+// gets: after a wake, for a Pod being created or resumed, or after a refused
+// connect. At each check the wait is in one of three states, read from the
+// Pod watch (s.PodReady):
 //
-// It polls every wakePollFastInterval for the first wakePollFastWindow, then
-// every wakePollInterval. It resolves the Service name once per wait, by its
-// absolute name and through the same resolver as delivery, and retries the
-// lookup at each poll until it resolves (a Service not created yet answers
-// NXDOMAIN). Go does not cache lookups, so resolving at every connect would
-// send every poll to the cluster DNS server. Each poll's lookup and connect
-// share one AgentConnectTimeout.
+//   - The Agent's Pod is Ready: the wait connects at once, then
+//     wakeConfirmQuickTries connects in all run wakeConfirmQuickInterval
+//     apart, then every wakePollFastInterval until wakePollFastWindow after
+//     Ready, then every wakePollInterval.
+//     Connect success stays the readiness signal, because Ready does not
+//     prove the Service routes yet: the endpoint data path and a
+//     NetworkPolicy controller can lag the Pod.
+//   - The Agent's Pod exists but is not Ready: the wait makes no connect. The
+//     Service has no endpoints, so a connect would only spend the node's
+//     rate-limited refusals. It sleeps until the Pod turns Ready or the next
+//     check.
+//   - No Pod watch, a watch not synced yet, or no Pod for the Agent: the
+//     wait connects on the same schedule, measured from its start.
 //
-// missed, when set, runs with ctx after each poll that does not connect, and
-// an error from it ends the wait.
+// It resolves the Service name once per wait, by its absolute name and
+// through the same resolver as delivery, and retries the lookup at each
+// connect until it resolves (a Service not created yet answers NXDOMAIN). Go
+// does not cache lookups, so resolving at every connect would send every
+// check to the cluster DNS server. Each check, the lookup and the connect
+// together, is bounded by AgentConnectTimeout, and each connect also by
+// wakeConnectTimeout. The sleep stops at the deadline, so the wait ends at
+// the capped wakeTimeout, plus at most the one check in flight when the
+// deadline passes.
+//
+// missed, when set, runs with ctx after each check that does not connect,
+// whether or not it tried, and an error from it ends the wait.
 func (s *Server) waitAgentReachable(
 	ctx context.Context, agent *kaalmv1beta1.Agent, missed func(context.Context) error,
 ) error {
@@ -517,25 +532,39 @@ func (s *Server) waitAgentReachable(
 	host := s.agentServiceHost(agent)
 	port := strconv.Itoa(int(s.agentServicePort(agent)))
 	var target string
-	var dialer net.Dialer
+	var waiter *podWaiter
+	if s.PodReady.usable() {
+		waiter = s.PodReady.Wait(agent.Namespace, agent.Name)
+		defer waiter.release()
+	}
+	var readyAt time.Time
+	readyTries := 0
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		pollCtx, cancel := context.WithTimeout(ctx, s.Config.AgentConnectTimeout)
-		if target == "" {
-			if addrs, err := s.agentResolver().LookupIPAddr(pollCtx, absoluteDialName(host)); err == nil && len(addrs) > 0 {
-				target = net.JoinHostPort(addrs[0].IP.String(), port)
-			}
+		if waiter != nil && readyAt.IsZero() && waiter.ready() {
+			readyAt = time.Now()
 		}
-		if target != "" {
-			if conn, err := dialer.DialContext(pollCtx, "tcp", target); err == nil {
-				_ = conn.Close()
-				cancel()
+		if waiter == nil || !readyAt.IsZero() || !waiter.seen() {
+			if !readyAt.IsZero() {
+				readyTries++
+			}
+			// One check, the lookup and the connect together, stays within
+			// AgentConnectTimeout, the term backgroundPipelineBound adds for
+			// the check in flight at the deadline.
+			checkCtx, cancel := context.WithTimeout(ctx, s.Config.AgentConnectTimeout)
+			if target == "" {
+				if addrs, err := s.agentResolver().LookupIPAddr(checkCtx, absoluteDialName(host)); err == nil && len(addrs) > 0 {
+					target = net.JoinHostPort(addrs[0].IP.String(), port)
+				}
+			}
+			reached := target != "" && s.dialPodWait(checkCtx, target)
+			cancel()
+			if reached {
 				return nil
 			}
 		}
-		cancel()
 		if missed != nil {
 			if err := missed(ctx); err != nil {
 				return err
@@ -545,15 +574,45 @@ func (s *Server) waitAgentReachable(
 		if remaining <= 0 {
 			break
 		}
-		timer := time.NewTimer(min(wakePollDelay(time.Since(start)), remaining))
+		delay := wakePollDelay(time.Since(start))
+		if !readyAt.IsZero() {
+			delay = wakeConfirmDelay(readyTries, time.Since(readyAt))
+		}
+		// Until Ready is seen, the Ready event also ends the sleep. readyCh
+		// is nil after, so a closed channel is never selected twice.
+		var readyCh <-chan struct{}
+		if waiter != nil && readyAt.IsZero() {
+			readyCh = waiter.ch
+		}
+		timer := time.NewTimer(min(delay, remaining))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
+		case <-readyCh:
+			timer.Stop()
+			readyAt = time.Now()
 		}
 	}
 	return fmt.Errorf("wake timeout")
+}
+
+// dialPodWait makes one readiness connect to target, bounded by
+// wakeConnectTimeout within ctx, and reports whether it succeeded.
+func (s *Server) dialPodWait(ctx context.Context, target string) bool {
+	dial := s.podWaitDial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, wakeConnectTimeout)
+	defer cancel()
+	conn, err := dial(dialCtx, "tcp", target)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (s *Server) agentServiceHost(agent *kaalmv1beta1.Agent) string {

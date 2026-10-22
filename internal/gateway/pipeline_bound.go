@@ -37,6 +37,14 @@ const wakePollFastInterval = 250 * time.Millisecond
 // check every wakePollInterval adds little delay.
 const wakePollFastWindow = 5 * time.Second
 
+// wakeConnectTimeout bounds each readiness connect of a Pod wait. Until the
+// Pod is Ready, kube-proxy answers a connect to the empty Service with an
+// ICMP port unreachable that the node rate-limits (net.ipv4.icmp_ratelimit,
+// burst 6), so a SYN past the burst gets no answer. A hung connect must cost
+// no more than a poll sleep, or a wake pays a full AgentConnectTimeout after
+// the Pod turns Ready.
+const wakeConnectTimeout = wakePollFastInterval
+
 // wakePollDelay is the wait before the next readiness connect, elapsed into
 // a Pod wait.
 func wakePollDelay(elapsed time.Duration) time.Duration {
@@ -44,6 +52,32 @@ func wakePollDelay(elapsed time.Duration) time.Duration {
 		return wakePollFastInterval
 	}
 	return wakePollInterval
+}
+
+// wakeConfirmQuickInterval is the wait between the first
+// wakeConfirmQuickTries connects after the Agent's Pod turns Ready. The
+// connect made at the Ready event is usually refused, because the Service
+// routes a few to a few hundred milliseconds after Ready, so short steps
+// deliver soon after it routes.
+const wakeConfirmQuickInterval = 50 * time.Millisecond
+
+// wakeConfirmQuickTries is how many connects after Ready run
+// wakeConfirmQuickInterval apart. Each refused connect spends one of the
+// node's rate-limited ICMP refusals (burst 6), so for one wait alone six
+// quick tries fit that burst. The kernel keys the limit on the gateway Pod
+// IP, so concurrent wakes through one gateway, and fallback polling earlier
+// in the same wait, share it: a quick connect can still get no answer, and
+// wakeConnectTimeout bounds it.
+const wakeConfirmQuickTries = 6
+
+// wakeConfirmDelay is the wait before the next readiness connect after the
+// Pod turns Ready, with tries connects made since Ready and sinceReady
+// elapsed since it.
+func wakeConfirmDelay(tries int, sinceReady time.Duration) time.Duration {
+	if tries < wakeConfirmQuickTries {
+		return wakeConfirmQuickInterval
+	}
+	return wakePollDelay(sinceReady)
 }
 
 // activatorWorstCase is the longest the activator call can take: one attempt
@@ -77,7 +111,10 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 // for as long as a tenant sets. It sums:
 //
 //   - the activator call and the capped wakeTimeout, plus one readiness
-//     connect, which can be in flight when the deadline passes. This leg
+//     check, which can be in flight when the deadline passes. A check, the
+//     Service lookup and the connect together, is bounded by
+//     gateway.agentDeliveryConnectTimeout (the connect alone also by
+//     wakeConnectTimeout). This leg
 //     covers the one Pod wait any message gets: a wake, a wait for a Pod
 //     being created or resumed, or a wait after a refused connect, which
 //     takes the place of a retry delay. The activator call is the one call a

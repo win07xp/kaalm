@@ -264,6 +264,16 @@ const (
 	// AgentTask's env when its value is AnnotationTrue (rule 48). Every Secret
 	// a workload's spec.env names through valueFrom.secretKeyRef must carry it.
 	LabelWorkloadSecret = "kaalm.io/workload-secret"
+	// LabelAgent names the Agent a Pod belongs to. The controller sets it on
+	// every agent Pod; the Agent Service, the gateway's Pod wait, and the
+	// same-namespace ingress rule select on it.
+	LabelAgent = "kaalm.io/agent"
+	// LabelWorkload is the kind of workload a Pod runs: WorkloadAgent for an
+	// Agent's Pod, "task" for an AgentTask's. The gateway's Pod wait and the
+	// same-namespace ingress rule select on it.
+	LabelWorkload = "kaalm.io/workload"
+	// WorkloadAgent is LabelWorkload's value on every agent Pod.
+	WorkloadAgent = "agent"
 	// AnnotationCallbackHosts lists, comma-separated, the hostnames a Secret's
 	// credential manager approves as callbackUrl hosts when the Secret is a
 	// bearer callbackAuth token (rule 46).
