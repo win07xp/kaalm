@@ -40,6 +40,17 @@ func next(t *testing.T, w watch.Interface) watch.Event {
 	return watch.Event{}
 }
 
+// flush sends a bookmark on src and reads it from w. The forwarding
+// goroutine records an event before it receives the next one, so once the
+// bookmark arrives, every earlier event is recorded.
+func flush(t *testing.T, src *watch.RaceFreeFakeWatcher, w watch.Interface) {
+	t.Helper()
+	src.Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "100"}})
+	if ev := next(t, w); ev.Type != watch.Bookmark {
+		t.Fatalf("event = %s, want the flush bookmark", ev.Type)
+	}
+}
+
 // seenUID returns the UID of the entry's seen Secret, or "" when none.
 func seenUID(e *secretInformer) string {
 	_, sec := e.currentSeen()
@@ -65,6 +76,7 @@ func TestConfirmedWatchDeletesTheDeadSecretAndDropsItsEvents(t *testing.T) {
 	if tomb.Namespace != "team-a" || tomb.Name != "hook" || tomb.UID != "u1" || tomb.ResourceVersion != "" {
 		t.Fatalf("delete = %+v, want team-a/hook, UID u1, no resourceVersion", tomb.ObjectMeta)
 	}
+	flush(t, src, w)
 	if got := seenUID(entry); got != "" {
 		t.Fatalf("seen after the delete = %q, want none", got)
 	}
@@ -83,20 +95,22 @@ func TestConfirmedWatchDeletesTheDeadSecretAndDropsItsEvents(t *testing.T) {
 	if ev := next(t, w); ev.Type != watch.Added || ev.Object.(*corev1.Secret).UID != "u3" {
 		t.Fatalf("event = %s %+v, want the add of u3", ev.Type, ev.Object)
 	}
-	if got := seenUID(entry); got != "u3" {
-		t.Errorf("seen after the add = %q, want u3", got)
-	}
+	// The bookmark arrives after the add is recorded.
 	if ev := next(t, w); ev.Type != watch.Bookmark {
 		t.Fatalf("event = %s, want the bookmark", ev.Type)
+	}
+	if got := seenUID(entry); got != "u3" {
+		t.Errorf("seen after the add = %q, want u3", got)
 	}
 	if ev := next(t, w); ev.Type != watch.Added || ev.Object != other {
 		t.Fatalf("event = %s %+v, want the other Secret's add", ev.Type, ev.Object)
 	}
-	if got := seenUID(entry); got != "u3" {
-		t.Errorf("seen after another Secret's add = %q, want u3", got)
-	}
 	if ev := next(t, w); ev.Type != watch.Error {
 		t.Fatalf("event = %s, want the error", ev.Type)
+	}
+	// The error arrives after the other Secret's add is handled.
+	if got := seenUID(entry); got != "u3" {
+		t.Errorf("seen after another Secret's add = %q, want u3", got)
 	}
 }
 
@@ -113,11 +127,13 @@ func TestConfirmedWatchRecordsWhatItForwards(t *testing.T) {
 	}
 	src.Modify(hookAt("u1", "2"))
 	next(t, w)
+	flush(t, src, w)
 	if _, sec := entry.currentSeen(); sec == nil || sec.ResourceVersion != "2" {
 		t.Fatalf("seen = %+v, want resourceVersion 2", sec)
 	}
 	src.Delete(hookAt("u1", "3"))
 	next(t, w)
+	flush(t, src, w)
 	if got := seenUID(entry); got != "" {
 		t.Fatalf("seen after the delete = %q, want none", got)
 	}
@@ -126,6 +142,7 @@ func TestConfirmedWatchRecordsWhatItForwards(t *testing.T) {
 	entry.setSeen(hookAt("u9", "9"))
 	src.Add(hookAt("u2", "4"))
 	next(t, w)
+	flush(t, src, w)
 	if got := seenUID(entry); got != "u9" {
 		t.Fatalf("seen = %q, want the later list's u9", got)
 	}
