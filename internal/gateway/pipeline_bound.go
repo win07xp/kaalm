@@ -63,8 +63,11 @@ const wakeConfirmQuickInterval = 50 * time.Millisecond
 
 // wakeConfirmQuickTries is how many connects after Ready run
 // wakeConfirmQuickInterval apart. Each refused connect spends one of the
-// node's rate-limited ICMP refusals (burst 6), so six quick tries cannot
-// bring back a connect that gets no answer.
+// node's rate-limited ICMP refusals (burst 6), so for one wait alone six
+// quick tries fit that burst. The kernel keys the limit on the gateway Pod
+// IP, so concurrent wakes through one gateway, and fallback polling earlier
+// in the same wait, share it: a quick connect can still get no answer, and
+// wakeConnectTimeout bounds it.
 const wakeConfirmQuickTries = 6
 
 // wakeConfirmDelay is the wait before the next readiness connect after the
