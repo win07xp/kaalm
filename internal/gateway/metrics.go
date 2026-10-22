@@ -60,6 +60,15 @@ type Metrics struct {
 	patchFailed     *prometheus.CounterVec
 }
 
+// wakeDurationBuckets are kaalm_channel_wake_duration_seconds's buckets. A
+// wake takes about two seconds and changes to it move it by fractions of a
+// second, so the buckets step by 0.25 s where wakes land. 0.5, 1, 2.5, 5, and
+// 10 are kept from the default set so existing le references hold, and the
+// tail spreads out wake_timeout results, which run as long as a wakeTimeout.
+var wakeDurationBuckets = []float64{
+	0.5, 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3, 3.5, 4, 5, 7.5, 10, 15, 30, 60, 120, 300, 600,
+}
+
 // NewMetrics registers the gateway catalog with the given registerer.
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	f := promauto.With(reg)
@@ -109,6 +118,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}, []string{labelNamespace}),
 		channelWakeDur: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "kaalm_channel_wake_duration_seconds", Help: "Wake duration from activation to ready or failure.",
+			Buckets: wakeDurationBuckets,
 		}, []string{labelNamespace, "result"}),
 		channelCB: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_callback_total", Help: "Async callback attempts by outcome.",
