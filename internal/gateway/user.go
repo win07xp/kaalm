@@ -235,6 +235,9 @@ func (s *Server) writeSyncError(w http.ResponseWriter, ctx context.Context, name
 	case errWakeTimeout:
 		writeError(w, http.StatusGatewayTimeout, errorBody{
 			Type: errType, Message: err.Error()}, 0)
+	case errAgentNotReady:
+		writeError(w, http.StatusServiceUnavailable, errorBody{
+			Type: errType, Retryable: true, Message: err.Error()}, 5)
 	case errResponseTooLarge:
 		s.Metrics.ResponseTooLarge(namespace, "sync")
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{
@@ -252,7 +255,9 @@ func (s *Server) writeSyncError(w http.ResponseWriter, ctx context.Context, name
 // Resuming, or after a delivery attempt fails to connect (the cached phase
 // can lag the controller deleting the Pod). It also requests at most one
 // wake: before the wait when the routed phase reads Hibernating or
-// Hibernated, or during a wait that finds the cached phase so.
+// Hibernated, or during a wait that finds the cached phase so. A message
+// whose wait finds the Agent's cap of waits on this replica full fails at
+// once with agent_not_ready (see awaitPod).
 // healthPath is the channel webhook path for channel-health recording; the
 // test-chat path passes "" so /console/... traffic never enters a channel
 // health report. The delivery outcome and duration are metered here for
@@ -327,12 +332,17 @@ func (s *Server) wakeAndDeliver(
 	return respBody, "", nil
 }
 
-// podWaitFailed records a failed Pod wait in channel health as
-// DispatchFailed, with detail as the message, and returns the wait's error. A
-// failed wake request is not recorded again: requestWake recorded it as
-// AgentNotReady.
+// podWaitFailed records a failed Pod wait in channel health, with detail as
+// the message, and returns the wait's error. A wait refused by the per-Agent
+// cap is recorded as AgentNotReady: the Agent is not serving yet and nothing
+// was dispatched. A failed wake request is not recorded again: requestWake
+// recorded it as AgentNotReady. Any other failure is DispatchFailed.
 func (s *Server) podWaitFailed(healthPath string, f *podWaitFailure, detail error) error {
-	if f.errType != errControllerDown {
+	switch f.errType {
+	case errControllerDown:
+	case errAgentNotReady:
+		s.recordChannelFailure(healthPath, healthReasonAgentNotReady, detail.Error())
+	default:
 		s.recordChannelFailure(healthPath, healthReasonDispatchFailed, detail.Error())
 	}
 	return f.err
@@ -383,13 +393,26 @@ func (f *podWaitFailure) Unwrap() error { return f.err }
 // wait gets the rest of the wait's deadline, so the single wake leg of
 // backgroundPipelineBound covers it.
 //
+// Every wait holds one of the Agent's maxPodWaitsPerAgent slots on this
+// replica for its whole duration, so messages for an Agent that never becomes
+// reachable cannot hold unbounded gateway work. A message that finds no free
+// slot fails at once with agent_not_ready: no wait and no wake request, since
+// the waiting messages already requested one.
+//
 // It returns nil once the Pod is reachable. A failure carries
-// controller_unavailable when the wake request failed, wake_timeout when a
-// requested wake did not bring the Pod back in time, and delivery_failed when
-// the wait requested no wake.
+// agent_not_ready when the cap is full, controller_unavailable when the wake
+// request failed, wake_timeout when a requested wake did not bring the Pod
+// back in time, and delivery_failed when the wait requested no wake.
 func (s *Server) awaitPod(
 	ctx context.Context, healthPath string, agent *kaalmv1beta1.Agent, messageID string, wake bool,
 ) *podWaitFailure {
+	release, ok := s.acquirePodWait(agent)
+	if !ok {
+		return &podWaitFailure{errType: errAgentNotReady, err: fmt.Errorf(
+			"the agent is not ready and this gateway replica already holds %d messages waiting for its Pod, "+
+				"the per-Agent cap", s.maxPodWaitsPerAgent())}
+	}
+	defer release()
 	start := time.Now()
 	var wakeStart time.Time
 	var missed func(context.Context) error
@@ -433,6 +456,29 @@ func (s *Server) awaitPod(
 	return nil
 }
 
+// acquirePodWait takes one of the Agent's Pod wait slots on this replica.
+// It reports false, taking nothing, when all maxPodWaitsPerAgent are held.
+// release frees the slot; the lock is never held across a blocking call.
+func (s *Server) acquirePodWait(agent *kaalmv1beta1.Agent) (release func(), ok bool) {
+	key := agentKey{namespace: agent.Namespace, name: agent.Name}
+	s.podWaitsMu.Lock()
+	defer s.podWaitsMu.Unlock()
+	if s.podWaits == nil {
+		s.podWaits = make(map[agentKey]int)
+	}
+	if s.podWaits[key] >= s.maxPodWaitsPerAgent() {
+		return nil, false
+	}
+	s.podWaits[key]++
+	return func() {
+		s.podWaitsMu.Lock()
+		defer s.podWaitsMu.Unlock()
+		if s.podWaits[key]--; s.podWaits[key] <= 0 {
+			delete(s.podWaits, key)
+		}
+	}, true
+}
+
 // recordChannelFailure records a channel-health failure unless the delivery
 // has no backing channel (test-chat).
 func (s *Server) recordChannelFailure(healthPath, reason, message string) {
@@ -471,6 +517,19 @@ func (s *Server) maxWakeTimeout() time.Duration {
 		return s.Config.MaxWakeTimeout
 	}
 	return defaultMaxWakeTimeout
+}
+
+// defaultMaxPodWaitsPerAgent is the most Pod waits one replica holds for one
+// Agent at once when Config.MaxPodWaitsPerAgent is unset.
+const defaultMaxPodWaitsPerAgent = 100
+
+// maxPodWaitsPerAgent is the most Pod waits one replica holds for one Agent
+// at once.
+func (s *Server) maxPodWaitsPerAgent() int {
+	if s.Config.MaxPodWaitsPerAgent > 0 {
+		return s.Config.MaxPodWaitsPerAgent
+	}
+	return defaultMaxPodWaitsPerAgent
 }
 
 // wakeTimeout is the value every wake wait and the background pipeline bound

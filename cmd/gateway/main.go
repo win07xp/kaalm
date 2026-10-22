@@ -74,6 +74,7 @@ type gatewayFlags struct {
 	maxResponseBodyBytes int64
 	syncDeliveryDeadline time.Duration
 	maxWakeTimeout       time.Duration
+	maxPodWaitsPerAgent  int
 	agentReadTimeout     time.Duration
 	callbackReadTimeout  time.Duration
 	agentConnectTimeout  time.Duration
@@ -128,6 +129,9 @@ func registerFlags(fs *flag.FlagSet) *gatewayFlags {
 	fs.DurationVar(&f.syncDeliveryDeadline, "sync-delivery-deadline", 30*time.Second, "sync-mode wall-clock budget")
 	fs.DurationVar(&f.maxWakeTimeout, "max-wake-timeout", 15*time.Minute,
 		"longest the gateway waits for a woken Agent to become reachable, whatever its wakeTimeout")
+	fs.IntVar(&f.maxPodWaitsPerAgent, "max-pod-waits-per-agent", 100,
+		"most messages one gateway replica holds waiting for one Agent's Pod at once; "+
+			"the next message answers 503 agent_not_ready")
 	fs.DurationVar(&f.agentReadTimeout, "agent-read-timeout", 10*time.Second, "per-attempt agent read timeout")
 	fs.DurationVar(&f.callbackReadTimeout, "callback-read-timeout", 10*time.Second, "per-attempt callback read timeout")
 	fs.DurationVar(&f.agentConnectTimeout, "agent-connect-timeout", time.Second, "agent-delivery connect timeout")
@@ -172,6 +176,10 @@ func main() {
 	}
 	if err := validateMaxWakeTimeout(f.maxWakeTimeout); err != nil {
 		logger.Error("invalid --max-wake-timeout", "error", err)
+		os.Exit(1)
+	}
+	if err := validateMaxPodWaitsPerAgent(f.maxPodWaitsPerAgent); err != nil {
+		logger.Error("invalid --max-pod-waits-per-agent", "error", err)
 		os.Exit(1)
 	}
 
@@ -286,6 +294,7 @@ func main() {
 		MaxResponseBodyBytes:     f.maxResponseBodyBytes,
 		SyncDeliveryDeadline:     f.syncDeliveryDeadline,
 		MaxWakeTimeout:           f.maxWakeTimeout,
+		MaxPodWaitsPerAgent:      f.maxPodWaitsPerAgent,
 		AgentReadTimeout:         f.agentReadTimeout,
 		CallbackReadTimeout:      f.callbackReadTimeout,
 		AgentConnectTimeout:      f.agentConnectTimeout,
@@ -636,6 +645,16 @@ func mustParseBackoff(raw, flagName string, logger *slog.Logger) []time.Duration
 func validateMaxWakeTimeout(d time.Duration) error {
 	if d <= 0 {
 		return fmt.Errorf("max wake timeout must be positive, got %v", d)
+	}
+	return nil
+}
+
+// validateMaxPodWaitsPerAgent rejects a cap that is not positive. Zero is
+// not "no cap": an operator who sets it expecting the cap to go away finds
+// out at startup instead of getting the default.
+func validateMaxPodWaitsPerAgent(n int) error {
+	if n <= 0 {
+		return fmt.Errorf("max pod waits per agent must be positive, got %d", n)
 	}
 	return nil
 }

@@ -29,8 +29,10 @@ import (
 // Pod wait connects when the Agent's Pod turns Ready instead of connecting
 // to a Service with no endpoints. It keeps, per Agent, each Pod's name and
 // whether it serves, and the waits in progress for that Agent; a Pod that
-// starts serving wakes every wait for its Agent. A per-Agent cap on
-// concurrent Pod waits counts the entries in waiters for the Agent's key.
+// starts serving wakes every wait for its Agent. The per-Agent cap on Pod
+// waits is not counted here but in Server.podWaits (awaitPod): a wait that
+// polls without the tracker (no Pod watch, or one not synced) registers no
+// waiter here.
 type PodReadyTracker struct {
 	// Synced reports whether the Pod watch has delivered its initial list.
 	// nil or false means the tracker is not used and waits poll.

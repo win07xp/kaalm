@@ -53,6 +53,11 @@ instead of silence. The gateway waits at most `gateway.maxWakeTimeout` (15
 minutes by default) whatever `wakeTimeout` you set, so an agent that needs
 longer to start needs the platform team to raise that value.
 
+While an agent starts, each gateway replica holds at most
+`gateway.maxPodWaitsPerAgent` (100 by default) messages for it. Further
+messages fail at once as `agent_not_ready`, which is retryable. See
+[Activation and activity tracking](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/user/activation-and-activity.md#the-cap-on-waits-per-agent).
+
 If the Agent is `Hibernated` or `Hibernating`, you can wake it by hand, the
 same way the gateway does:
 

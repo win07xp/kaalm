@@ -132,6 +132,10 @@ should say so within the window.
 - `DispatchFailed` or `AgentNotReady`: the agent did not answer. The
   customer sees the error as the reply rather than silence. The reply starts
   with the error type, such as `delivery_failed` or `wake_timeout`.
+- A reply that starts with `agent_not_ready`: the gateway already holds its
+  limit of messages waiting for the starting agent. The customer sends the
+  message again in a few seconds. See
+  [Activation and activity tracking](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/user/activation-and-activity.md#the-cap-on-waits-per-agent).
 
 Delivery receipts for the agent's replies arrive at the same URL as
 `statuses` events; the gateway drops them, so they never reach the agent.

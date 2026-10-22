@@ -23,10 +23,11 @@ The gateway wakes an Agent when the Agent's cached `status.phase` is `Hibernated
 
 The gateway has its own ceiling because each async or platform message to an Agent that never becomes reachable keeps gateway work in flight for the whole wait. Without a ceiling, a tenant's `wakeTimeout` would set how long. Raising `gateway.maxWakeTimeout` lets slower Agents finish waking, and makes each stuck message hold the gateway that much longer ([Async pipeline bound](../api/async-responses.md#async-pipeline-bound)). When the ceiling ends the wait, the `wake_timeout` error names both the gateway's `maxWakeTimeout` and the Agent's own `wakeTimeout`, so an Agent with a 1-hour `wakeTimeout` that gave up at 15 minutes shows why.
 
-![Flowchart of how a wake fails for a message to a Hibernated or Hibernating Agent, in the order the gateway finds out, as two rows. Wake: activator configured, reachable, and answering 202, else controller_unavailable (sync 504 with Retry-After 5); Agent Service reachable within wakeTimeout, else wake_timeout (sync 504). Deliver: sync deadline still open, else sync_deadline_exceeded (504, sync only); delivered within four attempts, else delivery_failed (sync 502); otherwise the reply.](../../diagrams/wake-failures.svg)
+![Flowchart of how a wake fails for a message to a Hibernated or Hibernating Agent, in the order the gateway finds out, as two rows. Wake: fewer than maxPodWaitsPerAgent waits for the Agent on this replica, else agent_not_ready (sync 503 with Retry-After 5); activator configured, reachable, and answering 202, else controller_unavailable (sync 504 with Retry-After 5); Agent Service reachable within wakeTimeout, else wake_timeout (sync 504). Deliver: sync deadline still open, else sync_deadline_exceeded (504, sync only); delivered within four attempts, else delivery_failed (sync 502); otherwise the reply.](../../diagrams/wake-failures.svg)
 
 | Failure | Trigger | Sync mode | Async mode |
 |---|---|---|---|
+| `agent_not_ready` | This replica already holds `gateway.maxPodWaitsPerAgent` waits for the Agent ([The cap on waits per Agent](#the-cap-on-waits-per-agent)). No wait and no wake request. | `503`, `Retry-After: 5`, `retryable: true` | error payload to `callbackUrl` or the polling endpoint |
 | `controller_unavailable` | No activator configured; a `4xx`, such as a SAN rejection or a `404` for a deleted Agent; or a connect or TLS failure, a ten-second timeout, or a `5xx` on both attempts. No wake is requested. The call can be one that a Pod wait made ([Waiting for a Pod that is not reachable yet](#waiting-for-a-pod-that-is-not-reachable-yet)). | `504`, `Retry-After: 5`, `retryable: true` | error payload to `callbackUrl` or the polling endpoint |
 | `wake_timeout` | The Service is not reachable within the wake wait of step 4: the Agent's `wakeTimeout`, capped at `gateway.maxWakeTimeout`. The controller keeps working; the next message calls the activator again, which is idempotent. The wake can be one that a Pod wait requested ([Waiting for a Pod that is not reachable yet](#waiting-for-a-pod-that-is-not-reachable-yet)). | `504` | error payload |
 
@@ -46,6 +47,14 @@ A wait that has not requested a wake re-reads the Agent's cached `status.phase` 
 The wait has the same bounds as a wake: up to the Agent's effective `wakeTimeout` capped at `gateway.maxWakeTimeout` and, in sync mode, up to `gateway.syncDeliveryDeadline`. A message gets at most one wait, wake included, and requests at most one wake. A wake requested during a wait gets the rest of that wait's timeout, not a fresh one. The [async pipeline bound](../api/async-responses.md#async-pipeline-bound) counts one wait and one activator call.
 
 A wait that runs out records `DispatchFailed` on the channel's health ([What a replica records](platform-adapters.md#what-a-replica-records)). A wait that requested no wake ends as `delivery_failed`. Once a wait has requested a wake, it ends like a wake: `controller_unavailable` at once if the activator call fails, and `wake_timeout` if the Service is not reachable in time. The error type tells the caller whether a wake was in progress. The remedy for a Pod that starts slowly is a larger `wakeTimeout`.
+
+### The cap on waits per Agent
+
+Each gateway replica holds at most `gateway.maxPodWaitsPerAgent` (default 100) waits for one Agent at once. Every wait counts: the wait after a wake, the wait for a `Provisioning` or `Resuming` Agent, and the wait after a refused connect. The cap exists because each wait holds gateway work for up to the capped `wakeTimeout`, so without it, valid messages to an Agent that never becomes reachable would hold unbounded work.
+
+A message that finds the cap full fails at once as `agent_not_ready`. It does not wait and does not request a wake, because the messages already waiting request any wake the Agent needs. The failure records `AgentNotReady` on the channel's health ([What a replica records](platform-adapters.md#what-a-replica-records)). Why it is `503` and not `429` is under [User Gateway error responses](../api/errors.md#user-gateway-error-responses).
+
+Each replica counts its own waits, so the cluster holds up to `gateway.maxPodWaitsPerAgent` times `gateway.replicas` waits for one Agent.
 
 ### Sync-mode retry risk
 

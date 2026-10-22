@@ -124,6 +124,7 @@ The gateway builds a [`POST /v1/message` envelope](agent-endpoints.md#request-bo
 | `413` | `request_too_large` | The body exceeds `gateway.maxMessageBodyBytes`, the same cap as channel intake |
 | `413` | `response_too_large` | The reply exceeds `gateway.maxResponseBodyBytes` |
 | `502` | `delivery_failed` | Every delivery attempt failed |
+| `503` | `agent_not_ready` | As in [User Gateway error responses](errors.md#user-gateway-error-responses) |
 | `504` | `wake_timeout`, `controller_unavailable`, `sync_deadline_exceeded` | As in [User Gateway error responses](errors.md#user-gateway-error-responses) |
 
 ## GET /v1/spend

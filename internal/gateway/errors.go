@@ -47,6 +47,7 @@ const (
 	errControllerDown      = "controller_unavailable"
 	errResponseTooLarge    = "response_too_large"
 	errSyncDeadline        = "sync_deadline_exceeded"
+	errAgentNotReady       = "agent_not_ready"
 	errRateLimited         = "rate_limited"
 	errBudgetExhausted     = "budget_exhausted"
 	errBudgetThrottled     = "budget_throttled"

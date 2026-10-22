@@ -210,3 +210,25 @@ func TestTestChat_WakesHibernatedAgent(t *testing.T) {
 		t.Error("wake duration histogram recorded nothing")
 	}
 }
+
+// A test-chat message over the Agent's cap of Pod waits answers like the sync
+// webhook: 503 agent_not_ready with Retry-After.
+func TestTestChat_AgentNotReady(t *testing.T) {
+	h, _ := capHarness(t, "sync", 1)
+	holdPodWaits(t, h.server, h.store.agents["team-a/sup"], 1)
+
+	rec := postTestChat(h, `{"namespace":"team-a","agent":"sup","userId":"priya@example.com","content":"hi"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503, body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q, want 5", got)
+	}
+	var body map[string]errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if e := body["error"]; e.Type != errAgentNotReady || !e.Retryable {
+		t.Errorf("error = %+v, want retryable %s", e, errAgentNotReady)
+	}
+}

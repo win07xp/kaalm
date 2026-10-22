@@ -81,6 +81,8 @@ If the Agent's phase is `Hibernated` or `Hibernating`, the gateway calls the con
 
 If the Agent's phase is `Provisioning` or `Resuming`, the gateway makes the same reachability wait without calling the activator at first. This wait, or the wait after a failed connect in step 8, requests the wake if it finds the Agent `Hibernating` or `Hibernated` ([Waiting for a Pod that is not reachable yet](activation-and-activity.md#waiting-for-a-pod-that-is-not-reachable-yet)).
 
+A message that would wait while the replica's cap of waits for the Agent is full fails at once as `agent_not_ready` ([The cap on waits per Agent](activation-and-activity.md#the-cap-on-waits-per-agent)).
+
 ### 8. Message delivery
 
 The gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over bidirectional mTLS: it verifies the agent's certificate against the Kaalm CA ([TLS on the cluster listener](../listener-tls.md)) and presents its per-Deployment certificate, which the agent checks for a SAN match on the gateway Service DNS ([The runtime contract](../../runtime/contract.md), item 4). Each TCP connect is bounded by `gateway.agentDeliveryConnectTimeout` and dialed again on a fresh connection while the attempt's `gateway.agentReadTimeout` budget lasts, so a dropped packet costs one connect bound, not a whole attempt.
