@@ -498,8 +498,10 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 // connect. At each check the wait is in one of three states, read from the
 // Pod watch (s.PodReady):
 //
-//   - The Agent's Pod is Ready: the wait connects, every wakePollFastInterval
-//     for wakePollFastWindow after Ready, then every wakePollInterval.
+//   - The Agent's Pod is Ready: the wait connects at once, then
+//     wakeConfirmQuickTries connects in all run wakeConfirmQuickInterval
+//     apart, then every wakePollFastInterval until wakePollFastWindow after
+//     Ready, then every wakePollInterval.
 //     Connect success stays the readiness signal, because Ready does not
 //     prove the Service routes yet: the endpoint data path and a
 //     NetworkPolicy controller can lag the Pod.
@@ -536,6 +538,7 @@ func (s *Server) waitAgentReachable(
 		defer waiter.release()
 	}
 	var readyAt time.Time
+	readyTries := 0
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -544,6 +547,9 @@ func (s *Server) waitAgentReachable(
 			readyAt = time.Now()
 		}
 		if waiter == nil || !readyAt.IsZero() || !waiter.seen() {
+			if !readyAt.IsZero() {
+				readyTries++
+			}
 			// One check, the lookup and the connect together, stays within
 			// AgentConnectTimeout, the term backgroundPipelineBound adds for
 			// the check in flight at the deadline.
@@ -568,9 +574,9 @@ func (s *Server) waitAgentReachable(
 		if remaining <= 0 {
 			break
 		}
-		elapsed := time.Since(start)
+		delay := wakePollDelay(time.Since(start))
 		if !readyAt.IsZero() {
-			elapsed = time.Since(readyAt)
+			delay = wakeConfirmDelay(readyTries, time.Since(readyAt))
 		}
 		// Until Ready is seen, the Ready event also ends the sleep. readyCh
 		// is nil after, so a closed channel is never selected twice.
@@ -578,7 +584,7 @@ func (s *Server) waitAgentReachable(
 		if waiter != nil && readyAt.IsZero() {
 			readyCh = waiter.ch
 		}
-		timer := time.NewTimer(min(wakePollDelay(elapsed), remaining))
+		timer := time.NewTimer(min(delay, remaining))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

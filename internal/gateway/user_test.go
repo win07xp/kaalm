@@ -1132,8 +1132,8 @@ func TestWaitAgentReachable_PollsWhenNoPodIsKnown(t *testing.T) {
 }
 
 // Pod Ready does not prove the Service routes yet: the endpoint data path
-// can refuse connects for a few hundred milliseconds. The wait retries at
-// the fast interval after Ready.
+// can refuse connects for a few hundred milliseconds. The wait retries
+// quickly after Ready.
 func TestWaitAgentReachable_RetriesAfterReadyUntilTheServiceRoutes(t *testing.T) {
 	tr := syncedTracker()
 	tr.Handler().OnAdd(agentPod("team-a", "sup", "sup-0", true), false)
@@ -1154,8 +1154,50 @@ func TestWaitAgentReachable_RetriesAfterReadyUntilTheServiceRoutes(t *testing.T)
 	if n := len(dial.calls()); n != 3 {
 		t.Errorf("made %d connects, want 3 (two refused, then success)", n)
 	}
-	if took < 450*time.Millisecond || took >= 750*time.Millisecond {
-		t.Errorf("wait took %v, want about 500ms (two retries at the fast interval)", took)
+	if took < 90*time.Millisecond || took >= 300*time.Millisecond {
+		t.Errorf("wait took %v, want about 100ms (two quick retries)", took)
+	}
+}
+
+// After Ready, the first wakeConfirmQuickTries connects run
+// wakeConfirmQuickInterval apart, so the wait lands within a few
+// milliseconds of the Service routing. Then the steps return to
+// wakePollFastInterval. Six quick tries stay within the node's burst of six
+// ICMP refusals, so none of them hangs.
+func TestWaitAgentReachable_ConfirmSchedule(t *testing.T) {
+	tr := syncedTracker()
+	tr.Handler().OnAdd(agentPod("team-a", "sup", "sup-0", true), false)
+	const succeedAt = wakeConfirmQuickTries + 3
+	var mu sync.Mutex
+	var dialedAt []time.Time
+	dial := &countingDial{result: func(n int, _ context.Context) (net.Conn, error) {
+		mu.Lock()
+		dialedAt = append(dialedAt, time.Now())
+		mu.Unlock()
+		if n < succeedAt {
+			return nil, syscall.ECONNREFUSED
+		}
+		return pipeConn(), nil
+	}}
+	s := podWaitServer(tr, dial)
+
+	if err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil); err != nil {
+		t.Fatalf("wait = %v, want reachable", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialedAt) != succeedAt {
+		t.Fatalf("made %d connects, want %d", len(dialedAt), succeedAt)
+	}
+	for i := 1; i < len(dialedAt); i++ {
+		gap := dialedAt[i].Sub(dialedAt[i-1])
+		want := wakeConfirmQuickInterval
+		if i >= wakeConfirmQuickTries {
+			want = wakePollFastInterval
+		}
+		if gap < want-10*time.Millisecond || gap > want+60*time.Millisecond {
+			t.Errorf("connect %d came %v after connect %d, want about %v", i+1, gap, i, want)
+		}
 	}
 }
 

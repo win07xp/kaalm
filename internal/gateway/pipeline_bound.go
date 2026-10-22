@@ -54,6 +54,29 @@ func wakePollDelay(elapsed time.Duration) time.Duration {
 	return wakePollInterval
 }
 
+// wakeConfirmQuickInterval is the wait between the first
+// wakeConfirmQuickTries connects after the Agent's Pod turns Ready. The
+// connect made at the Ready event is usually refused, because the Service
+// routes a few to a few hundred milliseconds after Ready, so short steps
+// deliver soon after it routes.
+const wakeConfirmQuickInterval = 50 * time.Millisecond
+
+// wakeConfirmQuickTries is how many connects after Ready run
+// wakeConfirmQuickInterval apart. Each refused connect spends one of the
+// node's rate-limited ICMP refusals (burst 6), so six quick tries cannot
+// bring back a connect that gets no answer.
+const wakeConfirmQuickTries = 6
+
+// wakeConfirmDelay is the wait before the next readiness connect after the
+// Pod turns Ready, with tries connects made since Ready and sinceReady
+// elapsed since it.
+func wakeConfirmDelay(tries int, sinceReady time.Duration) time.Duration {
+	if tries < wakeConfirmQuickTries {
+		return wakeConfirmQuickInterval
+	}
+	return wakePollDelay(sinceReady)
+}
+
 // activatorWorstCase is the longest the activator call can take: one attempt
 // and its retry on a fresh connection, each bounded by activatorAttemptTimeout.
 const activatorWorstCase = 2 * activatorAttemptTimeout

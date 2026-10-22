@@ -56,6 +56,28 @@ func TestWakePollDelay(t *testing.T) {
 	}
 }
 
+// After the Pod turns Ready, the first wakeConfirmQuickTries connects run
+// wakeConfirmQuickInterval apart, then the wait returns to the poll
+// schedule measured from Ready.
+func TestWakeConfirmDelay(t *testing.T) {
+	cases := []struct {
+		tries      int
+		sinceReady time.Duration
+		want       time.Duration
+	}{
+		{1, 0, wakeConfirmQuickInterval},
+		{wakeConfirmQuickTries - 1, 200 * time.Millisecond, wakeConfirmQuickInterval},
+		{wakeConfirmQuickTries, 250 * time.Millisecond, wakePollFastInterval},
+		{20, wakePollFastWindow - time.Nanosecond, wakePollFastInterval},
+		{30, wakePollFastWindow, wakePollInterval},
+	}
+	for _, c := range cases {
+		if got := wakeConfirmDelay(c.tries, c.sinceReady); got != c.want {
+			t.Errorf("wakeConfirmDelay(%d, %s) = %s, want %s", c.tries, c.sinceReady, got, c.want)
+		}
+	}
+}
+
 func TestBackgroundPipelineBound_Arithmetic(t *testing.T) {
 	s := &Server{Config: Config{
 		MaxWakeTimeout:      time.Hour,
