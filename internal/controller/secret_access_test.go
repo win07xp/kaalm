@@ -100,7 +100,8 @@ func countSecretGets(cs *kubefake.Clientset) *atomic.Int32 {
 
 // The channel reconciler re-validates every channel every minute. Through the
 // watcher those passes are cache hits: the inbound and callback Secrets each
-// cost one GET, however many passes run.
+// cost two GETs (the read and its confirmation once the watch opens), however
+// many passes run.
 func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -133,13 +134,25 @@ func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 			},
 		}},
 	}
-	for pass := 0; pass < 20; pass++ {
-		if reason, msg, _ := r.validateSecrets(ctx, ch); reason != "" {
-			t.Fatalf("pass %d: %s: %s", pass, reason, msg)
+	validate := func() {
+		t.Helper()
+		for pass := 0; pass < 20; pass++ {
+			if reason, msg, _ := r.validateSecrets(ctx, ch); reason != "" {
+				t.Fatalf("pass %d: %s: %s", pass, reason, msg)
+			}
 		}
 	}
-	if n := gets.Load(); n != 2 {
-		t.Fatalf("20 validation passes cost %d Secret GETs, want 2", n)
+	validate()
+	deadline := time.Now().Add(3 * time.Second)
+	for gets.Load() != 4 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the two Secrets cost %d GETs, want 4", gets.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	validate()
+	if n := gets.Load(); n != 4 {
+		t.Fatalf("40 validation passes cost %d Secret GETs, want 4", n)
 	}
 }
 
