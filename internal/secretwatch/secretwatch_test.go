@@ -281,28 +281,40 @@ func currentEntry(w *Watcher, key types.NamespacedName) *secretInformer {
 }
 
 // revocable is a clientset holding team-a/hook (token "v", resourceVersion
-// 1) whose GETs and watches can be made to fail. Every watch it opens is a
-// fake the test drives: endWatch ends the newest one, as an API server does
-// when a watch times out, and latestWatch delivers events through it. After
-// expireOldVersions, a watch from a given resourceVersion ends at once with
-// 410 Expired and is not counted as open.
+// 1, UID hook-1) whose GETs and watches can be made to fail. Every watch it
+// opens is a fake the test drives: endWatch ends the newest one, as an API
+// server does when a watch times out, and latestWatch delivers events
+// through it. After expireOldVersions, a watch from a given resourceVersion
+// ends at once with 410 Expired and is not counted as open.
 type revocable struct {
 	cs      *fake.Clientset
 	gets    atomic.Int32 // every GET
 	refused atomic.Int32 // GETs answered with getErr
 	expired atomic.Int32 // watches answered with 410 Expired
 
-	mu       sync.Mutex
-	getErr   error
-	watchErr error
-	expire   bool
-	watches  []*watch.RaceFreeFakeWatcher
+	mu           sync.Mutex
+	getErr       error
+	watchErr     error
+	expire       bool
+	deleteOnOpen bool
+	onOpen       func()
+	watches      []*watch.RaceFreeFakeWatcher
+}
+
+// hookUID is the UID of the Secret the revocable clientset holds.
+const hookUID = "hook-1"
+
+// hookAt returns team-a/hook with token v, the given UID, and the given
+// resourceVersion.
+func hookAt(uid, rv string) *corev1.Secret {
+	sec := secretObj("team-a", "hook", "v")
+	sec.UID = types.UID(uid)
+	sec.ResourceVersion = rv
+	return sec
 }
 
 func newRevocable() *revocable {
-	sec := secretObj("team-a", "hook", "v")
-	sec.ResourceVersion = "1"
-	r := &revocable{cs: fake.NewSimpleClientset(sec)}
+	r := &revocable{cs: fake.NewSimpleClientset(hookAt(hookUID, "1"))}
 	r.cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		r.gets.Add(1)
 		r.mu.Lock()
@@ -316,11 +328,12 @@ func newRevocable() *revocable {
 	})
 	r.cs.PrependWatchReactor("secrets", func(action k8stesting.Action) (bool, watch.Interface, error) {
 		r.mu.Lock()
-		defer r.mu.Unlock()
 		if r.watchErr != nil {
+			defer r.mu.Unlock()
 			return true, nil, r.watchErr
 		}
 		if rv := action.(k8stesting.WatchAction).GetWatchRestrictions().ResourceVersion; r.expire && rv != "" {
+			defer r.mu.Unlock()
 			r.expired.Add(1)
 			fw := watch.NewRaceFreeFake()
 			st := apierrors.NewResourceExpired(fmt.Sprintf("too old resource version: %s (100)", rv)).ErrStatus
@@ -329,9 +342,37 @@ func newRevocable() *revocable {
 		}
 		fw := watch.NewRaceFreeFake()
 		r.watches = append(r.watches, fw)
+		if r.deleteOnOpen {
+			r.deleteOnOpen = false
+			r.removeHook()
+		}
+		onOpen := r.onOpen
+		r.onOpen = nil
+		r.mu.Unlock()
+		if onOpen != nil {
+			onOpen()
+		}
 		return true, fw, nil
 	})
 	return r
+}
+
+// removeHook deletes team-a/hook from the clientset's store without an
+// event, as the API server holds it once a delete has landed before a
+// watch's start version.
+func (r *revocable) removeHook() {
+	if err := r.cs.Tracker().Delete(corev1.SchemeGroupVersion.WithResource("secrets"), "team-a", "hook"); err != nil {
+		panic(err)
+	}
+}
+
+// deleteBeforeOpen deletes team-a/hook as the next watch opens, so the
+// informer's GET saw the Secret and the watch's opening replay does not
+// carry it: the delete landed between the two.
+func (r *revocable) deleteBeforeOpen() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deleteOnOpen = true
 }
 
 // fail makes later GETs and watches answer getErr and watchErr; nil lets
@@ -640,6 +681,126 @@ func TestWatcherRecoversWhenItsWatchExpires(t *testing.T) {
 	r.latestWatch().Modify(changed)
 	rec.expect(t, hookKey)
 	rec.expectNone(t, 200*time.Millisecond)
+}
+
+// expectGone waits until reads of team-a/hook answer NotFound.
+func expectGone(t *testing.T, w *Watcher) {
+	t.Helper()
+	eventually(t, func() bool {
+		_, err := w.Get(context.Background(), "team-a", "hook")
+		return apierrors.IsNotFound(err)
+	})
+}
+
+// A Secret deleted after the informer's GET but before its watch's start
+// version is in neither the GET nor the watch's opening replay. The informer
+// still drops it and reports the delete once.
+func TestWatcherDropsASecretDeletedBeforeItsWatchOpens(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	r.deleteBeforeOpen()
+	w := New(ctx, r.cs)
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	// The informer's GET saw the Secret; the delete may already have reached
+	// the store by the time the read looks.
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("first read: %v", err)
+	}
+	expectGone(t, w)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 500*time.Millisecond)
+	if got := r.watchCount(); got != 1 {
+		t.Errorf("open watches = %d, want 1", got)
+	}
+	if r.latestWatch().IsStopped() {
+		t.Error("the watch closed")
+	}
+	if got := r.gets.Load(); got != 2 {
+		t.Errorf("GETs = %d, want 2 (the read and the confirmation)", got)
+	}
+}
+
+// A watch that closes before anything but an add has moved its version opens
+// again at the most recent version, which is the same gap.
+func TestWatcherDropsASecretDeletedBeforeItsReWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	r.removeHook()
+	w := New(ctx, r.cs)
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsNotFound(err) {
+		t.Fatalf("first read: err = %v, want NotFound", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	opened := time.Now()
+	created := hookAt(hookUID, "2")
+	if err := r.cs.Tracker().Add(created); err != nil {
+		t.Fatal(err)
+	}
+	r.latestWatch().Add(created)
+	rec.expect(t, hookKey)
+	eventually(t, func() bool {
+		_, err := w.Get(ctx, "team-a", "hook")
+		return err == nil
+	})
+	if got := r.gets.Load(); got != 1 {
+		t.Errorf("GETs before the re-watch = %d, want 1 (an absent Secret needs no confirmation)", got)
+	}
+
+	r.deleteBeforeOpen()
+	time.Sleep(time.Until(opened.Add(time.Second)))
+	r.endWatch()
+	expectGone(t, w)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 500*time.Millisecond)
+	if got := r.watchCount(); got != 2 {
+		t.Errorf("open watches = %d, want 2", got)
+	}
+	if got := r.gets.Load(); got != 2 {
+		t.Errorf("GETs = %d, want 2 (the read and the re-watch's confirmation)", got)
+	}
+}
+
+// The watch a relist opens has the same gap after the relist's GET.
+func TestWatcherDropsASecretDeletedBeforeItsRelistWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	eventually(t, func() bool { return r.watchCount() == 1 })
+	r.latestWatch().Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "50"}})
+	r.expireOldVersions()
+	r.deleteBeforeOpen()
+	r.endWatch()
+	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 2 })
+	if r.expired.Load() < 1 {
+		t.Fatal("no watch expired, so the test did not exercise the relist")
+	}
+	expectGone(t, w)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 500*time.Millisecond)
+
+	// A Secret created again under the same name is a new object.
+	recreated := hookAt("hook-2", "3")
+	r.latestWatch().Add(recreated)
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 200*time.Millisecond)
+	eventually(t, func() bool {
+		sec, err := w.Get(ctx, "team-a", "hook")
+		return err == nil && sec.UID == "hook-2"
+	})
 }
 
 // hangingClient blocks the first Secret GET until release is closed, so the
