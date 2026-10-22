@@ -514,10 +514,11 @@ func (s *Server) agentWakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
 // through the same resolver as delivery, and retries the lookup at each
 // connect until it resolves (a Service not created yet answers NXDOMAIN). Go
 // does not cache lookups, so resolving at every connect would send every
-// check to the cluster DNS server. The lookup is bounded by
-// AgentConnectTimeout and each connect by wakeConnectTimeout. The sleep stops
-// at the deadline, so the wait ends at the capped wakeTimeout, plus at most
-// the one lookup or connect in flight when the deadline passes.
+// check to the cluster DNS server. Each check, the lookup and the connect
+// together, is bounded by AgentConnectTimeout, and each connect also by
+// wakeConnectTimeout. The sleep stops at the deadline, so the wait ends at
+// the capped wakeTimeout, plus at most the one check in flight when the
+// deadline passes.
 //
 // missed, when set, runs with ctx after each check that does not connect,
 // whether or not it tried, and an error from it ends the wait.
@@ -543,14 +544,18 @@ func (s *Server) waitAgentReachable(
 			readyAt = time.Now()
 		}
 		if waiter == nil || !readyAt.IsZero() || !waiter.seen() {
+			// One check, the lookup and the connect together, stays within
+			// AgentConnectTimeout, the term backgroundPipelineBound adds for
+			// the check in flight at the deadline.
+			checkCtx, cancel := context.WithTimeout(ctx, s.Config.AgentConnectTimeout)
 			if target == "" {
-				lookupCtx, cancel := context.WithTimeout(ctx, s.Config.AgentConnectTimeout)
-				if addrs, err := s.agentResolver().LookupIPAddr(lookupCtx, absoluteDialName(host)); err == nil && len(addrs) > 0 {
+				if addrs, err := s.agentResolver().LookupIPAddr(checkCtx, absoluteDialName(host)); err == nil && len(addrs) > 0 {
 					target = net.JoinHostPort(addrs[0].IP.String(), port)
 				}
-				cancel()
 			}
-			if target != "" && s.dialPodWait(ctx, target) {
+			reached := target != "" && s.dialPodWait(checkCtx, target)
+			cancel()
+			if reached {
 				return nil
 			}
 		}
@@ -588,7 +593,7 @@ func (s *Server) waitAgentReachable(
 }
 
 // dialPodWait makes one readiness connect to target, bounded by
-// wakeConnectTimeout, and reports whether it succeeded.
+// wakeConnectTimeout within ctx, and reports whether it succeeded.
 func (s *Server) dialPodWait(ctx context.Context, target string) bool {
 	dial := s.podWaitDial
 	if dial == nil {

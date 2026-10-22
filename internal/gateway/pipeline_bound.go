@@ -85,9 +85,10 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 // for as long as a tenant sets. It sums:
 //
 //   - the activator call and the capped wakeTimeout, plus one readiness
-//     lookup or connect, which can be in flight when the deadline passes.
-//     The lookup, bounded by gateway.agentDeliveryConnectTimeout, is the
-//     longer of the two (a connect is bounded by wakeConnectTimeout). This leg
+//     check, which can be in flight when the deadline passes. A check, the
+//     Service lookup and the connect together, is bounded by
+//     gateway.agentDeliveryConnectTimeout (the connect alone also by
+//     wakeConnectTimeout). This leg
 //     covers the one Pod wait any message gets: a wake, a wait for a Pod
 //     being created or resumed, or a wait after a refused connect, which
 //     takes the place of a retry delay. The activator call is the one call a

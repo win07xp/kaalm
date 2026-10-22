@@ -1184,6 +1184,88 @@ func TestWaitAgentReachable_DoesNotConnectWhileThePodIsNotReady(t *testing.T) {
 	}
 }
 
+// slowResolver answers with 127.0.0.1 after delay, or with the context's
+// error if it ends first.
+type slowResolver struct{ delay time.Duration }
+
+func (r slowResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	select {
+	case <-time.After(r.delay):
+		return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+	case <-ctx.Done():
+		return nil, &net.DNSError{Err: "i/o timeout", Name: host, IsTimeout: true}
+	}
+}
+
+// One check, the lookup and the connect together, takes at most
+// AgentConnectTimeout, so the wait ends within wakeTimeout plus
+// AgentConnectTimeout: the term backgroundPipelineBound adds for the check
+// in flight when the deadline passes.
+func TestWaitAgentReachable_OneCheckStaysWithinTheConnectTimeout(t *testing.T) {
+	dial := &countingDial{result: func(_ int, ctx context.Context) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	s := podWaitServer(nil, dial)
+	s.Config.AgentServiceHostOverride = "sup.team-a.svc.cluster.local"
+	s.AgentResolver = slowResolver{delay: 950 * time.Millisecond}
+
+	wakeTimeout := 50 * time.Millisecond
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(wakeTimeout), nil)
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("wait against a blackholed Service must time out")
+	}
+	if limit := wakeTimeout + s.Config.AgentConnectTimeout + 50*time.Millisecond; took > limit {
+		t.Errorf("wait ended after %v, want at most %v (wakeTimeout plus one AgentConnectTimeout)", took, limit)
+	}
+}
+
+// The confirm schedule is measured from Ready, not from the start of the
+// wait: a Pod that turns Ready after a long start is still confirmed at the
+// fast interval.
+func TestWaitAgentReachable_ConfirmsAtTheFastIntervalAfterALateReady(t *testing.T) {
+	t.Parallel()
+	tr := syncedTracker()
+	h := tr.Handler()
+	pod := agentPod("team-a", "sup", "sup-0", false)
+	h.OnAdd(pod, false)
+	var mu sync.Mutex
+	var dialedAt []time.Time
+	dial := &countingDial{result: func(n int, _ context.Context) (net.Conn, error) {
+		mu.Lock()
+		dialedAt = append(dialedAt, time.Now())
+		mu.Unlock()
+		if n == 1 {
+			return nil, syscall.ECONNREFUSED
+		}
+		return pipeConn(), nil
+	}}
+	s := podWaitServer(tr, dial)
+
+	done := make(chan error, 1)
+	go func() { done <- s.waitAgentReachable(context.Background(), podWaitAgent(20*time.Second), nil) }()
+	time.Sleep(wakePollFastWindow + 300*time.Millisecond)
+	h.OnUpdate(pod, agentPod("team-a", "sup", "sup-0", true))
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("wait = %v, want reachable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait did not end after the Pod turned Ready")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialedAt) != 2 {
+		t.Fatalf("made %d connects, want 2 (one refused, then success)", len(dialedAt))
+	}
+	if gap := dialedAt[1].Sub(dialedAt[0]); gap > wakePollFastInterval+200*time.Millisecond {
+		t.Errorf("second connect came %v after the first, want about %v", gap, wakePollFastInterval)
+	}
+}
+
 func TestAbsoluteDialName(t *testing.T) {
 	cases := map[string]string{
 		"sup.team-a.svc.cluster.local":  "sup.team-a.svc.cluster.local.",
