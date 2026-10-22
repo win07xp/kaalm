@@ -37,10 +37,10 @@ type SecretChangeSource interface {
 
 // secretChangeSource is the controller source for a referenced-Secret
 // watch: each change that changes reports enqueues the requests that
-// referrers returns for the Secret. The controller cannot list user-namespace Secrets, so the
-// watch rides on the per-Secret informers the reads already started. The
-// subscriber runs on the informer's handler goroutine, so referrers must do
-// only indexed cache lists.
+// referrers returns for the Secret. The controller cannot list
+// user-namespace Secrets, so the watch rides on the per-Secret informers
+// the reads already started. The subscriber runs on the informer's handler
+// goroutine, so referrers must do only indexed cache lists.
 func secretChangeSource(
 	changes SecretChangeSource,
 	referrers func(ctx context.Context, key types.NamespacedName) []reconcile.Request,
