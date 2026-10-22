@@ -70,7 +70,7 @@ const (
 	// Selector keys used when synthesizing NetworkPolicy peers.
 	labelKeyNamespaceName = "kubernetes.io/metadata.name"
 	labelKeyComponent     = "app.kubernetes.io/component"
-	labelKeyWorkload      = "kaalm.io/workload"
+	labelKeyWorkload      = kaalmv1beta1.LabelWorkload
 
 	schemeHTTPS = "https"
 
@@ -79,7 +79,7 @@ const (
 
 	// workloadAgent is the workload label value on agent Pods. It also selects
 	// the peers of the same-namespace ingress rule, so the two cannot drift.
-	workloadAgent = "agent"
+	workloadAgent = kaalmv1beta1.WorkloadAgent
 
 	// annotationPodSpecHash carries the derived-Pod-spec hash for drift
 	// detection (the Deployment pod-template-hash idiom). Never compare
@@ -523,7 +523,7 @@ func desiredPVC(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff e
 }
 
 // labelKeyAgent names the Agent a Pod belongs to.
-const labelKeyAgent = "kaalm.io/agent"
+const labelKeyAgent = kaalmv1beta1.LabelAgent
 
 // agentPodLabelKeys are the label keys agentPodLabels sets on every agent Pod.
 var agentPodLabelKeys = []string{labelKeyAgent, labelKeyWorkload}

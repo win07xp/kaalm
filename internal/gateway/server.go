@@ -100,7 +100,8 @@ type Config struct {
 	AgentReadTimeout time.Duration
 	// CallbackReadTimeout bounds each callback attempt (default 10s).
 	CallbackReadTimeout time.Duration
-	// AgentConnectTimeout is the hibernation-detection connect bound (1s).
+	// AgentConnectTimeout bounds each delivery connect and the Pod wait's
+	// Service name lookup (1s).
 	AgentConnectTimeout time.Duration
 	// SyncDeliveryDeadline bounds sync-mode wall-clock (default 30s).
 	SyncDeliveryDeadline time.Duration
@@ -214,6 +215,15 @@ type Server struct {
 	// Informers are the caches the request path depends on; /readyz fails
 	// until each one reports its initial sync. Empty means no cache (tests).
 	Informers []InformerSync
+
+	// PodReady follows agent Pods through the Pod watch, so a Pod wait
+	// connects once the Agent's Pod is Ready. nil means no Pod watch, and
+	// the wait polls.
+	PodReady *PodReadyTracker
+
+	// podWaitDial makes the Pod wait's readiness connects; nil means a
+	// net.Dialer. Tests inject a fake.
+	podWaitDial func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// draining is set when the shutdown sequence begins; /readyz then
 	// answers 503 so the Pod leaves the Service endpoints.

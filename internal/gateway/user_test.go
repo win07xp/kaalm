@@ -980,6 +980,210 @@ func TestWaitAgentReachable_RetriesTheLookupUntilTheServiceResolves(t *testing.T
 	}
 }
 
+// countingDial is a podWaitDial fake: it records each call and its duration,
+// and answers through result, which gets the call's number (from 1) and ctx.
+type countingDial struct {
+	mu        sync.Mutex
+	durations []time.Duration
+	result    func(n int, ctx context.Context) (net.Conn, error)
+}
+
+func (d *countingDial) dial(ctx context.Context, _, _ string) (net.Conn, error) {
+	d.mu.Lock()
+	n := len(d.durations) + 1
+	d.durations = append(d.durations, 0)
+	d.mu.Unlock()
+	start := time.Now()
+	conn, err := d.result(n, ctx)
+	d.mu.Lock()
+	d.durations[n-1] = time.Since(start)
+	d.mu.Unlock()
+	return conn, err
+}
+
+func (d *countingDial) calls() []time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]time.Duration(nil), d.durations...)
+}
+
+// pipeConn is a successful dial's connection.
+func pipeConn() net.Conn {
+	a, b := net.Pipe()
+	_ = b.Close()
+	return a
+}
+
+// podWaitServer is a gateway whose Pod wait connects to 127.0.0.1 through
+// dial, with the Pod watch tracker tr (nil for none).
+func podWaitServer(tr *PodReadyTracker, dial *countingDial) *Server {
+	s := NewServer(Config{
+		OperatorNamespace: "kaalm-system", AgentServiceHostOverride: "127.0.0.1",
+		AgentServicePortOverride: 1, AgentConnectTimeout: time.Second,
+	}, &fakeStore{}, NewTokenAuthenticator(&fakeReviewer{}), NewMemorySpend())
+	s.PodReady = tr
+	if dial != nil {
+		s.podWaitDial = dial.dial
+	}
+	return s
+}
+
+// A connect to an empty Service can get no answer at all: kube-proxy's
+// refusals are ICMP messages the node rate-limits, so a SYN past the burst
+// hangs. Each readiness connect is bounded at the fast poll interval, not at
+// AgentConnectTimeout, so a hung connect costs no more than one poll sleep.
+func TestWaitAgentReachable_ConnectIsBoundByTheFastInterval(t *testing.T) {
+	dial := &countingDial{result: func(_ int, ctx context.Context) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	s := podWaitServer(nil, dial)
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(700*time.Millisecond), nil)
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("wait against a blackholed Service must time out")
+	}
+	if took < 700*time.Millisecond || took >= time.Second {
+		t.Errorf("wait ended after %v, want between the 700ms wakeTimeout and 1s", took)
+	}
+	calls := dial.calls()
+	if len(calls) < 2 {
+		t.Errorf("made %d connects, want at least 2: one hung connect held the wait", len(calls))
+	}
+	for i, d := range calls {
+		if d > wakeConnectTimeout+100*time.Millisecond {
+			t.Errorf("connect %d lasted %v, want at most %v", i+1, d, wakeConnectTimeout)
+		}
+	}
+}
+
+// With a Pod watch, the wait makes no connect while the Agent's Pod is not
+// Ready, and connects as soon as the watch reports it Ready rather than at
+// the next poll.
+func TestWaitAgentReachable_ConnectsWhenThePodTurnsReady(t *testing.T) {
+	tr := syncedTracker()
+	h := tr.Handler()
+	pod := agentPod("team-a", "sup", "sup-0", false)
+	h.OnAdd(pod, false)
+	dial := &countingDial{result: func(int, context.Context) (net.Conn, error) { return pipeConn(), nil }}
+	s := podWaitServer(tr, dial)
+
+	done := make(chan error, 1)
+	go func() { done <- s.waitAgentReachable(context.Background(), podWaitAgent(5*time.Second), nil) }()
+	time.Sleep(300 * time.Millisecond)
+	if n := len(dial.calls()); n != 0 {
+		t.Fatalf("made %d connects before the Pod was Ready, want 0", n)
+	}
+	readyAt := time.Now()
+	h.OnUpdate(pod, agentPod("team-a", "sup", "sup-0", true))
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("wait = %v, want reachable", err)
+		}
+		if took := time.Since(readyAt); took >= 100*time.Millisecond {
+			t.Errorf("wait ended %v after Ready, want under 100ms", took)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait did not end after the Pod turned Ready")
+	}
+	if n := len(dial.calls()); n != 1 {
+		t.Errorf("made %d connects, want 1", n)
+	}
+}
+
+// With a synced watch that shows no Pod for the Agent (the Pod is not
+// created yet), the wait connects on the poll schedule as it does without a
+// watch.
+func TestWaitAgentReachable_PollsWhenNoPodIsKnown(t *testing.T) {
+	s := podWaitServer(syncedTracker(), nil)
+	port, listen := holdPort(t)
+	s.Config.AgentServicePortOverride = int32(port)
+
+	var ln net.Listener
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		time.Sleep(agentBackAfter)
+		l, err := listen()
+		if err != nil {
+			t.Errorf("agent could not listen on %d: %v", port, err)
+			return
+		}
+		ln = l
+	}()
+	t.Cleanup(func() {
+		<-started
+		if ln != nil {
+			_ = ln.Close()
+		}
+	})
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil)
+	if err != nil {
+		t.Fatalf("wait = %v, want reachable", err)
+	}
+	if took := time.Since(start); took >= time.Second {
+		t.Errorf("wait took %v for an agent listening after %v, want the fast poll", took, agentBackAfter)
+	}
+}
+
+// Pod Ready does not prove the Service routes yet: the endpoint data path
+// can refuse connects for a few hundred milliseconds. The wait retries at
+// the fast interval after Ready.
+func TestWaitAgentReachable_RetriesAfterReadyUntilTheServiceRoutes(t *testing.T) {
+	tr := syncedTracker()
+	tr.Handler().OnAdd(agentPod("team-a", "sup", "sup-0", true), false)
+	dial := &countingDial{result: func(n int, _ context.Context) (net.Conn, error) {
+		if n <= 2 {
+			return nil, syscall.ECONNREFUSED
+		}
+		return pipeConn(), nil
+	}}
+	s := podWaitServer(tr, dial)
+
+	start := time.Now()
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(10*time.Second), nil)
+	took := time.Since(start)
+	if err != nil {
+		t.Fatalf("wait = %v, want reachable", err)
+	}
+	if n := len(dial.calls()); n != 3 {
+		t.Errorf("made %d connects, want 3 (two refused, then success)", n)
+	}
+	if took < 450*time.Millisecond || took >= 750*time.Millisecond {
+		t.Errorf("wait took %v, want about 500ms (two retries at the fast interval)", took)
+	}
+}
+
+// While the Agent's Pod exists but is not Ready, the wait makes no connect,
+// and still runs the hibernation re-check at each check.
+func TestWaitAgentReachable_DoesNotConnectWhileThePodIsNotReady(t *testing.T) {
+	tr := syncedTracker()
+	tr.Handler().OnAdd(agentPod("team-a", "sup", "sup-0", false), false)
+	dial := &countingDial{result: func(int, context.Context) (net.Conn, error) { return pipeConn(), nil }}
+	s := podWaitServer(tr, dial)
+	var missed atomic.Int32
+
+	err := s.waitAgentReachable(context.Background(), podWaitAgent(600*time.Millisecond),
+		func(context.Context) error { missed.Add(1); return nil })
+	if err == nil {
+		t.Fatal("wait for a Pod that never turns Ready must time out")
+	}
+	if n := len(dial.calls()); n != 0 {
+		t.Errorf("made %d connects while the Pod was not Ready, want 0", n)
+	}
+	if missed.Load() == 0 {
+		t.Error("hibernation re-check never ran while the Pod was not Ready")
+	}
+	if got := len(tr.waiters[agentKey{namespace: "team-a", name: "sup"}]); got != 0 {
+		t.Errorf("tracker holds %d waiters after the wait ended, want 0", got)
+	}
+}
+
 func TestAbsoluteDialName(t *testing.T) {
 	cases := map[string]string{
 		"sup.team-a.svc.cluster.local":  "sup.team-a.svc.cluster.local.",

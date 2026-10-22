@@ -307,6 +307,7 @@ func main() {
 	server.Metrics = gateway.NewMetrics(metrics.Registry)
 	server.Recorder = eventrec.Bounded(cl.GetEventRecorder("kaalm-gateway"))
 	server.Informers = requestPathInformers(cl.GetCache(), logger)
+	server.PodReady = podReadyTracker(cl.GetCache(), logger)
 
 	// Prometheus metrics on a dedicated unauthenticated in-cluster port.
 	go func() {
@@ -476,6 +477,25 @@ func requestPathInformers(c cache.Cache, logger *slog.Logger) []gateway.Informer
 		out = append(out, gateway.InformerSync{Name: o.name, HasSynced: informer.HasSynced})
 	}
 	return out
+}
+
+// podReadyTracker feeds the Pod wait's tracker from the Pod informer the
+// request path already holds, so the wait needs no watch of its own.
+// Registered before the cache starts, the handler gets the initial Pods as
+// Adds, and the tracker counts as synced once they are delivered. When the
+// handler cannot be registered, the tracker stays unsynced and waits poll.
+func podReadyTracker(c cache.Cache, logger *slog.Logger) *gateway.PodReadyTracker {
+	tracker := gateway.NewPodReadyTracker()
+	informer, err := c.GetInformer(context.Background(), &corev1.Pod{}, cache.BlockUntilSynced(false))
+	if err == nil {
+		var reg toolscache.ResourceEventHandlerRegistration
+		if reg, err = informer.AddEventHandler(tracker.Handler()); err == nil {
+			tracker.Synced = reg.HasSynced
+			return tracker
+		}
+	}
+	logger.Warn("Pod watch unavailable to the Pod wait; waits poll", "error", err)
+	return tracker
 }
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".

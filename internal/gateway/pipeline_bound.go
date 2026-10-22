@@ -37,6 +37,14 @@ const wakePollFastInterval = 250 * time.Millisecond
 // check every wakePollInterval adds little delay.
 const wakePollFastWindow = 5 * time.Second
 
+// wakeConnectTimeout bounds each readiness connect of a Pod wait. Until the
+// Pod is Ready, kube-proxy answers a connect to the empty Service with an
+// ICMP port unreachable that the node rate-limits (net.ipv4.icmp_ratelimit,
+// burst 6), so a SYN past the burst gets no answer. A hung connect must cost
+// no more than a poll sleep, or a wake pays a full AgentConnectTimeout after
+// the Pod turns Ready.
+const wakeConnectTimeout = wakePollFastInterval
+
 // wakePollDelay is the wait before the next readiness connect, elapsed into
 // a Pod wait.
 func wakePollDelay(elapsed time.Duration) time.Duration {
@@ -77,7 +85,9 @@ func retryScheduleWorstCase(backoff []time.Duration, readTimeout time.Duration) 
 // for as long as a tenant sets. It sums:
 //
 //   - the activator call and the capped wakeTimeout, plus one readiness
-//     connect, which can be in flight when the deadline passes. This leg
+//     lookup or connect, which can be in flight when the deadline passes.
+//     The lookup, bounded by gateway.agentDeliveryConnectTimeout, is the
+//     longer of the two (a connect is bounded by wakeConnectTimeout). This leg
 //     covers the one Pod wait any message gets: a wake, a wait for a Pod
 //     being created or resumed, or a wait after a refused connect, which
 //     takes the place of a retry delay. The activator call is the one call a
