@@ -222,6 +222,8 @@ func platformErrorMessage(errType string, err error) string {
 		return err.Error()
 	case errResponseTooLarge:
 		return "the agent's response exceeded the gateway's size limit"
+	case errAgentNotReady:
+		return "the agent is starting and has too many messages waiting; try again shortly"
 	default:
 		return "the agent could not be reached or returned an error"
 	}

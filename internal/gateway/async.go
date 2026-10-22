@@ -257,7 +257,7 @@ func (s *Server) runAsyncPipeline(
 			s.Metrics.ResponseTooLarge(agent.Namespace, "async")
 		}
 		message := err.Error()
-		retryable := errType == errControllerDown
+		retryable := errType == errControllerDown || errType == errAgentNotReady
 		payload, _ = json.Marshal(map[string]any{
 			"requestId": requestID, "channelPath": channel.Spec.Path(),
 			"error":    map[string]any{"type": errType, "message": message, "retryable": retryable},

@@ -130,6 +130,10 @@ gateway:
   # hold the gateway. Must be positive, or the gateway exits at startup. Keep
   # it well under the 1-hour polling-record TTL.
   maxWakeTimeout: 15m
+  # Most messages one gateway replica holds waiting for one Agent's Pod at
+  # once (the gateway's --max-pod-waits-per-agent). The next message gets
+  # 503 agent_not_ready. Must be positive, or the gateway exits at startup.
+  maxPodWaitsPerAgent: 100
   # Per-attempt upstream LLM-provider bound (the gateway's --upstream-timeout).
   # It sets two bounds: the wait for the first response byte, then the
   # mid-stream idle-bytes bound between response body reads. A stream that

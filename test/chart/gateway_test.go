@@ -170,6 +170,26 @@ func TestGateway_MaxWakeTimeoutReachesFlag(t *testing.T) {
 	}
 }
 
+// gateway.maxPodWaitsPerAgent reaches the gateway's --max-pod-waits-per-agent
+// flag.
+func TestGateway_MaxPodWaitsPerAgentReachesFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"default", nil, "--max-pod-waits-per-agent=100"},
+		{"custom", []string{"--set", "gateway.maxPodWaitsPerAgent=7"}, "--max-pod-waits-per-agent=7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := renderGatewayArgs(t, tc.args...)
+			if !slices.Contains(args, tc.want) {
+				t.Errorf("gateway args %v do not contain %s", args, tc.want)
+			}
+		})
+	}
+}
+
 // gateway.mcpMaxBodyBytes and gateway.mcpUpstreamTimeout are the tool
 // broker's own body cap and whole-call timeout, separate from the LLM proxy's.
 func TestGateway_MCPLimitsReachGatewayFlags(t *testing.T) {

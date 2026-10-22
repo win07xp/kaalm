@@ -108,6 +108,9 @@ type Config struct {
 	// MaxWakeTimeout caps the wakeTimeout the gateway applies to any wake,
 	// whatever the Agent or its class sets (zero means the 15m default).
 	MaxWakeTimeout time.Duration
+	// MaxPodWaitsPerAgent is the most Pod waits one replica holds for one
+	// Agent at once, counted in awaitPod (zero means the default 100).
+	MaxPodWaitsPerAgent int
 	// DeliveryBackoff is the agent-delivery retry schedule (1s, 5s, 25s).
 	DeliveryBackoff []time.Duration
 	// CallbackBackoff is the callback retry schedule (1s, 5s, 25s).
@@ -224,6 +227,11 @@ type Server struct {
 	// podWaitDial makes the Pod wait's readiness connects; nil means a
 	// net.Dialer. Tests inject a fake.
 	podWaitDial func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// podWaits counts the Pod waits in progress per Agent on this replica.
+	// awaitPod takes and frees the slots, and an entry is deleted at zero.
+	podWaitsMu sync.Mutex
+	podWaits   map[agentKey]int
 
 	// draining is set when the shutdown sequence begins; /readyz then
 	// answers 503 so the Pod leaves the Service endpoints.

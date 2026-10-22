@@ -268,6 +268,25 @@ func TestValidateMaxWakeTimeout(t *testing.T) {
 	}
 }
 
+// A zero or negative cap of Pod waits per Agent is refused at startup; the
+// flag defaults to 100.
+func TestValidateMaxPodWaitsPerAgent(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		if err := validateMaxPodWaitsPerAgent(n); err == nil {
+			t.Errorf("validateMaxPodWaitsPerAgent(%d) = nil, want an error", n)
+		}
+	}
+	for _, n := range []int{1, 100} {
+		if err := validateMaxPodWaitsPerAgent(n); err != nil {
+			t.Errorf("validateMaxPodWaitsPerAgent(%d) = %v, want nil", n, err)
+		}
+	}
+	f := registerFlags(flag.NewFlagSet("gateway", flag.ContinueOnError))
+	if f.maxPodWaitsPerAgent != 100 {
+		t.Errorf("--max-pod-waits-per-agent default = %d, want 100", f.maxPodWaitsPerAgent)
+	}
+}
+
 // The request-path kinds are served from the cache without a deep copy;
 // the options that keep Secrets out of the cache and scope ConfigMaps
 // stay as they were.

@@ -54,6 +54,7 @@ spec:
             - --max-response-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxResponseBodyBytes }}
             - --sync-delivery-deadline={{ .Values.gateway.syncDeliveryDeadline }}
             - --max-wake-timeout={{ .Values.gateway.maxWakeTimeout }}
+            - --max-pod-waits-per-agent={{ .Values.gateway.maxPodWaitsPerAgent }}
             - --upstream-timeout={{ .Values.gateway.providerFirstByteTimeout }}
             - --mcp-max-body-bytes={{ include "kaalm.bytes" .Values.gateway.mcpMaxBodyBytes }}
             - --mcp-upstream-timeout={{ .Values.gateway.mcpUpstreamTimeout }}
