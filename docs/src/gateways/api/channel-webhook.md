@@ -49,6 +49,7 @@ Sync mode (`spec.webhook.responseMode: sync`, the default) answers `200` with th
 | 413 | `request_too_large` | The body exceeds `gateway.maxMessageBodyBytes` |
 | 413 | `response_too_large` | The reply exceeds `gateway.maxResponseBodyBytes` (default 900 KiB) |
 | 502 | `delivery_failed` | The Agent does not exist, every delivery attempt failed, or the Agent's Pod did not become reachable within `wakeTimeout` while the message waited |
+| 503 | `agent_not_ready` | The Agent's Pod is not reachable and this gateway replica already holds its cap of waiting messages ([User Gateway error responses](errors.md#user-gateway-error-responses)); `Retry-After: 5` |
 | 504 | `wake_timeout` | The hibernated Agent did not become reachable within `wakeTimeout` |
 | 504 | `controller_unavailable` | The Agent is hibernated and the activator is unreachable or not configured; `Retry-After: 5` |
 | 504 | `sync_deadline_exceeded` | The request outlived `gateway.syncDeliveryDeadline` |
@@ -73,4 +74,4 @@ Before the `202`, the inbound `POST` behaves as in sync mode:
 
 - The `400`, `401`, and `413 request_too_large` rows apply unchanged, and so does the `502` for an Agent that does not exist. Auth, the body cap, `fromBody` parsing, and the Agent lookup run on every request.
 - Two checks run after normalization and can answer `503 internal_unavailable` with `Retry-After: 5`: the channel already holds `spec.webhook.maxPendingAsyncResponses` (default 100) pending responses, or the polling record could not be created. A `202` therefore always implies a record a poll can find.
-- `413 response_too_large`, the `502` for failed delivery attempts, and the `504` rows cannot reach the inbound caller, because the Agent has not been contacted when the `202` is sent. They are delivered later by callback or polling.
+- `413 response_too_large`, the `502` for failed delivery attempts, `503 agent_not_ready`, and the `504` rows cannot reach the inbound caller, because the Agent has not been contacted when the `202` is sent. They are delivered later by callback or polling.

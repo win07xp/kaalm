@@ -166,6 +166,10 @@ reply is dropped and the channel's `PlatformConnected` condition reports
 - `DispatchFailed` or `AgentNotReady`: the agent did not answer. The person
   sees the error as the bot's reply rather than silence. The reply starts with
   the error type, such as `delivery_failed` or `wake_timeout`.
+- A reply that starts with `agent_not_ready`: the gateway already holds its
+  limit of messages waiting for the starting agent. The person sends the
+  command again in a few seconds. See
+  [Activation and activity tracking](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/user/activation-and-activity.md#the-cap-on-waits-per-agent).
 
 A command Discord shows as "The application did not respond" never reached
 the gateway, or reached it after Discord's 3-second window. Check the
