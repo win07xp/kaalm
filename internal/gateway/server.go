@@ -100,8 +100,8 @@ type Config struct {
 	AgentReadTimeout time.Duration
 	// CallbackReadTimeout bounds each callback attempt (default 10s).
 	CallbackReadTimeout time.Duration
-	// AgentConnectTimeout bounds each delivery connect and the Pod wait's
-	// Service name lookup (1s).
+	// AgentConnectTimeout bounds each delivery connect and each Pod wait
+	// check, the Service name lookup and the connect together (1s).
 	AgentConnectTimeout time.Duration
 	// SyncDeliveryDeadline bounds sync-mode wall-clock (default 30s).
 	SyncDeliveryDeadline time.Duration
