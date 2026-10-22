@@ -273,15 +273,16 @@ func main() {
 	// One signal context serves the manager and the Secret watcher, so the
 	// watcher's informers stop when the manager does.
 	ctx := ctrl.SetupSignalHandler()
-	// Secrets in user namespaces (rule 23 pull Secrets, channel credentials)
-	// are served from one GET-backed, name-filtered watch per referenced
-	// Secret. The controller holds get and watch on each through a
+	// Secrets in user namespaces (rule 23 pull Secrets, rule 48 env
+	// Secrets, channel credentials) are served from one GET-backed,
+	// name-filtered watch per referenced Secret. The controller holds get and watch on each through a
 	// resourceNames-scoped Role and never list, so a namespace informer is
 	// out of reach; a live read per validation pass throttled the client at
 	// a few hundred channels. The clientset uses the manager's rest config,
 	// so --client-qps and --client-burst apply to it, in a token bucket of
-	// its own. The watcher also tells the channel reconciler when a Secret a
-	// channel references changes, so the channel re-runs at once.
+	// its own. The watcher also tells the Agent, AgentTask, and AgentChannel
+	// reconcilers when a Secret they read changes, so the workload or
+	// channel re-runs at once.
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to build the Secret watcher's clientset")
@@ -410,6 +411,7 @@ func main() {
 		Recorder:                eventrec.Bounded(mgr.GetEventRecorder("agent-controller")),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            secretSource,
+		SecretChanges:           secretWatcher,
 		Activity:                activityClient,
 		CertLifetime:            certLifetime,
 		DNS:                     dnsSelector,
@@ -424,6 +426,7 @@ func main() {
 		Recorder:                eventrec.Bounded(mgr.GetEventRecorder("agenttask-controller")),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            secretSource,
+		SecretChanges:           secretWatcher,
 		CertLifetime:            certLifetime,
 		DNS:                     dnsSelector,
 		FQDNSupport:             fqdnProbe.Supported,

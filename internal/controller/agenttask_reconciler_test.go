@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -1015,6 +1016,50 @@ func TestTask_ExitCodeSucceedsBeforeReady(t *testing.T) {
 	expectTaskPhase(t, "t-early", kaalmv1beta1.TaskSucceeded)
 }
 
+// A change to a Secret a settled task's env reads re-runs the task, but the
+// pass only handles the TTL: the task stays Succeeded and gets no new Pod.
+func TestTask_SettledTaskIgnoresSecretChange(t *testing.T) {
+	mkWorkloadClass(t, "tc-settledsec", nil)
+	mkEnvSecret(t, "t-settledsec-creds", true)
+	mkTask(t, "t-settledsec", "tc-settledsec", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.Condition = completionExitCode
+		task.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "t-settledsec-creds", false)}
+	})
+	eventually(t, func() error { return markCertReadyErr("t-settledsec") })
+	eventually(t, func() error {
+		if taskPod(t, "t-settledsec") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	pod := taskPod(t, "t-settledsec")
+	pod.Status.Phase = corev1.PodSucceeded
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "agent",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+	}}
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-settledsec", kaalmv1beta1.TaskSucceeded)
+	podName := getTask(t, "t-settledsec").Status.PodName
+
+	setEnvSecretLabel(t, "t-settledsec-creds", false)
+	consistently(t, 2*time.Second, func() error {
+		task := getTask(t, "t-settledsec")
+		if task.Status.Phase != kaalmv1beta1.TaskSucceeded {
+			return errString("a Secret change moved a settled task to " + string(task.Status.Phase))
+		}
+		if task.Status.PodName != podName {
+			return errString("podName changed to " + task.Status.PodName)
+		}
+		if p := taskPod(t, "t-settledsec"); p != nil && p.Name != podName {
+			return errString("a Secret change created Pod " + p.Name)
+		}
+		return nil
+	})
+}
+
 // ---- AgentTask driveProvisioning: a fatal image error fails immediately ----
 
 func TestTask_InvalidImageNameFailsImmediately(t *testing.T) {
@@ -1606,4 +1651,19 @@ func TestTask_EnvSecretMissingBlocks(t *testing.T) {
 	if taskPod(t, "t-envmiss") != nil {
 		t.Fatal("a Pod was created for a missing env Secret")
 	}
+}
+
+func TestTasksForSecret(t *testing.T) {
+	checkWorkloadsForSecret(t, &kaalmv1beta1.AgentTask{},
+		func(ns, name, class, envSecret string) client.Object {
+			task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+				Spec: kaalmv1beta1.AgentTaskSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: class}}}
+			if envSecret != "" {
+				task.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", envSecret, false)}
+			}
+			return task
+		},
+		func(c client.Client, key types.NamespacedName) []reconcile.Request {
+			return (&AgentTaskReconciler{Client: c}).tasksForSecret(context.Background(), key)
+		})
 }

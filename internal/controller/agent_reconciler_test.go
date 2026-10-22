@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -382,6 +383,42 @@ func TestAgent_ImagePullSecretMissing(t *testing.T) {
 		t.Fatalf("create secret: %v", err)
 	}
 	expectAgentReadyReason(t, "pull-agent", "CertificateNotReady")
+}
+
+// A pull Secret named by the class and deleted while the Agent runs reaches
+// the Agent through the Secret watch, mapped by the class: no Agent edit and
+// no periodic pass (idle detection is off). The running Pod is kept.
+func TestAgent_PullSecretDeletedWhileRunning(t *testing.T) {
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wc-pullrun-creds", Namespace: "default"}}
+	if err := testClient.Create(ctxT(), sec); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	mkWorkloadClass(t, "wc-pullrun", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "wc-pullrun-creds"}}
+	})
+	mkWorkloadAgent(t, "pullrun-agent", "wc-pullrun", nil)
+	markCertReady(t, "pullrun-agent")
+	eventually(t, func() error {
+		if agentPod(t, "pullrun-agent") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	markPodReady(t, agentPod(t, "pullrun-agent"))
+	expectAgentPhase(t, "pullrun-agent", kaalmv1beta1.AgentRunning)
+	uid := agentPod(t, "pullrun-agent").UID
+
+	if err := testClient.Delete(ctxT(), sec); err != nil {
+		t.Fatalf("delete secret: %v", err)
+	}
+	expectAgentReadyReason(t, "pullrun-agent", kaalmv1beta1.ReasonImagePullSecretMissing)
+	consistently(t, 2*time.Second, func() error {
+		pod := agentPod(t, "pullrun-agent")
+		if pod == nil || pod.UID != uid {
+			return errString("the running Pod was replaced or removed")
+		}
+		return nil
+	})
 }
 
 // The rule 23 read runs under a Role scoped to the class's Secret names: the
@@ -1606,10 +1643,9 @@ func TestAgent_EnvSecretCheckLeavesRunningPod(t *testing.T) {
 	expectAgentPhase(t, "envrun-agent", kaalmv1beta1.AgentRunning)
 	uid := agentPod(t, "envrun-agent").UID
 
-	// Secrets are unwatched: a Running Agent sees the change on its next
-	// periodic pass, which the touch brings forward.
+	// The Running Agent has idle detection off, so no periodic pass runs:
+	// the Secret watch alone must bring the label removal to the Agent.
 	setEnvSecretLabel(t, "envrun-creds", false)
-	touchAgent(t, "envrun-agent")
 	expectAgentReadyReason(t, "envrun-agent", kaalmv1beta1.ReasonSecretNotOptedIn)
 	consistently(t, 2*time.Second, func() error {
 		pod := agentPod(t, "envrun-agent")
@@ -1736,4 +1772,19 @@ func TestAgent_LongMissingProviderNameFitsReady(t *testing.T) {
 	})
 	expectAgentDegradedBounded(t, "long-missing-prov-agent",
 		kaalmv1beta1.ReasonClassConstraintViolation, "(first 256 of 40000 bytes) does not exist")
+}
+
+func TestAgentsForSecret(t *testing.T) {
+	checkWorkloadsForSecret(t, &kaalmv1beta1.Agent{},
+		func(ns, name, class, envSecret string) client.Object {
+			ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+				Spec: kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: class}}}
+			if envSecret != "" {
+				ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", envSecret, false)}
+			}
+			return ag
+		},
+		func(c client.Client, key types.NamespacedName) []reconcile.Request {
+			return (&AgentReconciler{Client: c}).agentsForSecret(context.Background(), key)
+		})
 }

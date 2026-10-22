@@ -45,7 +45,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
@@ -81,12 +80,6 @@ type ReplicaChannelHealth struct {
 // ChannelHealthClient fans the health query out to the gateway fleet.
 type ChannelHealthClient interface {
 	NamespaceChannelHealth(ctx context.Context, namespace string) (reachable []ReplicaChannelHealth, total int, err error)
-}
-
-// SecretChangeSource reports changes to the Secrets it watches. A
-// secretwatch.Watcher satisfies it.
-type SecretChangeSource interface {
-	Subscribe(fn func(types.NamespacedName))
 }
 
 // AgentChannelReconciler validates channels, scopes credential access, reports
@@ -992,21 +985,7 @@ func (r *AgentChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent)).
 		Watches(&kaalmv1beta1.AgentChannel{}, r.pathSiblingHandler())
 	if r.SecretChanges != nil {
-		// The controller cannot list user-namespace Secrets, so the watch
-		// rides on the per-Secret informers the reads already started.
-		b = b.WatchesRawSource(source.Func(func(
-			ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request],
-		) error {
-			r.SecretChanges.Subscribe(func(key types.NamespacedName) {
-				if ctx.Err() != nil {
-					return
-				}
-				for _, req := range r.channelsForSecret(ctx, key) {
-					q.Add(req)
-				}
-			})
-			return nil
-		}))
+		b = b.WatchesRawSource(secretChangeSource(r.SecretChanges, r.channelsForSecret))
 	}
 	return b.Complete(r)
 }
