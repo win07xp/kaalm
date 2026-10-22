@@ -55,7 +55,7 @@ func wakePollDelay(elapsed time.Duration) time.Duration {
 }
 
 // wakeConfirmQuickInterval is the wait between the first
-// wakeConfirmQuickInterval spaces the first connects after the Agent's Pod turns Ready. The
+// wakeConfirmQuickTries connects after the Agent's Pod turns Ready. The
 // connect made at the Ready event is usually refused, because the Service
 // routes a few to a few hundred milliseconds after Ready, so short steps
 // deliver soon after it routes.
