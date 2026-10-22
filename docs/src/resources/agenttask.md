@@ -137,7 +137,7 @@ A task cannot share its name with an Agent in the same namespace ([An Agent and 
 
 ### Env Secrets must opt in
 
-Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and re-checks every 30 seconds. The exact check and its timing are under [rule 48](validation/references-and-access.md).
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and a change to the Secret re-runs the task at once. The exact check and its timing are under [rule 48](validation/references-and-access.md).
 
 ### Completion modes
 

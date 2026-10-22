@@ -39,7 +39,7 @@ partition "5 to 7: hibernation, Pod creation checks, Certificate" {
     :drive or hold,\npass ends;
     kill
   elseif (class CIDRs valid; image,\nexistingClaim, pull Secrets,\nenv Secrets, handler\nConfigMap present?) then (no)
-    :Ready=False; requeue 30s\nfor an unwatched object;
+    :Ready=False; requeue 30s;
     kill
   elseif (Certificate not Ready,\nno Pod?) then (yes)
     :Provisioning\n(Resuming if woken)\nrequeue 5s;

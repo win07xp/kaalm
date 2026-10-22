@@ -146,14 +146,13 @@ Secret also blocks the workload. A `secretKeyRef` with no name gives reason
 order, so fixing one can show the next. A labeled Secret that lacks the
 referenced key passes this check, and the Pod shows `CreateContainerConfigError`.
 
-The workload re-checks every 30 seconds, so it recovers on the next pass after
-you label the Secret. An Agent that already has a running Pod keeps the Pod and
-its phase while `Ready` is `False`, and the controller makes no replacement Pod
-(for a spec change, a lost Pod, or a wake) until you label the Secret or remove
-the reference. It also makes no idle or hibernation transition. A `Pending` or
-retrying AgentTask waits without failing, and a finished AgentTask needs no
-label. Who may label a Secret depends on your
-platform team: see [Managing team access](../platform/managing-access.md#label-the-secrets-a-workload-reads).
+The workload recovers as soon as you label the Secret. An Agent that already
+has a running Pod keeps the Pod and its phase while `Ready` is `False`, and the
+controller makes no replacement Pod (for a spec change, a lost Pod, or a wake)
+until you label the Secret or remove the reference. It also makes no idle or
+hibernation transition. A `Pending` or retrying AgentTask waits without
+failing, and a finished AgentTask needs no label. Who may label a Secret
+depends on your platform team: see [Managing team access](../platform/managing-access.md#label-the-secrets-a-workload-reads).
 
 ## Channel is `Ready=False` with `SecretNotOptedIn` or `CallbackHostNotApproved`
 
