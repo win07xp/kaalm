@@ -275,12 +275,13 @@ func main() {
 	ctx := ctrl.SetupSignalHandler()
 	// Secrets in user namespaces (rule 23 pull Secrets, rule 48 env
 	// Secrets, channel credentials) are served from one GET-backed,
-	// name-filtered watch per referenced Secret. The controller holds get and watch on each through a
-	// resourceNames-scoped Role and never list, so a namespace informer is
-	// out of reach; a live read per validation pass throttled the client at
-	// a few hundred channels. The clientset uses the manager's rest config,
-	// so --client-qps and --client-burst apply to it, in a token bucket of
-	// its own. The watcher also tells the Agent, AgentTask, and AgentChannel
+	// name-filtered watch per referenced Secret. The controller holds get
+	// and watch on each through a resourceNames-scoped Role and never
+	// list, so a namespace informer is out of reach; a live read per
+	// validation pass throttled the client at a few hundred channels. The
+	// clientset uses the manager's rest config, so --client-qps and
+	// --client-burst apply to it, in a token bucket of its own. The
+	// watcher also tells the Agent, AgentTask, and AgentChannel
 	// reconcilers when a Secret they read changes, so the workload or
 	// channel re-runs at once.
 	clientset, err := kubernetes.NewForConfig(restCfg)
