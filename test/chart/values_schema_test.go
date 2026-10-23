@@ -95,17 +95,32 @@ func TestValuesSchema_RejectsUnknownKey(t *testing.T) {
 	schemaFails(t, "replica", "--set", "controller.replica=3")
 }
 
-// Every subject needs kind and name, and takes no other fields than
-// rbac.authorization.k8s.io/v1 Subject has.
+// platformAdmins renders values that set rbac.personas.platformAdmins to the
+// given YAML list.
+func platformAdmins(t *testing.T, list string) []string {
+	t.Helper()
+	return valuesFile(t, "rbac:\n  personas:\n    enabled: true\n    platformAdmins:\n"+list)
+}
+
+// Every subject needs kind and name, and kind is User, Group, or
+// ServiceAccount. Each case breaks one rule only.
 func TestValuesSchema_SubjectNeedsKindAndName(t *testing.T) {
-	schemaFails(t, "platformAdmins", valuesFile(t, `
-rbac:
-  personas:
-    enabled: true
-    platformAdmins:
-      - kind: Group
-        apigroup: x
-`)...)
+	for name, list := range map[string]string{
+		"no name":      "      - kind: Group\n",
+		"no kind":      "      - name: x\n",
+		"unknown kind": "      - kind: Role\n        name: x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			schemaFails(t, "platformAdmins", platformAdmins(t, list)...)
+		})
+	}
+	renders(t, platformAdmins(t, "      - kind: Group\n        name: x\n")...)
+}
+
+// A subject takes no fields other than rbac.authorization.k8s.io/v1 Subject
+// has, so a misspelled field fails.
+func TestValuesSchema_SubjectRejectsUnknownField(t *testing.T) {
+	schemaFails(t, "platformAdmins", platformAdmins(t, "      - kind: Group\n        name: x\n        apigroup: x\n")...)
 }
 
 // developers and namespaceSecretsAdmins map a namespace to a subject list,
@@ -143,6 +158,23 @@ func TestValuesSchema_SetDeliversFloatsAsStrings(t *testing.T) {
 			t.Errorf("gateway args lack %q: %v", want, args)
 		}
 	}
+	// Go's ParseFloat reads a leading dot and an exponent too.
+	for _, ratio := range []string{".5", "1e-3", "5.E-1"} {
+		renders(t,
+			"--set", "gateway.tracing.otlpEndpoint=http://collector:4318",
+			"--set", "gateway.tracing.sampleRatio="+ratio,
+		)
+	}
+	schemaFails(t, "sampleRatio", "--set", "gateway.tracing.sampleRatio=half")
+}
+
+// A duration is a Go duration string. Zero is the one integer Go reads as a
+// duration, and the gateway documents zero for several of its durations.
+func TestValuesSchema_Durations(t *testing.T) {
+	renders(t, "--set", "gateway.mcpUpstreamTimeout=0")
+	renders(t, "--set", "gateway.channelHealthWindow=0")
+	renders(t, "--set", "gateway.mcpUpstreamTimeout=90s")
+	schemaFails(t, "mcpUpstreamTimeout", "--set", "gateway.mcpUpstreamTimeout=30")
 }
 
 // A null deletes a default key, and a null namespace placeholder renders no
