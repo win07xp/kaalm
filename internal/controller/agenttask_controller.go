@@ -981,11 +981,27 @@ func podMountsClaim(pod *corev1.Pod, claim string) bool {
 // (spec.secretName), which the Pod mounts. An existing Certificate is never
 // updated, so it keeps the Secret name it was created with. While the task
 // has a live Pod, restoreTaskChildren calls it too and ignores readiness.
+//
+// When taskCertificateName is missing it reads legacyTaskCertificateName: a
+// Certificate there that the task controls is the task's own from before the
+// rename and is used as is, since a second Certificate for the same Secret
+// would make cert-manager re-issue it in turns. One the task does not
+// control (an Agent's of the same name, or a foreign one) is not the task's
+// and is left alone. The legacy read is a cache hit and happens only while
+// the new name is missing.
 func (r *AgentTaskReconciler) ensureTaskCertificate(ctx context.Context, task *kaalmv1beta1.AgentTask) (string, bool, error) {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: task.Namespace, Name: taskCertificateName(task.Name)}
 	if err := r.Get(ctx, key, &cert); err != nil {
 		if !apierrors.IsNotFound(err) {
+			return "", false, err
+		}
+		var legacy cmapi.Certificate
+		legacyKey := types.NamespacedName{Namespace: task.Namespace, Name: legacyTaskCertificateName(task.Name)}
+		switch err := r.Get(ctx, legacyKey, &legacy); {
+		case err == nil && metav1.IsControlledBy(&legacy, task):
+			return legacy.Spec.SecretName, certificateReady(&legacy), nil
+		case err != nil && !apierrors.IsNotFound(err):
 			return "", false, err
 		}
 		desired := desiredTaskCertificate(task, r.CertLifetime)
@@ -1076,9 +1092,8 @@ func (r *AgentTaskReconciler) enforceEnvSecretOptIn(
 // either only sets Ready: completion, timeout, and Pod loss are still acted
 // on each pass, since those checks run before any child write, and the
 // other missing children are still re-created on the same pass. The cause
-// (a conflicting object this workload does not control: one with no owner
-// reference, or one controlled by a same-named Agent or AgentTask; a quota;
-// a webhook) raises no watch event for this workload, so the notReadyRecheck
+// (a conflicting object this workload does not control; a quota; a webhook)
+// raises no watch event for this workload, so the notReadyRecheck
 // requeue is what notices it clearing; a running task is requeued sooner
 // when its timeout comes first.
 func (r *AgentTaskReconciler) childBlocked(

@@ -157,9 +157,23 @@ func effectiveTaskTTL(task *kaalmv1beta1.AgentTask, b *kaalmv1beta1.AgentTaskCla
 	return pickSeconds(task.Spec.TTLSecondsAfterFinished, b.DefaultTTLSecondsAfterFinished, b.MaxTTLSecondsAfterFinished)
 }
 
-func taskCertificateName(taskName string) string    { return taskName + "-tls" }
-func taskNetworkPolicyName(taskName string) string  { return taskName }
-func taskFQDNPolicyName(taskName string) string     { return fqdnPolicyName(taskName) }
+// The task's Certificate, NetworkPolicy, and CiliumNetworkPolicy share their
+// kinds with an Agent's, so their names carry a dot. Rule 21 keeps dots out
+// of Agent and AgentTask names, and every other child name is the workload
+// name with a dot-free prefix or suffix, so no name the controller gives a
+// child of another workload can equal these: an Agent and an AgentTask of
+// one name never ask for the same object.
+func taskCertificateName(taskName string) string   { return taskName + ".task-tls" }
+func taskNetworkPolicyName(taskName string) string { return taskName + ".task" }
+func taskFQDNPolicyName(taskName string) string    { return taskName + ".task-fqdn" }
+
+// legacyTaskCertificateName is the task Certificate name from before the
+// .task qualifier. A task created then keeps the Certificate it controls
+// under this name: it writes the Secret the running Pod mounts, and a second
+// Certificate naming that Secret would make cert-manager re-issue it in
+// turns.
+func legacyTaskCertificateName(taskName string) string { return taskName + "-tls" }
+
 func taskPVCName(taskName string) string            { return taskName + "-workspace" }
 func taskServiceAccountName(taskName string) string { return "task-" + taskName }
 func taskCompletionCMName(taskName string) string   { return taskName + "-completion" }

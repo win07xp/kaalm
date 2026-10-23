@@ -68,8 +68,8 @@ func TestDesiredTaskCertificate_Shape(t *testing.T) {
 		Name: "fix-42", Namespace: "team-a", UID: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
 	}}
 	cert := desiredTaskCertificate(task, CertLifetime{})
-	if cert.Name != "fix-42-tls" || cert.Spec.SecretName != "fix-42-tls-9a8b7c6d" {
-		t.Errorf("cert naming wrong: %s / %s, want fix-42-tls / fix-42-tls-9a8b7c6d", cert.Name, cert.Spec.SecretName)
+	if cert.Name != "fix-42.task-tls" || cert.Spec.SecretName != "fix-42-tls-9a8b7c6d" {
+		t.Errorf("cert naming wrong: %s / %s, want fix-42.task-tls / fix-42-tls-9a8b7c6d", cert.Name, cert.Spec.SecretName)
 	}
 	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != "fix-42.team-a.task.kaalm.io" {
 		t.Errorf("task SAN wrong: %v", cert.Spec.DNSNames)

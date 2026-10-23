@@ -1372,7 +1372,7 @@ func TestCertLifetime_ReachesCertificateSpec(t *testing.T) {
 		t.Fatalf("ensureTaskCertificate: %v", err)
 	}
 
-	for _, name := range []string{"lifetime-agent-tls", "lifetime-task-tls"} {
+	for _, name := range []string{agentCertificateName("lifetime-agent"), taskCertificateName("lifetime-task")} {
 		var cert cmapi.Certificate
 		if err := testAPIReader.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, &cert); err != nil {
 			t.Fatalf("get %s: %v", name, err)
