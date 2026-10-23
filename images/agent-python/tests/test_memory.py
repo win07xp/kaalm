@@ -282,3 +282,71 @@ def test_snapshot_newer_than_log_discards_log(tmp_path):
     s = Store(str(d))
     assert s.get("user/stale") is None
     assert (d / "state.log").read_text() == ""
+
+
+def block_compaction(d):
+    """Make every snapshot write fail, as a volume with room for a small
+    append but not a whole snapshot would, by putting a non-empty directory
+    where the temp file goes. Returns a function that lifts the block."""
+    tmp = d / "state.json.tmp"
+    (tmp / "keep").mkdir(parents=True)
+
+    def unblock():
+        (tmp / "keep").rmdir()
+        tmp.rmdir()
+
+    return unblock
+
+
+def test_append_after_failed_compaction_survives(tmp_path):
+    """A torn last line is cut from the log during replay, not only by the
+    compaction after it, so writes still survive when that compaction fails."""
+    d = tmp_path / "mem"
+    write_state(d, FIXTURE_SNAPSHOT, FIXTURE_LOG + '{"op":"set","key":"user/c","val')
+    unblock = block_compaction(d)
+    s = Store(str(d))
+    s.put("user/d", 4)
+    s.put("user/e", 5)
+    unblock()
+    nxt = Store(str(d))
+    assert nxt.get("user/b") == "kept"
+    assert nxt.get("user/d") == 4
+    assert nxt.get("user/e") == 5
+    assert nxt.get("user/c") is None
+
+
+def test_append_after_unterminated_record_survives(tmp_path):
+    """A valid last record without its newline is kept, and the next append
+    starts on a line of its own instead of joining it."""
+    d = tmp_path / "mem"
+    write_state(d, FIXTURE_SNAPSHOT, FIXTURE_LOG + '{"op":"set","key":"user/c","value":3}')
+    unblock = block_compaction(d)
+    s = Store(str(d))
+    s.put("user/d", 4)
+    unblock()
+    nxt = Store(str(d))
+    assert nxt.get("user/b") == "kept"
+    assert nxt.get("user/c") == 3
+    assert nxt.get("user/d") == 4
+
+
+def test_failed_append_leaves_no_partial_record(tmp_path):
+    """A failed append leaves no partial bytes behind, so later appends are
+    not stranded after a bad line when the compaction that follows also
+    fails."""
+    d = tmp_path / "mem"
+    s = Store(str(d))
+    s.put("user/a", 1)
+    unblock = block_compaction(d)
+    # Simulate a write that failed part way: partial bytes reach the file,
+    # and the descriptor the store holds can no longer write.
+    with open(d / "state.log", "a") as f:
+        f.write('{"op":"set","ke')
+    os.close(s._log_fd)
+    s._log_fd = os.open(d / "state.log", os.O_RDONLY)
+    s.put("user/b", 2)  # fails, and so does its compaction
+    s.put("user/c", 3)
+    unblock()
+    nxt = Store(str(d))
+    assert nxt.get("user/a") == 1
+    assert nxt.get("user/c") == 3
