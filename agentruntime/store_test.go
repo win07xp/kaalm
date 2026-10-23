@@ -407,3 +407,99 @@ func TestStore_SnapshotNewerThanLogDiscardsLog(t *testing.T) {
 		t.Errorf("a stale log must be emptied, holds %q", got)
 	}
 }
+
+// blockCompaction makes every snapshot write fail, as a volume with room for
+// a small append but not a whole snapshot would, by putting a non-empty
+// directory where the temp file goes. The returned func lifts the block.
+func blockCompaction(t *testing.T, dir string) func() {
+	t.Helper()
+	tmp := filepath.Join(dir, "state.json.tmp")
+	if err := os.MkdirAll(filepath.Join(tmp, "keep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.RemoveAll(tmp); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A torn last line is cut from the log during replay, not only by the
+// compaction after it, so writes still survive when that compaction fails.
+func TestStore_AppendAfterFailedCompactionSurvives(t *testing.T) {
+	dir := t.TempDir()
+	writeStateFiles(t, dir, fixtureSnapshot, fixtureLog+`{"op":"set","key":"user/c","val`)
+	unblock := blockCompaction(t, dir)
+	s := newStore(dir)
+	s.setKV("user/d", []byte(`4`))
+	s.setKV("user/e", []byte(`5`))
+	unblock()
+
+	next := newStore(dir)
+	for _, key := range []string{"user/b", "user/d", "user/e"} {
+		if _, ok := next.getKV(key); !ok {
+			t.Errorf("%s must survive a restart after a failed compaction", key)
+		}
+	}
+	if _, ok := next.getKV("user/c"); ok {
+		t.Error("the torn record must stay dropped")
+	}
+}
+
+// A valid last record without its newline is kept, and the next append
+// starts on a line of its own instead of joining it.
+func TestStore_AppendAfterUnterminatedRecordSurvives(t *testing.T) {
+	dir := t.TempDir()
+	writeStateFiles(t, dir, fixtureSnapshot, fixtureLog+`{"op":"set","key":"user/c","value":3}`)
+	unblock := blockCompaction(t, dir)
+	s := newStore(dir)
+	s.setKV("user/d", []byte(`4`))
+	unblock()
+
+	next := newStore(dir)
+	for _, key := range []string{"user/b", "user/c", "user/d"} {
+		if _, ok := next.getKV(key); !ok {
+			t.Errorf("%s must survive a restart", key)
+		}
+	}
+}
+
+// A failed append leaves no partial bytes behind, so later appends are not
+// stranded after a bad line when the compaction that follows also fails.
+func TestStore_FailedAppendLeavesNoPartialRecord(t *testing.T) {
+	dir := t.TempDir()
+	s := newStore(dir)
+	s.setKV("user/a", []byte(`1`))
+	unblock := blockCompaction(t, dir)
+
+	// Simulate a write that failed part way: partial bytes reach the file,
+	// and the handle the store holds can no longer write.
+	logPath := filepath.Join(dir, "state.log")
+	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"op":"set","ke`); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	ro, err := os.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	_ = s.logFile.Close()
+	s.logFile = ro
+	s.mu.Unlock()
+
+	s.setKV("user/b", []byte(`2`)) // fails, and so does its compaction
+	s.setKV("user/c", []byte(`3`))
+	unblock()
+
+	next := newStore(dir)
+	for _, key := range []string{"user/a", "user/c"} {
+		if _, ok := next.getKV(key); !ok {
+			t.Errorf("%s must survive a restart after a failed append", key)
+		}
+	}
+}
