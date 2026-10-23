@@ -25,6 +25,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -68,8 +70,8 @@ func TestDesiredTaskCertificate_Shape(t *testing.T) {
 		Name: "fix-42", Namespace: "team-a", UID: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
 	}}
 	cert := desiredTaskCertificate(task, CertLifetime{})
-	if cert.Name != "fix-42.task-tls" || cert.Spec.SecretName != "fix-42-tls-9a8b7c6d" {
-		t.Errorf("cert naming wrong: %s / %s, want fix-42.task-tls / fix-42-tls-9a8b7c6d", cert.Name, cert.Spec.SecretName)
+	if cert.Name != "fix-42.task-tls" || cert.Spec.SecretName != "fix-42.task-tls-9a8b7c6d" {
+		t.Errorf("cert naming wrong: %s / %s, want fix-42.task-tls / fix-42.task-tls-9a8b7c6d", cert.Name, cert.Spec.SecretName)
 	}
 	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != "fix-42.team-a.task.kaalm.io" {
 		t.Errorf("task SAN wrong: %v", cert.Spec.DNSNames)
@@ -128,6 +130,30 @@ func TestTaskChildNames_CannotMatchAgentChildNames(t *testing.T) {
 					t.Errorf("task %s name %q equals an Agent child name", kind, got[0])
 				}
 			}
+		}
+	}
+}
+
+// A task's TLS Secret carries the same dot as its Certificate, so it cannot
+// equal the Secret of an Agent of the same name, even when the two UIDs share
+// their leading characters.
+func TestTaskCertificateSecretName_CannotMatchAgentSecretName(t *testing.T) {
+	const uid = types.UID("9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d")
+	for _, n := range []string{"a", "shared-name", strings.Repeat("a", 61) + "-z"} {
+		meta := metav1.ObjectMeta{Name: n, Namespace: "team-a", UID: uid}
+		taskSecret := desiredTaskCertificate(&kaalmv1beta1.AgentTask{ObjectMeta: meta}, CertLifetime{}).Spec.SecretName
+		agentSecret := desiredCertificate(&kaalmv1beta1.Agent{ObjectMeta: meta}, CertLifetime{}).Spec.SecretName
+		if want := n + ".task-tls-9a8b7c6d"; taskSecret != want {
+			t.Errorf("task Secret = %q, want %q", taskSecret, want)
+		}
+		if taskSecret == agentSecret {
+			t.Errorf("task and Agent %q share the Secret %q", n, taskSecret)
+		}
+		if strings.Contains(agentSecret, ".") {
+			t.Errorf("Agent Secret %q contains a dot", agentSecret)
+		}
+		if errs := validation.IsDNS1123Subdomain(taskSecret); len(errs) != 0 {
+			t.Errorf("task Secret %q is not a DNS-1123 subdomain: %v", taskSecret, errs)
 		}
 	}
 }

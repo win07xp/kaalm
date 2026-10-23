@@ -48,8 +48,8 @@ func expectControlledBy(t *testing.T, obj client.Object, name, ownerKind string)
 }
 
 // An Agent and an AgentTask of the same name both provision: each gets its
-// own NetworkPolicy, Certificate, and CiliumNetworkPolicy, and neither waits
-// on a ChildConflict.
+// own NetworkPolicy, Certificate, TLS Secret, and CiliumNetworkPolicy, and
+// neither waits on a ChildConflict.
 func TestAgentAndTask_ShareAName(t *testing.T) {
 	const name = sharedName
 	mkWorkloadClass(t, "wc-shared-name", func(ac *kaalmv1beta1.AgentClass) {
@@ -84,4 +84,22 @@ func TestAgentAndTask_ShareAName(t *testing.T) {
 	expectControlledBy(t, &cmapi.Certificate{}, taskCertificateName(name), "AgentTask")
 	expectFQDNHosts(t, fqdnPolicyName(name), name, "Agent", "api.example.com")
 	expectFQDNHosts(t, taskFQDNPolicyName(name), name, "AgentTask", "api.example.com")
+
+	// The two Certificates write different Secrets, whatever the two UIDs.
+	var agentCert, taskCert cmapi.Certificate
+	for _, c := range []struct {
+		name string
+		obj  *cmapi.Certificate
+	}{{agentCertificateName(name), &agentCert}, {taskCertificateName(name), &taskCert}} {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: c.name}, c.obj); err != nil {
+			t.Fatalf("Certificate %s: %v", c.name, err)
+		}
+	}
+	task := getTask(t, name)
+	if want := name + ".task-tls-" + string(task.UID)[:certSecretUIDChars]; taskCert.Spec.SecretName != want {
+		t.Errorf("task Secret = %q, want %q", taskCert.Spec.SecretName, want)
+	}
+	if agentCert.Spec.SecretName == taskCert.Spec.SecretName {
+		t.Errorf("the Agent and the task share the Secret %q", taskCert.Spec.SecretName)
+	}
 }
