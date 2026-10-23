@@ -1,6 +1,7 @@
 # An Agent and an AgentTask with the same name in one namespace. Each gets
-# its own NetworkPolicy and Certificate: shared-name and shared-name-tls for
-# the Agent, shared-name.task and shared-name.task-tls for the task.
+# its own NetworkPolicy, Certificate, and TLS Secret: shared-name,
+# shared-name-tls, and shared-name-tls-{uid} for the Agent, shared-name.task,
+# shared-name.task-tls, and shared-name.task-tls-{uid} for the task.
 apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:

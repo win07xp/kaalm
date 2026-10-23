@@ -10,8 +10,8 @@ import (
 )
 
 // An Agent and an AgentTask may share a name in a namespace: the task's
-// NetworkPolicy and Certificate carry a .task qualifier, so neither workload
-// finds its child name taken by the other's.
+// NetworkPolicy, Certificate, and TLS Secret carry a .task qualifier, so
+// neither workload finds its child name taken by the other's.
 var _ = Describe("Agent and AgentTask with the same name", Ordered, func() {
 	const fixture = "test/e2e/testdata/shared-name.yaml"
 
@@ -51,5 +51,17 @@ var _ = Describe("Agent and AgentTask with the same name", Ordered, func() {
 		} {
 			Expect(owner(c.kind, c.name)).To(Equal(c.want), "%s %s", c.kind, c.name)
 		}
+	})
+
+	It("gives each workload its own TLS Secret", func() {
+		secret := func(cert string) string {
+			v, err := utils.ResourceField("certificates.cert-manager.io", "e2e", cert, "{.spec.secretName}")
+			Expect(err).NotTo(HaveOccurred())
+			return v
+		}
+		agentSecret, taskSecret := secret("shared-name-tls"), secret("shared-name.task-tls")
+		Expect(agentSecret).To(HavePrefix("shared-name-tls-"))
+		Expect(taskSecret).To(HavePrefix("shared-name.task-tls-"))
+		Expect(taskSecret).NotTo(Equal(agentSecret))
 	})
 })
