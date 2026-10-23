@@ -125,22 +125,25 @@ func TestEnsureFQDNPolicy_UnsupportedTouchesNothing(t *testing.T) {
 
 // ---- envtest: Agent and AgentTask ----
 
-func getFQDNPolicy(name string) (*unstructured.Unstructured, error) {
+// getFQDNPolicy reads the CiliumNetworkPolicy policyName.
+func getFQDNPolicy(policyName string) (*unstructured.Unstructured, error) {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(ciliumPolicyGVK)
-	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: fqdnPolicyName(name)}, u)
+	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: policyName}, u)
 	return u, err
 }
 
-func expectFQDNHosts(t *testing.T, name, ownerKind string, hosts ...string) {
+// expectFQDNHosts waits for the CiliumNetworkPolicy policyName, controlled
+// by the ownerKind named owner, to allow exactly hosts.
+func expectFQDNHosts(t *testing.T, policyName, owner, ownerKind string, hosts ...string) {
 	t.Helper()
 	eventually(t, func() error {
-		u, err := getFQDNPolicy(name)
+		u, err := getFQDNPolicy(policyName)
 		if err != nil {
 			return err
 		}
 		ref := metav1.GetControllerOf(u)
-		if ref == nil || ref.Kind != ownerKind || ref.Name != name {
+		if ref == nil || ref.Kind != ownerKind || ref.Name != owner {
 			return errString("policy is not controlled by the " + ownerKind)
 		}
 		egress, _, _ := unstructured.NestedSlice(u.Object, "spec", "egress")
@@ -176,16 +179,16 @@ func TestAgent_FQDNPolicyFollowsAllowedHosts(t *testing.T) {
 	})
 	mkWorkloadAgent(t, "fqdn-agent", "wc-fqdn", nil)
 	markCertReady(t, "fqdn-agent")
-	expectFQDNHosts(t, "fqdn-agent", "Agent", "api.example.com")
+	expectFQDNHosts(t, fqdnPolicyName("fqdn-agent"), "fqdn-agent", "Agent", "api.example.com")
 
 	// A changed host list updates the policy in place.
 	setClassHosts(t, "wc-fqdn", []string{"z.example.com", "api.example.com"})
-	expectFQDNHosts(t, "fqdn-agent", "Agent", "api.example.com", "z.example.com")
+	expectFQDNHosts(t, fqdnPolicyName("fqdn-agent"), "fqdn-agent", "Agent", "api.example.com", "z.example.com")
 
 	// Clearing the hosts deletes the policy.
 	setClassHosts(t, "wc-fqdn", nil)
 	eventually(t, func() error {
-		if _, err := getFQDNPolicy("fqdn-agent"); !apierrors.IsNotFound(err) {
+		if _, err := getFQDNPolicy(fqdnPolicyName("fqdn-agent")); !apierrors.IsNotFound(err) {
 			return errString("FQDN policy should be deleted")
 		}
 		return nil
@@ -202,7 +205,7 @@ func TestAgent_NoHostsNoFQDNPolicy(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := getFQDNPolicy("nofqdn-agent"); !apierrors.IsNotFound(err) {
+	if _, err := getFQDNPolicy(fqdnPolicyName("nofqdn-agent")); !apierrors.IsNotFound(err) {
 		t.Errorf("no allowedHosts must mean no FQDN policy, got %v", err)
 	}
 }
@@ -212,8 +215,8 @@ func TestAgentTask_FQDNPolicy(t *testing.T) {
 		ac.Spec.Network.Egress.AllowedHosts = []string{"api.example.com"}
 	})
 	mkTask(t, "fqdn-task", "wc-task-fqdn", nil)
-	eventually(t, func() error { return markCertReadyErr("fqdn-task") })
-	expectFQDNHosts(t, "fqdn-task", "AgentTask", "api.example.com")
+	eventually(t, func() error { return markTaskCertReadyErr("fqdn-task") })
+	expectFQDNHosts(t, taskFQDNPolicyName("fqdn-task"), "fqdn-task", "AgentTask", "api.example.com")
 }
 
 // An update or delete of the FQDN policy that the API server refuses comes

@@ -94,15 +94,25 @@ func markCertReady(t *testing.T, agentName string) {
 	eventually(t, func() error { return markCertReadyErr(agentName) })
 }
 
-// markCertReadyErr is the error-returning core, shared with the task suite.
-func markCertReadyErr(workloadName string) error {
-	return markCertReadyIn("default", workloadName)
+// markCertReadyErr is the error-returning core for an Agent's Certificate.
+func markCertReadyErr(agentName string) error {
+	return markCertReadyIn("default", agentCertificateName(agentName))
 }
 
-// markCertReadyIn is markCertReadyErr for a workload in namespace ns.
-func markCertReadyIn(ns, workloadName string) error {
+// markTaskCertReadyErr is markCertReadyErr for a task's Certificate.
+func markTaskCertReadyErr(taskName string) error {
+	return markCertReadyIn("default", taskCertificateName(taskName))
+}
+
+// markTaskCertReadyIn is markTaskCertReadyErr for a task in namespace ns.
+func markTaskCertReadyIn(ns, taskName string) error {
+	return markCertReadyIn(ns, taskCertificateName(taskName))
+}
+
+// markCertReadyIn sets the Certificate certName in namespace ns Ready.
+func markCertReadyIn(ns, certName string) error {
 	var cert cmapi.Certificate
-	key := types.NamespacedName{Namespace: ns, Name: workloadName + "-tls"}
+	key := types.NamespacedName{Namespace: ns, Name: certName}
 	if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
 		return err
 	}

@@ -309,7 +309,7 @@ func TestAgent_PodCreateRejectedByQuota(t *testing.T) {
 		}
 		return &got
 	}
-	eventually(t, func() error { return markCertReadyIn(ns, name) })
+	eventually(t, func() error { return markCertReadyIn(ns, agentCertificateName(name)) })
 	eventually(t, func() error {
 		if podIn(t, ns, "kaalm.io/agent", name) == nil {
 			return errString("no pod yet")

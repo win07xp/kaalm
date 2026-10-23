@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,59 @@ func TestDesiredTaskCertificate_Shape(t *testing.T) {
 	}
 	if len(cert.Spec.Usages) != 1 || string(cert.Spec.Usages[0]) != "client auth" {
 		t.Errorf("task cert must be client auth only: %v", cert.Spec.Usages)
+	}
+}
+
+// The task's NetworkPolicy, Certificate, and CiliumNetworkPolicy carry a dot
+// and the Agent's names of the same kinds never do, so an Agent and an
+// AgentTask of one name never ask for the same child.
+func TestTaskChildNames_CannotMatchAgentChildNames(t *testing.T) {
+	dotFree := regexp.MustCompile(`^[a-z0-9-]+$`)
+	for _, n := range []string{"a", "shared-name", strings.Repeat("a", 61) + "-z"} {
+		if len(n) > 63 {
+			t.Fatalf("test name %q is longer than rule 21 allows", n)
+		}
+		task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "team-a", UID: "9a8b7c6d-5e4f"}}
+		agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "team-a"}}
+
+		taskNames := map[string][2]string{
+			"NetworkPolicy":       {taskNetworkPolicyName(n), n + ".task"},
+			"Certificate":         {taskCertificateName(n), n + ".task-tls"},
+			"CiliumNetworkPolicy": {taskFQDNPolicyName(n), n + ".task-fqdn"},
+		}
+		for kind, got := range taskNames {
+			if got[0] != got[1] {
+				t.Errorf("%s name for task %q = %q, want %q", kind, n, got[0], got[1])
+			}
+			if len(got[0]) > 253 {
+				t.Errorf("%s name %q is longer than a DNS subdomain", kind, got[0])
+			}
+			if !strings.Contains(got[0], ".") {
+				t.Errorf("task %s name %q has no dot", kind, got[0])
+			}
+		}
+		if got := desiredTaskNetworkPolicy(task, nil, "kaalm-system", DNSSelector{}).Name; got != taskNetworkPolicyName(n) {
+			t.Errorf("task NetworkPolicy = %q, want %q", got, taskNetworkPolicyName(n))
+		}
+		if got := desiredTaskCertificate(task, CertLifetime{}).Name; got != taskCertificateName(n) {
+			t.Errorf("task Certificate = %q, want %q", got, taskCertificateName(n))
+		}
+
+		agentNames := []string{
+			desiredNetworkPolicy(agent, &kaalmv1beta1.AgentClass{}, effectiveAgentSpec{HealthPort: 8080}, "kaalm-system", DNSSelector{}).Name,
+			agentCertificateName(n),
+			fqdnPolicyName(n),
+		}
+		for _, a := range agentNames {
+			if !dotFree.MatchString(a) {
+				t.Errorf("Agent child name %q contains more than lowercase letters, digits, and dashes", a)
+			}
+			for kind, got := range taskNames {
+				if got[0] == a {
+					t.Errorf("task %s name %q equals an Agent child name", kind, got[0])
+				}
+			}
+		}
 	}
 }
 

@@ -115,7 +115,7 @@ func writeMailbox(t *testing.T, taskName string, data map[string]string) {
 func provisionRunningTask(t *testing.T, name, className string, mutate func(*kaalmv1beta1.AgentTask)) *corev1.Pod {
 	t.Helper()
 	mkTask(t, name, className, mutate)
-	eventually(t, func() error { return markCertReadyErr(name) })
+	eventually(t, func() error { return markTaskCertReadyErr(name) })
 	eventually(t, func() error {
 		if taskPod(t, name) == nil {
 			return errString("no pod yet")
@@ -150,7 +150,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	})
 
 	// The Certificate holds the Pod until it is Ready.
-	eventually(t, func() error { return markCertReadyErr("t-run") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-run") })
 	eventually(t, func() error {
 		if taskPod(t, "t-run") == nil {
 			return errString("no pod yet")
@@ -182,7 +182,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 		t.Error("task pod must carry no probes")
 	}
 	var cert cmapi.Certificate
-	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-run-tls"}, &cert); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: taskCertificateName("t-run")}, &cert); err != nil {
 		t.Fatalf("get certificate: %v", err)
 	}
 	wantSecret := "t-run-tls-" + string(getTask(t, "t-run").UID)[:8]
@@ -932,7 +932,7 @@ func TestTask_ClassNamespaceAllowedProvisions(t *testing.T) {
 		{"t-ns-unset", "tc-ns-unset"},
 	} {
 		mkTask(t, c.task, c.class, nil)
-		eventually(t, func() error { return markCertReadyErr(c.task) })
+		eventually(t, func() error { return markTaskCertReadyErr(c.task) })
 		eventually(t, func() error {
 			if taskPod(t, c.task) == nil {
 				return errString(c.task + ": no pod yet")
@@ -976,7 +976,7 @@ func TestTask_ImagePullSecretMissingBlocks(t *testing.T) {
 	if err := testClient.Create(ctxT(), sec); err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
-	eventually(t, func() error { return markCertReadyErr("t-pull") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-pull") })
 	eventually(t, func() error {
 		r, err := readyReason()
 		if err != nil {
@@ -996,7 +996,7 @@ func TestTask_ExitCodeSucceedsBeforeReady(t *testing.T) {
 	mkTask(t, "t-early", "tc-early", func(task *kaalmv1beta1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
-	eventually(t, func() error { return markCertReadyErr("t-early") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-early") })
 	eventually(t, func() error {
 		if taskPod(t, "t-early") == nil {
 			return errString("no pod yet")
@@ -1025,7 +1025,7 @@ func TestTask_SettledTaskIgnoresSecretChange(t *testing.T) {
 		task.Spec.Completion.Condition = completionExitCode
 		task.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "t-settledsec-creds", false)}
 	})
-	eventually(t, func() error { return markCertReadyErr("t-settledsec") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-settledsec") })
 	eventually(t, func() error {
 		if taskPod(t, "t-settledsec") == nil {
 			return errString("no pod yet")
@@ -1065,7 +1065,7 @@ func TestTask_SettledTaskIgnoresSecretChange(t *testing.T) {
 func TestTask_InvalidImageNameFailsImmediately(t *testing.T) {
 	mkWorkloadClass(t, "tc-badimg", nil)
 	mkTask(t, "t-badimg", "tc-badimg", nil)
-	eventually(t, func() error { return markCertReadyErr("t-badimg") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-badimg") })
 	eventually(t, func() error {
 		if taskPod(t, "t-badimg") == nil {
 			return errString("no pod yet")
@@ -1095,7 +1095,7 @@ func TestTask_PersistenceProvisionsPVC(t *testing.T) {
 	mkTask(t, "t-pvc", "tc-pvc", func(task *kaalmv1beta1.AgentTask) {
 		task.Spec.Persistence.Enabled = true
 	})
-	eventually(t, func() error { return markCertReadyErr("t-pvc") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-pvc") })
 	eventually(t, func() error {
 		var pvc corev1.PersistentVolumeClaim
 		return testAPIReader.Get(ctxT(),
@@ -1192,7 +1192,7 @@ func TestTask_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/8"}
 		return testClient.Update(ctxT(), &ac)
 	})
-	eventually(t, func() error { return markCertReadyErr("t-cidr") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-cidr") })
 	eventually(t, func() error {
 		if pod := taskPod(t, "t-cidr"); pod == nil {
 			return errString("no task Pod yet")
@@ -1241,7 +1241,7 @@ func TestTask_ProvisioningDeadlineFails(t *testing.T) {
 		withShortDeadline(task)
 		task.Spec.Completion.Condition = completionExitCode
 	})
-	eventually(t, func() error { return markCertReadyErr("t-deadline") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-deadline") })
 	eventually(t, func() error {
 		if taskPod(t, "t-deadline") == nil {
 			return errString("no pod yet")
@@ -1268,7 +1268,7 @@ func TestTask_ExitCodeFailsBeforeReady(t *testing.T) {
 	mkTask(t, "t-failearly", "tc-failearly", func(task *kaalmv1beta1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
-	eventually(t, func() error { return markCertReadyErr("t-failearly") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-failearly") })
 	eventually(t, func() error {
 		if taskPod(t, "t-failearly") == nil {
 			return errString("no pod yet")
@@ -1465,7 +1465,7 @@ func TestAgentTask_EventsFollowTheStatusWrite(t *testing.T) {
 		name: "ChildWriteRejected", prefix: "Warning " + kaalmv1beta1.ReasonChildWriteRejected, steady: true,
 		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
 			_, err := r.childBlocked(ctxT(), task, nil, false, &ChildWriteRejectedError{
-				Op: "creating", Kind: "NetworkPolicy", Name: task.Name,
+				Op: "creating", Kind: "NetworkPolicy", Name: taskNetworkPolicyName(task.Name),
 				Err: apierrors.NewForbidden(schema.GroupResource{Resource: "networkpolicies"}, task.Name,
 					errors.New("denied by policy webhook")),
 			})
@@ -1633,7 +1633,7 @@ func TestTask_EnvSecretNotOptedInBlocks(t *testing.T) {
 	// Labeling both Secrets lets provisioning proceed.
 	setEnvSecretLabel(t, "t-envsec-creds", true)
 	mkEnvSecret(t, "t-envsec-other", true)
-	eventually(t, func() error { return markCertReadyErr("t-envsec") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-envsec") })
 	eventually(t, func() error {
 		if taskPod(t, "t-envsec") == nil {
 			return errString("no pod yet")
