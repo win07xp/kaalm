@@ -187,7 +187,7 @@ To give a team its roles:
 Subjects are Kubernetes RBAC `Subject` objects, rendered as you write them. A
 `User` or `Group` needs `apiGroup: rbac.authorization.k8s.io`, and a
 `ServiceAccount` needs a `namespace`. A list you leave empty renders no
-binding, and subject values are ignored while `enabled` is `false`.
+binding, and so do subject values while `enabled` is `false`.
 
 If a subject has no `kind` or `name`, or `developers` or
 `namespaceSecretsAdmins` is a list instead of a map, `helm upgrade` fails
