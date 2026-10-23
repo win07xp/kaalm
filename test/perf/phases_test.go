@@ -230,3 +230,30 @@ func TestNamespacesPhaseDeletesNamespacesWhenPrepareFails(t *testing.T) {
 		}
 	}
 }
+
+func TestKillingTimesForPods(t *testing.T) {
+	at := func(sec, ms int) metav1.Time {
+		return metav1.NewTime(time.Date(2026, 10, 20, 12, 0, sec, ms*int(time.Millisecond), time.FixedZone("x", 3600)))
+	}
+	event := func(pod, reason string, ts metav1.Time) corev1.Event {
+		return corev1.Event{
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: pod},
+			Reason:         reason,
+			LastTimestamp:  ts,
+		}
+	}
+	events := []corev1.Event{
+		event("kaalm-gateway-b", "Killing", at(30, 250)),
+		event("kaalm-gateway-a", "Killing", at(10, 5)),
+		event("kaalm-gateway-a", "Pulled", at(5, 0)),
+		event("kaalm-controller-c", "Killing", at(1, 0)),
+	}
+	got := killingTimes(events, "kaalm-gateway-")
+	want := []string{
+		"kaalm-gateway-a 2026-10-20T11:00:10.005Z",
+		"kaalm-gateway-b 2026-10-20T11:00:30.250Z",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("killingTimes = %q, want %q", got, want)
+	}
+}
