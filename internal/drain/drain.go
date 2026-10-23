@@ -25,8 +25,8 @@ limitations under the License.
 // bounded time for in-flight work. The health server stops last, so probes
 // keep getting an answer for the whole sequence.
 //
-// During the delay each response tells the client to close the connection
-// after the reply (Connection: close on HTTP/1.1, a GOAWAY on HTTP/2), so
+// During the delay each response to a request that arrives after the drain
+// began tells the client to close the connection after the reply (Connection: close on HTTP/1.1, a GOAWAY on HTTP/2), so
 // the client reconnects and the Service routes it to another replica. Idle
 // connections stay open: closing one races a client that is reusing it, and
 // a client cannot retry a POST it has already sent. Shutdown closes what is
@@ -163,8 +163,8 @@ func (g Group) Serve(ctx context.Context, traffic []Server, health Server) error
 	return nil
 }
 
-// closeWhenDraining wraps next so that, once draining is set, each response
-// carries Connection: close. Go's HTTP/1.1 server then closes the connection
+// closeWhenDraining wraps next so that, once draining is set, the response to
+// each request that starts after that carries Connection: close. Go's HTTP/1.1 server then closes the connection
 // after the reply; its HTTP/2 server drops the header and sends a GOAWAY. The
 // ResponseWriter passes through unwrapped, so streaming handlers keep their
 // Flusher.
