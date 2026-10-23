@@ -101,7 +101,7 @@ func TestReaderReportsForbiddenAsForbidden(t *testing.T) {
 	}
 }
 
-func TestReaderRepeatedReadsIssueOneGet(t *testing.T) {
+func TestReaderRepeatedReadsCostNoGet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset(secretObj("team-a", "hook", "x"))
@@ -111,12 +111,24 @@ func TestReaderRepeatedReadsIssueOneGet(t *testing.T) {
 		return false, nil, nil
 	})
 	r := NewReader(New(ctx, cs))
+	key := types.NamespacedName{Namespace: "team-a", Name: "hook"}
+	if err := r.Get(ctx, key, &corev1.Secret{}); err != nil {
+		t.Fatal(err)
+	}
+	// The informer's read and its confirmation once the watch opens.
+	deadline := time.Now().Add(3 * time.Second)
+	for gets.Load() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the informer cost %d GETs, want 2", gets.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	for range 10 {
-		if err := r.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "hook"}, &corev1.Secret{}); err != nil {
+		if err := r.Get(ctx, key, &corev1.Secret{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := gets.Load(); n != 1 {
-		t.Fatalf("10 reads cost %d GETs, want 1 (the informer's initial read)", n)
+	if n := gets.Load() - 2; n != 0 {
+		t.Fatalf("10 reads cost %d GETs, want 0", n)
 	}
 }

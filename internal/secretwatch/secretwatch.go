@@ -51,6 +51,11 @@ import (
 // gateway replica at 20 requests per second and throttled the controller's
 // per-minute channel validation.
 //
+// Once a watch from the most recent version has opened, a second GET
+// confirms a Secret the informer holds: a Secret deleted between the read
+// and the watch's start is in neither, and the informer would otherwise keep
+// serving it.
+//
 // An informer whose GET is refused as Forbidden stops: the process may no
 // longer read that Secret, and a later read starts a fresh informer.
 //
@@ -107,10 +112,43 @@ type secretInformer struct {
 	// stopOnce makes halt idempotent: the watch error handler, entryFor's
 	// replacement, the janitor, and shutdown can each stop the same entry.
 	stopOnce sync.Once
+
+	// seen is the Secret as the informer's reflector last saw it: the latest
+	// list's GET result, then each event a watch started at the most recent
+	// version has delivered; nil when absent. seenGen counts lists, so a
+	// watch that outlives its list never overwrites the next list's result.
+	seenMu  sync.Mutex
+	seen    *corev1.Secret
+	seenGen uint64
 }
 
 // halt stops the informer; later calls do nothing.
 func (e *secretInformer) halt() { e.stopOnce.Do(func() { close(e.stop) }) }
+
+// setSeen records a list's result and starts a new list generation.
+func (e *secretInformer) setSeen(sec *corev1.Secret) {
+	e.seenMu.Lock()
+	defer e.seenMu.Unlock()
+	e.seenGen++
+	e.seen = sec
+}
+
+// currentSeen returns the list generation and the Secret last seen in it.
+func (e *secretInformer) currentSeen() (uint64, *corev1.Secret) {
+	e.seenMu.Lock()
+	defer e.seenMu.Unlock()
+	return e.seenGen, e.seen
+}
+
+// recordSeen records sec as last seen, unless a later list has run since
+// generation gen.
+func (e *secretInformer) recordSeen(gen uint64, sec *corev1.Secret) {
+	e.seenMu.Lock()
+	defer e.seenMu.Unlock()
+	if gen == e.seenGen {
+		e.seen = sec
+	}
+}
 
 // listFailure is a failed informer GET and when it failed.
 type listFailure struct {
@@ -188,6 +226,7 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 				// An absent Secret is a valid, empty state: the watch below
 				// delivers it when it appears.
 				entry.failure.Store(nil)
+				entry.setSeen(nil)
 				return &corev1.SecretList{}, nil
 			}
 			if err != nil {
@@ -195,20 +234,48 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 				return nil, err
 			}
 			entry.failure.Store(nil)
+			entry.setSeen(sec)
 			// A GET returns the Secret's own resourceVersion, the version
 			// of its last write. Once enough writes anywhere in the cluster
 			// push that version out of the API server's watch cache, a
 			// watch from it ends at once with 410 Expired, and every relist
 			// GETs the same version again. So the list reports no version
 			// and the watch starts at the most recent one. It opens by
-			// replaying the Secret, which the store takes as an update to
-			// the same resourceVersion, as the absent-Secret branch above
-			// already does.
+			// replaying the Secret as it is now, so a create or change since
+			// the GET lands as an add or update. A Secret deleted since the
+			// GET is in neither the GET nor the replay; the watch function
+			// below confirms it.
 			return &corev1.SecretList{Items: []corev1.Secret{*sec}}, nil
 		},
 		WatchFuncWithContext: func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 			opts.FieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
-			return w.client.CoreV1().Secrets(namespace).Watch(ctx, opts)
+			secrets := w.client.CoreV1().Secrets(namespace)
+			src, err := secrets.Watch(ctx, opts)
+			if err != nil {
+				return nil, err
+			}
+			if opts.ResourceVersion != "" {
+				// A watch resumed from a known version delivers every later
+				// event, deletes included.
+				return src, nil
+			}
+			// The API server fixes a watch's start version before it
+			// answers, so a GET that finds the Secret gone after that
+			// proves the opening replay cannot carry it. An API server that
+			// serves these watches from etcd rather than its watch cache
+			// fixes the version a moment after it answers, so a delete in
+			// that moment can still be missed.
+			gen, seen := entry.currentSeen()
+			var dead *corev1.Secret
+			if seen != nil {
+				// Any error but NotFound is left alone: the list's GET just
+				// succeeded, the next relist's GET catches a refusal, and
+				// this GET never records a failure.
+				if _, err := secrets.Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+					dead = seen
+				}
+			}
+			return newConfirmedWatch(src, entry, gen, key, dead), nil
 		},
 	}
 	entry.informer = cache.NewSharedInformer(getThenWatch{lw}, &corev1.Secret{}, 0)
