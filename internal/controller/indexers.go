@@ -64,6 +64,14 @@ const (
 	// the channel their labels name, as "namespace/name", so a channel's
 	// prune reads only its own records.
 	IndexAsyncChannel = "asyncRecord.channel"
+	// IndexEnvSecretRef indexes Agents and AgentTasks by each Secret name
+	// their spec.env reads, the names envSecretRefs returns (a multi-value
+	// index). An empty name is not indexed: the rule 48 check reports it as
+	// InvalidReference, and no Secret can be watched for it.
+	IndexEnvSecretRef = "spec.env.secretKeyRef.name"
+	// IndexClassPullSecret indexes AgentClasses by each
+	// spec.image.imagePullSecrets[].name (a multi-value index).
+	IndexClassPullSecret = "spec.image.imagePullSecrets.name"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -86,6 +94,15 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 		return err
 	}
 	if err := idx.IndexField(ctx, &corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex); err != nil {
+		return err
+	}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexEnvSecretRef, envSecretRefIndex); err != nil {
+		return err
+	}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexEnvSecretRef, envSecretRefIndex); err != nil {
+		return err
+	}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentClass{}, IndexClassPullSecret, classPullSecretIndex); err != nil {
 		return err
 	}
 	return nil
@@ -175,6 +192,39 @@ func allowedToolProvidersIndex(o client.Object) []string {
 		return localRefNames(ac.Spec.AllowedToolProviders)
 	}
 	return nil
+}
+
+// envSecretRefIndex is the IndexEnvSecretRef extractor for Agents and
+// AgentTasks.
+func envSecretRefIndex(o client.Object) []string {
+	var env []corev1.EnvVar
+	switch w := o.(type) {
+	case *kaalmv1beta1.Agent:
+		env = w.Spec.Env
+	case *kaalmv1beta1.AgentTask:
+		env = w.Spec.Env
+	default:
+		return nil
+	}
+	refs := envSecretRefs(env)
+	names := make([]string, 0, len(refs))
+	for _, r := range refs {
+		names = append(names, r.Name)
+	}
+	return names
+}
+
+// classPullSecretIndex is the IndexClassPullSecret extractor.
+func classPullSecretIndex(o client.Object) []string {
+	ac, ok := o.(*kaalmv1beta1.AgentClass)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(ac.Spec.Image.ImagePullSecrets))
+	for _, r := range ac.Spec.Image.ImagePullSecrets {
+		names = append(names, r.Name)
+	}
+	return names
 }
 
 func localRefNames(refs []kaalmv1beta1.LocalObjectReference) []string {

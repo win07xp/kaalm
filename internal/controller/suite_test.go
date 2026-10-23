@@ -374,6 +374,7 @@ func runSuite(m *testing.M) int {
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorder("test"),
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      secretSource,
+		SecretChanges:     secretWatcher,
 		Activity:          fakeActivity,
 		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
@@ -383,6 +384,7 @@ func runSuite(m *testing.M) int {
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorder("test"),
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      secretSource,
+		SecretChanges:     secretWatcher,
 		FQDNSupport:       fqdnSupportedInTests,
 		deadlineFor:       shortProvisioningDeadline,
 	}).SetupWithManager(mgr); err != nil {

@@ -61,11 +61,13 @@ const (
 	crashLoopThreshold = 5
 )
 
-// notReadyRecheck is the retry interval for Ready=False checks that depend on
-// unwatched resources (imagePullSecrets, existingClaim PVCs, a child name
-// taken by an object the workload does not own, and a Pod create the API
-// server rejected): without it a Secret created after the check failed would
-// never be observed. A variable so tests can shorten it.
+// notReadyRecheck is the retry interval for Ready=False checks. existingClaim
+// PVCs, handler ConfigMaps, a child name taken by an object the workload does
+// not own, and a Pod create the API server rejected have no watch: without
+// the requeue a fix would never be observed. Pull and env Secrets are
+// watched (SecretChanges), and keep the requeue as the fallback for a change
+// the watch did not report and to keep the Secret's watch in use. A variable
+// so tests can shorten it.
 var notReadyRecheck = 30 * time.Second
 
 // AgentReconciler owns the full child-resource tree for a persistent agent:
@@ -86,8 +88,13 @@ type AgentReconciler struct {
 	// SecretReader reads Secrets in user namespaces, which the manager's
 	// cache does not hold. In production it is a secretwatch.Reader: one
 	// name-filtered watch per referenced Secret, so repeated reads are cache
-	// hits. nil falls back to the embedded client.
+	// hits. nil falls back to the embedded client. SecretChanges reports
+	// changes to the Secrets read through it.
 	SecretReader client.Reader
+	// SecretChanges is the watcher behind SecretReader. When set, a change
+	// to a pull or env Secret an Agent reads re-enqueues the Agent at once;
+	// nil leaves only the periodic pass.
+	SecretChanges SecretChangeSource
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
@@ -617,9 +624,11 @@ func (r *AgentReconciler) evaluateActivity(
 // image, a missing existingClaim, missing imagePullSecrets, an env Secret
 // that is missing or lacks the workload label (rule 48), and a missing
 // handler ConfigMap (rule 31). It sets the condition on the Agent and reports
-// whether the pass is blocked; Secrets, PVCs, and handler ConfigMaps are
-// unwatched, so blocked results carry a requeue interval. Class spec changes
-// are watched, so the class checks carry none.
+// whether the pass is blocked. PVCs and handler ConfigMaps are unwatched, so
+// those blocked results carry a requeue interval. A change to a pull or env
+// Secret re-enqueues the Agent at once through SecretChanges; the Secret
+// results carry the same requeue as the fallback for a change no watch
+// reported. Class spec changes are watched, so the class checks carry none.
 func (r *AgentReconciler) podCreationBlocked(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
@@ -659,6 +668,8 @@ func (r *AgentReconciler) podCreationBlocked(
 		if apierrors.IsNotFound(err) {
 			r.markAgentNotReady(agent, kaalmv1beta1.ReasonImagePullSecretMissing,
 				fmt.Sprintf("imagePullSecret %s missing in namespace %q", quotedEntry(ref.Name), agent.Namespace))
+			// Creating the Secret re-enqueues the Agent through
+			// SecretChanges; this requeue is the fallback.
 			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
@@ -678,6 +689,8 @@ func (r *AgentReconciler) podCreationBlocked(
 	}
 	if reason != "" {
 		r.markAgentNotReady(agent, reason, msg)
+		// Labeling or creating the Secret re-enqueues the Agent through
+		// SecretChanges; this requeue is the fallback.
 		return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 	}
 	// Rule 31: the handler ConfigMap must exist where the Agent runs. Checked
@@ -1592,10 +1605,12 @@ func (r *AgentReconciler) setReady(agent *kaalmv1beta1.Agent, ok bool, reason, m
 	})
 }
 
-// SetupWithManager wires the reconciler, its owned children, and the
-// platform-level map-func watches.
+// SetupWithManager wires the reconciler, its owned children, the
+// platform-level map-func watches, and, when SecretChanges is set, the
+// referenced-Secret watch (the rule 23 and 48 checks read each pull and env
+// Secret).
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		For(&kaalmv1beta1.Agent{}).
 		Owns(&corev1.Pod{}).
@@ -1624,8 +1639,11 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// gateway, so the outage backoff does not delay recovery. The Pod
 		// informer is already cluster-wide for the owned Pods.
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.agentsWaitingOnGateway),
-			builder.WithPredicates(gatewayTurnedReady(r.OperatorNamespace))).
-		Complete(r)
+			builder.WithPredicates(gatewayTurnedReady(r.OperatorNamespace)))
+	if r.SecretChanges != nil {
+		b = b.WatchesRawSource(secretChangeSource(r.SecretChanges, r.agentsForSecret))
+	}
+	return b.Complete(r)
 }
 
 // driftSlotFreed admits an Agent event that frees a drift slot: the Agent's
@@ -1722,6 +1740,22 @@ func (r *AgentReconciler) agentsForClass(ctx context.Context, obj client.Object)
 		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
 	}
 	return reqs
+}
+
+// agentsForSecret re-enqueues every Agent in the Secret's namespace that
+// reads it: through its env, or as a pull Secret of its class.
+func (r *AgentReconciler) agentsForSecret(ctx context.Context, key types.NamespacedName) []reconcile.Request {
+	return workloadsForSecret(ctx, r.Client, key, func(ctx context.Context, opts ...client.ListOption) ([]types.NamespacedName, error) {
+		var agents kaalmv1beta1.AgentList
+		if err := r.List(ctx, &agents, opts...); err != nil {
+			return nil, err
+		}
+		keys := make([]types.NamespacedName, 0, len(agents.Items))
+		for i := range agents.Items {
+			keys = append(keys, client.ObjectKeyFromObject(&agents.Items[i]))
+		}
+		return keys, nil
+	})
 }
 
 func (r *AgentReconciler) agentsForProvider(ctx context.Context, obj client.Object) []reconcile.Request {

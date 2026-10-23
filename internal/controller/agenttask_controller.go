@@ -71,8 +71,13 @@ type AgentTaskReconciler struct {
 	// SecretReader reads Secrets in user namespaces, which the manager's
 	// cache does not hold. In production it is a secretwatch.Reader: one
 	// name-filtered watch per referenced Secret, so repeated reads are cache
-	// hits. nil falls back to the embedded client.
+	// hits. nil falls back to the embedded client. SecretChanges reports
+	// changes to the Secrets read through it.
 	SecretReader client.Reader
+	// SecretChanges is the watcher behind SecretReader. When set, a change
+	// to a pull or env Secret a task reads re-enqueues the task at once;
+	// nil leaves only the periodic pass.
+	SecretChanges SecretChangeSource
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
@@ -222,6 +227,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					fmt.Sprintf("imagePullSecret %s missing in namespace %q", quotedEntry(ref.Name), task.Namespace)); err != nil {
 					return ctrl.Result{}, err
 				}
+				// Creating the Secret re-enqueues the task through
+				// SecretChanges; this requeue is the fallback.
 				return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 			} else if err != nil {
 				return ctrl.Result{}, err
@@ -1051,6 +1058,8 @@ func (r *AgentTaskReconciler) enforceEnvSecretOptIn(
 	if err := r.markTaskNotReady(ctx, task, reason, msg); err != nil {
 		return true, ctrl.Result{}, err
 	}
+	// Labeling or creating the Secret re-enqueues the task through
+	// SecretChanges; this requeue is the fallback.
 	return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 }
 
@@ -1228,9 +1237,11 @@ func (r *AgentTaskReconciler) markTaskNotReady(
 }
 
 // SetupWithManager wires the reconciler, its owned children (including the
-// completion mailbox and its RBAC pair), and the AgentClass map-func watch.
+// completion mailbox and its RBAC pair), the AgentClass map-func watch, and,
+// when SecretChanges is set, the referenced-Secret watch (the rule 23 and 48
+// checks read each pull and env Secret).
 func (r *AgentTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		For(&kaalmv1beta1.AgentTask{}).
 		Owns(&corev1.Pod{}).
@@ -1243,8 +1254,29 @@ func (r *AgentTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&cmapi.Certificate{}).
 		// Tasks read a class's spec only; its in-use counts must not fan out.
 		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.tasksForClass),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Complete(r)
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+	if r.SecretChanges != nil {
+		// No phase filter: a settled task's pass only handles its TTL, and
+		// a task with a Pod skips the Secret checks.
+		b = b.WatchesRawSource(secretChangeSource(r.SecretChanges, r.tasksForSecret))
+	}
+	return b.Complete(r)
+}
+
+// tasksForSecret re-enqueues every AgentTask in the Secret's namespace that
+// reads it: through its env, or as a pull Secret of its class.
+func (r *AgentTaskReconciler) tasksForSecret(ctx context.Context, key types.NamespacedName) []reconcile.Request {
+	return workloadsForSecret(ctx, r.Client, key, func(ctx context.Context, opts ...client.ListOption) ([]types.NamespacedName, error) {
+		var tasks kaalmv1beta1.AgentTaskList
+		if err := r.List(ctx, &tasks, opts...); err != nil {
+			return nil, err
+		}
+		keys := make([]types.NamespacedName, 0, len(tasks.Items))
+		for i := range tasks.Items {
+			keys = append(keys, client.ObjectKeyFromObject(&tasks.Items[i]))
+		}
+		return keys, nil
+	})
 }
 
 func (r *AgentTaskReconciler) tasksForClass(ctx context.Context, obj client.Object) []reconcile.Request {

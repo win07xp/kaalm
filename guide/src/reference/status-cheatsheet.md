@@ -114,7 +114,7 @@ with `403 access_denied` and the message prefix `TaskAlreadyCompleted`
 
 `Ready=False` with reason `SecretNotOptedIn` also holds a task without a Pod:
 an env Secret is missing or lacks the label `kaalm.io/workload-secret: "true"`.
-The task is not `Failed`, and the controller checks again every 30 seconds.
+The task is not `Failed`, and it recovers as soon as you label the Secret.
 The fix is in
 [Troubleshooting](troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin).
 

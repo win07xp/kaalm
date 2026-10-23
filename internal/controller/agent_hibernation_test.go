@@ -258,6 +258,68 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 	}
 }
 
+// TestAgent_HibernatedIgnoresSecretChange pins that a change to a Secret
+// the Agent's env reads re-runs a Hibernated Agent without waking it: the
+// pass ends before the Secret checks and creates no Pod.
+func TestAgent_HibernatedIgnoresSecretChange(t *testing.T) {
+	mkWorkloadClass(t, "wc-hibsec", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+	mkEnvSecret(t, "hibsec-creds", true)
+	mkWorkloadAgent(t, "hib-sec", "wc-hibsec", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "hibsec-creds", false)}
+		ag.Spec.Persistence.Enabled = true
+		ag.Spec.Lifecycle.HibernationEnabled = true
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
+	})
+	// The Agent may reach Idle rather than Running before the next step
+	// (the env-Secret check lengthens provisioning past the one-second idle
+	// timeout); either leads to Hibernated.
+	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, "hib-sec", 0)}, 1)
+	markCertReady(t, "hib-sec")
+	eventually(t, func() error {
+		if agentPod(t, "hib-sec") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	markPodReady(t, agentPod(t, "hib-sec"))
+
+	fakeActivity.set([]ReplicaActivity{replicaWithTrafficAtCreation(t, "hib-sec", 3*time.Hour)}, 1)
+	waitSinceCreation(t, "hib-sec", 2*time.Second)
+	touchAgent(t, "hib-sec")
+	eventually(t, func() error {
+		var pods corev1.PodList
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("hib-sec")...); err != nil {
+			return err
+		}
+		for i := range pods.Items {
+			if !pods.Items[i].DeletionTimestamp.IsZero() {
+				forceDeletePod(t, &pods.Items[i])
+			}
+		}
+		if p := getWorkloadAgent(t, "hib-sec").Status.Phase; p != kaalmv1beta1.AgentHibernated {
+			return errString("phase=" + string(p) + " want Hibernated")
+		}
+		return nil
+	})
+
+	setEnvSecretLabel(t, "hibsec-creds", false)
+	consistently(t, 2*time.Second, func() error {
+		if p := getWorkloadAgent(t, "hib-sec").Status.Phase; p != kaalmv1beta1.AgentHibernated {
+			return errString("a Secret change moved a Hibernated Agent to " + string(p))
+		}
+		if agentPod(t, "hib-sec") != nil {
+			return errString("a Secret change created a Pod for a Hibernated Agent")
+		}
+		return nil
+	})
+	setEnvSecretLabel(t, "hibsec-creds", true)
+}
+
 // TestAgent_WakeDuringHibernating pins that a wake requested while the Pod is
 // still terminating is kept, not ignored: the Agent settles Hibernated and
 // then resumes.

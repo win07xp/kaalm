@@ -72,7 +72,7 @@ If the API server rejects the delete of the old Pod or the reset of the mailbox 
 
 A retry re-runs the pre-Pod class check against the class as it now stands. A violation there settles the task as terminal `Failed` at once, whatever `backoffLimit` remains, and the increment already spent is not refunded. To retry a task against a class you have since aligned, delete and recreate the task: a `kubectl apply` of the same spec does not reset `status.retries`, since status is controller-owned and apply patches only `spec`.
 
-A retry also re-runs the env Secret check ([rule 48](../resources/validation/references-and-access.md)). The failure is not terminal: a task whose env Secret is missing or has lost the label waits in `Provisioning` with `Ready=False, reason=SecretNotOptedIn`, creates no Pod, and counts no further retry. Labeling the Secret lets the next pass, within 30 seconds, create the Pod. A task that has a Pod or has finished is not checked.
+A retry also re-runs the env Secret check ([rule 48](../resources/validation/references-and-access.md)). The failure is not terminal: a task whose env Secret is missing or has lost the label waits in `Provisioning` with `Ready=False, reason=SecretNotOptedIn`, creates no Pod, and counts no further retry. Labeling the Secret re-runs the task at once and the Pod is created ([Timing](reconcilers/agenttask.md#timing)). A task that has a Pod or has finished is not checked.
 
 ## Event reasons
 
