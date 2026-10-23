@@ -126,7 +126,7 @@ The schedule applies to every Agent, hibernated or not, so every Agent deduplica
 - An in-memory window is enough for an Agent that never hibernates.
 - An Agent with `hibernationEnabled: true` persists the buffer across Pod restarts, so a wake-replacement Pod still recognizes a `messageId` delivered before the restart. A PVC is always available, because `hibernationEnabled: true` requires `spec.persistence.enabled: true` ([rule 29](../resources/validation/class-policy.md)).
 
-The reference runtimes keep a window of the last 1024 ids with their responses in the memory directory ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
+The reference runtimes keep a window of the last 1024 ids with their responses in the memory directory. Each response is written through to disk before the runtime returns it, so an acknowledged delivery survives a crash ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
 
 `messageId` dedup covers gateway-retry duplicates only. External replay of the inbound webhook ([Channels and webhooks](../security/threat-model.md#channels-and-webhooks)) produces a fresh `messageId` per delivery. An Agent whose inbound actions are not idempotent also deduplicates on a caller-supplied idempotency key or a content hash.
 

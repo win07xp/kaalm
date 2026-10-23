@@ -50,10 +50,8 @@ upstream conditions the issue lists hold. One of them is a quarter of
 stable releases on upstream's v1beta1 line, so the start is no earlier than
 late November 2026. The milestone also carries a Claude Code coding agent
 as a proof of concept ([#476](https://github.com/win07xp/kaalm/issues/476)),
-and two efficiency reviews: the reference runtimes rewriting their whole state file on every
-message ([#484](https://github.com/win07xp/kaalm/issues/484)), and the
-gateway and controller each holding one watch per Secret they read
-([#485](https://github.com/win07xp/kaalm/issues/485)). The full list is on the
+and an efficiency review of the gateway and controller each holding one watch
+per Secret they read ([#485](https://github.com/win07xp/kaalm/issues/485)). The full list is on the
 [milestone](https://github.com/win07xp/kaalm/milestone/9).
 
 ## Beyond
