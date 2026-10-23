@@ -46,9 +46,10 @@ type persistedState struct {
 	DedupOrder []string `json:"dedupOrder"`
 }
 
-// logRecord is one line of state.log. The format is shared byte for byte
-// with kaalm-agent-python: remember carries id and reply, set carries key and
-// value, delete carries key. Keys are full keys, user/ prefix included.
+// logRecord is one line of state.log. The record shape is the same in
+// kaalm-agent-python, so each runtime parses the other's log: remember
+// carries id and reply, set carries key and value, delete carries key. Keys
+// are full keys, user/ prefix included.
 type logRecord struct {
 	Op    string          `json:"op"`
 	ID    string          `json:"id,omitempty"`
@@ -68,11 +69,16 @@ type store struct {
 	path    string // snapshot; empty when there is no usable volume
 	logPath string
 
-	mu            sync.Mutex
-	state         persistedState
-	logFile       *os.File // opened on the first append
-	logBytes      int64
-	snapshotBytes int64
+	mu      sync.Mutex
+	state   persistedState
+	logFile *os.File // opened on the first append
+	// logBytes is the length of the log's good prefix: whole records only.
+	// A failed append truncates back to it.
+	logBytes int64
+	// logUnterminated is set when the good prefix ends in a record without
+	// its newline, so the next append starts a new line first.
+	logUnterminated bool
+	snapshotBytes   int64
 }
 
 func newStore(dir string) *store {
@@ -107,7 +113,9 @@ func newStore(dir string) *store {
 
 // replayLog applies state.log over the loaded snapshot and reports whether
 // the log held any bytes. A torn last line (a crash mid-append) is dropped; a
-// bad line before it stops the replay and keeps what came before.
+// bad line before it stops the replay and keeps what came before. Either way
+// the log is cut back to the records that applied, so a later append cannot
+// join a bad line even when the compaction after replay fails.
 func (s *store) replayLog() bool {
 	raw, err := os.ReadFile(s.logPath)
 	if err != nil {
@@ -133,9 +141,18 @@ func (s *store) replayLog() bool {
 	}
 	lines := bytes.Split(raw, []byte("\n"))
 	applied := 0
+	var pos, good int64 // good: end of the last line that applied or was blank
 	for i, line := range lines {
 		last := i == len(lines)-1
+		end := pos + int64(len(line))
+		if !last {
+			end++ // the newline
+		}
 		if len(bytes.TrimSpace(line)) == 0 {
+			if !last {
+				good = end
+			}
+			pos = end
 			continue
 		}
 		var rec logRecord
@@ -149,9 +166,19 @@ func (s *store) replayLog() bool {
 			break
 		}
 		applied++
+		good = end
+		s.logUnterminated = last
+		pos = end
 	}
 	log.Printf("memory: replayed %d records from %s", applied, s.logPath)
 	s.logBytes = int64(len(raw))
+	if good < s.logBytes {
+		if err := truncateLog(s.logPath, good); err != nil {
+			log.Printf("memory: truncating %s: %v", s.logPath, err)
+		} else {
+			s.logBytes = good
+		}
+	}
 	return true
 }
 
@@ -242,18 +269,55 @@ func (s *store) appendRecord(rec logRecord) {
 		return
 	}
 	raw = append(raw, '\n')
+	if s.logUnterminated {
+		raw = append([]byte{'\n'}, raw...)
+	}
 	if err := s.writeLog(raw); err != nil {
 		// The write is applied in RAM; a snapshot captures it if the volume
 		// accepts one. The log is truncated only after a successful rename,
 		// so a failed compaction loses nothing already logged.
 		log.Printf("memory: appending to %s: %v", s.logPath, err)
+		s.dropPartialAppend()
 		s.compactLocked()
 		return
 	}
+	s.logUnterminated = false
 	s.logBytes += int64(len(raw))
 	if s.logBytes > max(compactLogMultiple*s.snapshotBytes, compactLogMinBytes) {
 		s.compactLocked()
 	}
+}
+
+// dropPartialAppend cuts the log back to its good prefix after a failed
+// append, so bytes a partial write left behind cannot strand later records.
+// Truncating needs no free space. The handle is closed and reopened on the
+// next append, since a write error can leave it unusable. The caller holds
+// the lock.
+func (s *store) dropPartialAppend() {
+	if s.logFile != nil {
+		_ = s.logFile.Close()
+		s.logFile = nil
+	}
+	if err := truncateLog(s.logPath, s.logBytes); err != nil && !os.IsNotExist(err) {
+		log.Printf("memory: truncating %s: %v", s.logPath, err)
+	}
+}
+
+// truncateLog cuts the log at path to size bytes and fsyncs it.
+func truncateLog(path string, size int64) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(size); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // writeLog appends raw to the log in one write and fsyncs it, opening the
@@ -306,15 +370,20 @@ func (s *store) compactLocked() {
 	// A crash before this truncate leaves records the snapshot already holds;
 	// replaying them on the next start changes nothing.
 	if s.logFile != nil {
-		if err := s.logFile.Truncate(0); err != nil {
-			log.Printf("memory: truncating %s: %v", s.logPath, err)
-		} else if err := s.logFile.Sync(); err != nil {
-			log.Printf("memory: syncing %s: %v", s.logPath, err)
+		if err = s.logFile.Truncate(0); err == nil {
+			err = s.logFile.Sync()
 		}
-	} else if err := os.Truncate(s.logPath, 0); err != nil && !os.IsNotExist(err) {
+	} else if err = os.Truncate(s.logPath, 0); os.IsNotExist(err) {
+		err = nil
+	}
+	if err != nil {
+		// The log keeps records the snapshot now holds; replaying them is
+		// harmless, and a later append still lands after its good prefix.
 		log.Printf("memory: truncating %s: %v", s.logPath, err)
+		return
 	}
 	s.logBytes = 0
+	s.logUnterminated = false
 }
 
 // close folds any logged writes into the snapshot, so after a clean shutdown
