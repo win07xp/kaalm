@@ -43,10 +43,10 @@ func readForeign(kind, name string) (foreignState, error) {
 	return st, nil
 }
 
-// A workload's Certificate is named {name}-tls. When a Certificate the
-// workload does not control already holds that name, the workload reports
-// ChildConflict, starts no Pod, and leaves the Certificate and its Secret
-// alone. Envtest covers the ownership logic; only a real cluster has
+// An Agent's Certificate is named {name}-tls and an AgentTask's
+// {name}.task-tls. When a Certificate the workload does not control already
+// holds that name, the workload reports ChildConflict, starts no Pod, and
+// leaves the Certificate and its Secret alone. Envtest covers the ownership logic; only a real cluster has
 // cert-manager acting on the foreign Certificate and the controller running
 // under its chart RBAC and real informer cache.
 var _ = Describe("Workload Certificate name held by a foreign Certificate", Ordered, func() {
@@ -59,7 +59,7 @@ var _ = Describe("Workload Certificate name held by a foreign Certificate", Orde
 	foreign := []foreignObj{
 		{certKind, "fc-agent-tls"},
 		{"secret", "fc-agent-foreign"},
-		{certKind, "fc-task-tls"},
+		{certKind, "fc-task.task-tls"},
 		{"secret", "fc-task-foreign"},
 	}
 	snapshot := map[foreignObj]foreignState{}
@@ -92,7 +92,7 @@ var _ = Describe("Workload Certificate name held by a foreign Certificate", Orde
 		})
 
 		By("cert-manager issues both foreign Certificates")
-		for _, name := range []string{"fc-agent-tls", "fc-task-tls"} {
+		for _, name := range []string{"fc-agent-tls", "fc-task.task-tls"} {
 			Eventually(func() (bool, error) {
 				return readyTrue(certKind, "e2e", name)
 			}, "120s", "3s").Should(BeTrue(), "Certificate %s should be Ready", name)
@@ -130,7 +130,7 @@ var _ = Describe("Workload Certificate name held by a foreign Certificate", Orde
 	})
 
 	It("reports ChildConflict on the AgentTask, naming the Certificate", func() {
-		expectConflict("agenttask", "fc-task", "fc-task-tls")
+		expectConflict("agenttask", "fc-task", "fc-task.task-tls")
 	})
 
 	It("creates no Pod and leaves the foreign Certificates and Secrets unchanged across a re-check", func() {

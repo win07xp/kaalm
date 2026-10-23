@@ -77,17 +77,28 @@ func readyStatus(kind, namespace, name string) string {
 
 // keeperPod resolves the keeper's Pod name by its stable labels (agent
 // Pods are created with generateName).
-func keeperPod() string {
-	out, _ := utils.Kubectl("get", "pod", "-n", ns, "-l", "kaalm.io/agent=up-keeper",
+func keeperPod() string { return podByLabel("kaalm.io/agent=up-keeper") }
+
+// podByLabel resolves the name of the first Pod matching selector.
+func podByLabel(selector string) string {
+	out, _ := utils.Kubectl("get", "pod", "-n", ns, "-l", selector,
 		"-o", "jsonpath={.items[0].metadata.name}")
 	return lastLine(out)
 }
 
-// certSecretName reads the Secret name a workload's Certificate {name}-tls
-// writes (spec.secretName).
-func certSecretName(workload string) string {
-	out, _ := utils.Kubectl("get", "certificate.cert-manager.io", workload+"-tls", "-n", ns,
+// certSecretName reads the Secret name the Certificate cert writes
+// (spec.secretName).
+func certSecretName(cert string) string {
+	out, _ := utils.Kubectl("get", "certificate.cert-manager.io", cert, "-n", ns,
 		"-o", "jsonpath={.spec.secretName}")
+	return lastLine(out)
+}
+
+// controllerOf reads kind/name of a namespaced object's first owner
+// reference.
+func controllerOf(kind, name string) string {
+	out, _ := utils.Kubectl("get", kind, name, "-n", ns, "-o",
+		"jsonpath={.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}")
 	return lastLine(out)
 }
 
@@ -108,6 +119,7 @@ func podUID(pod string) string {
 // depends on the world the earlier steps built.
 var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 	var keeperPodName, keeperPodUID, keeperSecret string
+	var runnerPodName, runnerPodUID, runnerSecret string
 
 	It("installs the previous release and its workloads", func() {
 		By(fmt.Sprintf("helm install of the released %s chart", prevVersion()))
@@ -132,6 +144,9 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		By("the task completes through the published runtime's autocomplete")
 		Eventually(func() string { return phase("agenttask", "up-task") }, "300s", "5s").Should(Equal("Succeeded"))
 
+		By("the runner task reaches Running")
+		Eventually(func() string { return phase("agenttask", "up-runner") }, "300s", "5s").Should(Equal("Running"))
+
 		By("the sleeper hibernates")
 		Eventually(func() string { return phase("agent", "up-sleeper") }, "180s", "5s").Should(Equal("Hibernated"))
 
@@ -143,8 +158,16 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		keeperPodUID = podUID(keeperPodName)
 		Expect(keeperPodUID).NotTo(BeEmpty())
-		keeperSecret = certSecretName("up-keeper")
+		keeperSecret = certSecretName("up-keeper-tls")
 		Expect(keeperSecret).NotTo(BeEmpty())
+
+		By("recording the runner's Pod and the Secret its Certificate up-runner-tls writes")
+		runnerPodName = podByLabel("kaalm.io/task=up-runner")
+		Expect(runnerPodName).NotTo(BeEmpty())
+		runnerPodUID = podUID(runnerPodName)
+		Expect(runnerPodUID).NotTo(BeEmpty())
+		runnerSecret = certSecretName("up-runner-tls")
+		Expect(runnerSecret).NotTo(BeEmpty())
 	})
 
 	It("upgrades with the two documented steps", func() {
@@ -170,7 +193,7 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			"the upgrade must not replace running agent Pods")
 
 		By("the keeper's Certificate keeps its Secret name and the Pod still mounts it")
-		Expect(certSecretName("up-keeper")).To(Equal(keeperSecret))
+		Expect(certSecretName("up-keeper-tls")).To(Equal(keeperSecret))
 		Expect(tlsVolumeSecret(keeperPodName)).To(Equal(keeperSecret))
 
 		By("the marker is still on the volume")
@@ -185,6 +208,26 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			"-o", "jsonpath={.status.agentReportedStatus}")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lastLine(got)).To(Equal("success"))
+
+		By("the running task is still Running in the same Pod")
+		Expect(phase("agenttask", "up-runner")).To(Equal("Running"))
+		Expect(podUID(runnerPodName)).To(Equal(runnerPodUID),
+			"the upgrade must not replace running task Pods")
+
+		By("the running task keeps its Certificate under the old name, and gets no second one")
+		Expect(controllerOf("certificate.cert-manager.io", "up-runner-tls")).To(Equal("AgentTask/up-runner"))
+		Expect(certSecretName("up-runner-tls")).To(Equal(runnerSecret))
+		Expect(tlsVolumeSecret(runnerPodName)).To(Equal(runnerSecret))
+		Consistently(func() (string, error) {
+			out, err := utils.Kubectl("get", "certificate.cert-manager.io", "up-runner.task-tls", "-n", ns,
+				"--ignore-not-found", "-o", "name")
+			return lastLine(out), err
+		}, "20s", "5s").Should(BeEmpty())
+
+		By("the running task gets its NetworkPolicy under the new name beside the old one")
+		Eventually(func() string { return controllerOf("networkpolicy", "up-runner.task") }, "120s", "5s").
+			Should(Equal("AgentTask/up-runner"))
+		Expect(controllerOf("networkpolicy", "up-runner")).To(Equal("AgentTask/up-runner"))
 
 		By("the sleeper is still Hibernated")
 		Expect(phase("agent", "up-sleeper")).To(Equal("Hibernated"))

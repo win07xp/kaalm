@@ -1,6 +1,6 @@
 # Workloads for the foreign-Certificate e2e. Apply this file only after the
 # Certificates in foreign-certificate.yaml exist. Applied first, the
-# controller would create its own fc-agent-tls and fc-task-tls Certificates,
+# controller would create its own fc-agent-tls and fc-task.task-tls Certificates,
 # and applying the foreign file would then patch those Kaalm-owned objects.
 apiVersion: kaalm.io/v1beta1
 kind: Agent

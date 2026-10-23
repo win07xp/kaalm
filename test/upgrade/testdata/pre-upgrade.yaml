@@ -216,3 +216,22 @@ spec:
     condition: agentReported
     timeout: 5m
     onTimeout: Fail
+---
+# The runner: a task still Running when the upgrade happens. Without
+# KAALM_TASK_AUTOCOMPLETE the runtime serves until the timeout, so it stays
+# Running across the upgrade. The previous release named its Certificate
+# up-runner-tls and its NetworkPolicy up-runner; after the upgrade it must
+# keep that Certificate and get its new NetworkPolicy beside the old one.
+apiVersion: kaalm.io/v1beta1
+kind: AgentTask
+metadata:
+  name: up-runner
+  namespace: up-e2e
+spec:
+  agentClassRef:
+    name: up-service
+  image: ghcr.io/win07xp/kaalm-agent-go:__PREV__
+  completion:
+    condition: agentReported
+    timeout: 30m
+    onTimeout: Fail
