@@ -19,6 +19,7 @@ package drain
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -213,9 +214,11 @@ func TestGroup_KeepsIdleConnectionsThroughTheDelay(t *testing.T) {
 	if _, err := h.wait(t, 5*time.Second); err != nil {
 		t.Errorf("Serve = %v, want nil", err)
 	}
+	// A read deadline keeps a broken stop stage from hanging the test; a
+	// timeout means the connection is still open, so only EOF passes.
 	_ = idle.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := idleBuf.ReadByte(); err == nil {
-		t.Error("a connection idle through the delay must be closed at the stop stage")
+	if _, err := idleBuf.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Errorf("read on a connection idle through the delay = %v, want EOF (closed at the stop stage)", err)
 	}
 }
 
