@@ -185,7 +185,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: taskCertificateName("t-run")}, &cert); err != nil {
 		t.Fatalf("get certificate: %v", err)
 	}
-	wantSecret := "t-run-tls-" + string(getTask(t, "t-run").UID)[:8]
+	wantSecret := "t-run.task-tls-" + string(getTask(t, "t-run").UID)[:8]
 	if cert.Spec.SecretName != wantSecret {
 		t.Errorf("certificate secretName = %q, want %q", cert.Spec.SecretName, wantSecret)
 	}

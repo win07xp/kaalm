@@ -127,7 +127,7 @@ func expectTaskCertificate(t *testing.T, c client.Client, task *kaalmv1beta1.Age
 	if !metav1.IsControlledBy(&cert, task) {
 		t.Error("the task does not control its Certificate")
 	}
-	if want := certificateSecretName(task.Name, task.UID); cert.Spec.SecretName != want {
+	if want := taskCertificateSecretName(task.Name, task.UID); cert.Spec.SecretName != want {
 		t.Errorf("secretName = %q, want %q", cert.Spec.SecretName, want)
 	}
 }

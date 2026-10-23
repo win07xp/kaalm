@@ -30,6 +30,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -167,6 +168,15 @@ func taskCertificateName(taskName string) string   { return taskName + ".task-tl
 func taskNetworkPolicyName(taskName string) string { return taskName + ".task" }
 func taskFQDNPolicyName(taskName string) string    { return taskName + ".task-fqdn" }
 
+// taskCertificateSecretName is the output Secret name of a new task
+// Certificate: certificateSecretName with the same .task qualifier, so it
+// cannot equal the Secret of an Agent of the same name even when the two
+// UIDs share their leading characters. An existing Certificate keeps the
+// spec.secretName it carries.
+func taskCertificateSecretName(taskName string, uid types.UID) string {
+	return certificateSecretName(taskName+".task", uid)
+}
+
 // legacyTaskCertificateName is the task Certificate name from before the
 // .task qualifier. A task created then keeps the Certificate it controls
 // under this name: it writes the Secret the running Pod mounts, and a second
@@ -196,14 +206,14 @@ func isAgentReported(task *kaalmv1beta1.AgentTask) bool {
 
 // desiredTaskCertificate is the per-task client certificate: a single SAN in
 // the non-Service task shape and client auth only, since tasks have no inbound
-// listener. It writes to the Secret certificateSecretName names. See
+// listener. It writes to the Secret taskCertificateSecretName names. See
 // docs/src/security/tls.md.
 func desiredTaskCertificate(task *kaalmv1beta1.AgentTask, lifetime CertLifetime) *cmapi.Certificate {
 	duration, renewBefore := lifetime.resolve()
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCertificateName(task.Name), Namespace: task.Namespace},
 		Spec: cmapi.CertificateSpec{
-			SecretName: certificateSecretName(task.Name, task.UID),
+			SecretName: taskCertificateSecretName(task.Name, task.UID),
 			IssuerRef:  cmmeta.IssuerReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
 			DNSNames: []string{
 				fmt.Sprintf("%s.%s.%s", task.Name, task.Namespace, kaalmv1beta1.TaskSANSuffix),
