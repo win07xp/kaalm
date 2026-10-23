@@ -214,6 +214,14 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(podUID(runnerPodName)).To(Equal(runnerPodUID),
 			"the upgrade must not replace running task Pods")
 
+		// The new controller converges the NetworkPolicy and the Certificate in
+		// one pass, so the new-named policy proves that pass ran before the
+		// Certificate checks below.
+		By("the running task gets its NetworkPolicy under the new name beside the old one")
+		Eventually(func() string { return controllerOf("networkpolicy", "up-runner.task") }, "120s", "5s").
+			Should(Equal("AgentTask/up-runner"))
+		Expect(controllerOf("networkpolicy", "up-runner")).To(Equal("AgentTask/up-runner"))
+
 		By("the running task keeps its Certificate under the old name, and gets no second one")
 		Expect(controllerOf("certificate.cert-manager.io", "up-runner-tls")).To(Equal("AgentTask/up-runner"))
 		Expect(certSecretName("up-runner-tls")).To(Equal(runnerSecret))
@@ -223,11 +231,6 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 				"--ignore-not-found", "-o", "name")
 			return lastLine(out), err
 		}, "20s", "5s").Should(BeEmpty())
-
-		By("the running task gets its NetworkPolicy under the new name beside the old one")
-		Eventually(func() string { return controllerOf("networkpolicy", "up-runner.task") }, "120s", "5s").
-			Should(Equal("AgentTask/up-runner"))
-		Expect(controllerOf("networkpolicy", "up-runner")).To(Equal("AgentTask/up-runner"))
 
 		By("the sleeper is still Hibernated")
 		Expect(phase("agent", "up-sleeper")).To(Equal("Hibernated"))
