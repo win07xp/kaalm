@@ -72,10 +72,7 @@ why), `ChildWriteRejected` (the apiserver refused a write of another object,
 such as the Service or PVC; the message says which and why),
 `ChildConflict` (an object the Agent does not own already has the name of
 one of its children, such as its NetworkPolicy; the message names it, and
-deleting it lets the Agent continue, unless an AgentTask of the same name owns
-it: then delete one of the two workloads, and recreate it under another name
-if you still need it, as
-[Child resources](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/child-resources.md#an-agent-and-an-agenttask-cannot-share-a-name) explains), and
+deleting it lets the Agent continue), and
 `SystemNamespaceForbidden` (an Agent in `kaalm-system` is never
 provisioned). Reasons on `Ready` that report progress: `PodProvisioning`,
 `PodRunning`, `PodDisrupted`, `SpecDrift`, `Hibernated`, and `Woken`; an
@@ -95,10 +92,9 @@ class does not admit, at provisioning (same reasons as the Agent's Degraded,
 but terminal here).
 
 Conditions: `Ready` (the checks before the Pod; `ChildConflict` holds a task
-without a Pod, as it holds an Agent (an Agent of the same name can own the
-conflicting object, with the same fix as above), and `PodCreateRejected` or
-`ChildWriteRejected` holds a task whose Pod create or other write the apiserver
-refused until the five-minute provisioning deadline fails the attempt. On a
+without a Pod, as it holds an Agent (with the same fix as above), and
+`PodCreateRejected` or `ChildWriteRejected` holds a task whose Pod create or
+other write the apiserver refused until the five-minute provisioning deadline fails the attempt. On a
 task with a Pod, `ChildConflict` and `ChildWriteRejected` are reported while
 the task keeps running and can still complete, time out, or retry; see
 [AgentTaskReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agenttask.md#task-child-resource-convergence).
@@ -274,9 +270,9 @@ below the restricted Pod Security Standard), and `FQDNPolicySupported`
 `NoHostsRequested` when the class names no `allowedHosts`,
 `FQDNPolicySupported` when it does and the CNI can carry them out,
 `FQDNPolicyUnsupported` when it cannot and the hosts are ignored). On Cilium,
-each agent and task of the class then has a CiliumNetworkPolicy named
-`NAME-fqdn` that allows those hosts. A fresh class shows empty `AGENTS` and `TASKS`
-columns until something uses it.
+each agent and task of the class then has a CiliumNetworkPolicy that allows
+those hosts, named `NAME-fqdn` for an agent and `NAME.task-fqdn` for a task. A
+fresh class shows empty `AGENTS` and `TASKS` columns until something uses it.
 
 ## One-liners
 

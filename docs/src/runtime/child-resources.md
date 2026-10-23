@@ -61,7 +61,7 @@ Three caveats bound the guarantee. The synthesis applies only to Kaalm-managed P
 
 ### FQDN egress policy
 
-When the class lists `network.egress.allowedHosts` and the CNI is Cilium, the controller writes a `cilium.io/v2` `CiliumNetworkPolicy` named `{name}-fqdn` beside the NetworkPolicy. It selects the same Pod labels as the NetworkPolicy and allows two kinds of egress:
+When the class lists `network.egress.allowedHosts` and the CNI is Cilium, the controller writes a `cilium.io/v2` `CiliumNetworkPolicy` beside the NetworkPolicy, named `{name}-fqdn` for an Agent and `{name}.task-fqdn` for an AgentTask. It selects the same Pod labels as the NetworkPolicy and allows two kinds of egress:
 
 | Rule | Peer | Ports |
 |---|---|---|
@@ -98,11 +98,11 @@ An AgentTask gets a similar set, adjusted for a short-lived workload that takes 
 |---|---|---|---|---|
 | Pod | `{name}-` plus a suffix | Created in `Provisioning`; the task is `Running` once the Pod is Ready; recreated on each retry | AgentTask | Deleted |
 | ServiceAccount | `task-{name}` | Always | AgentTask | Deleted |
-| NetworkPolicy | `{name}` | Always | AgentTask | Deleted |
-| CiliumNetworkPolicy | `{name}-fqdn` | The class sets `network.egress.allowedHosts` and the CNI supports it | AgentTask | Deleted |
+| NetworkPolicy | `{name}.task` | Always | AgentTask | Deleted |
+| CiliumNetworkPolicy | `{name}.task-fqdn` | The class sets `network.egress.allowedHosts` and the CNI supports it | AgentTask | Deleted |
 | PVC | `{name}-workspace` | `spec.persistence.enabled` is `true` | AgentTask | Deleted |
-| Certificate | `{name}-tls` | Always | AgentTask | Deleted |
-| Secret | `{name}-tls-{uid}`, with `{uid}` the first eight characters of the workload's UID ([Agent certificate](../controller/reconcilers/agent.md#agent-certificate)) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |
+| Certificate | `{name}.task-tls` | Always | AgentTask | Deleted |
+| Secret | `{name}.task-tls-{uid}`, with `{uid}` the first eight characters of the task's UID ([Agent certificate](../controller/reconcilers/agent.md#agent-certificate) gives the rule) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |
 | ConfigMap | `{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | AgentTask | Deleted |
@@ -115,6 +115,7 @@ What differs from an Agent:
 - **No Service.** A task receives no channel messages and has no stable endpoint.
 - **The Certificate carries `client auth` only** ([Lifecycle of an AgentTask TLS client certificate](../security/tls.md#lifecycle-of-an-agenttask-tls-client-certificate)). The task presents it on outbound calls, the LLM proxy and `/v1/task/complete`; there is no server-auth usage because the task exposes no HTTPS listener.
 - **The NetworkPolicy has no ingress allow rules.** With no listener and no Service, the synthesized policy carries the same egress rules as an Agent's and makes default-deny ingress explicit.
+- **The Certificate, TLS Secret, NetworkPolicy, and CiliumNetworkPolicy names carry a `.task` qualifier.** An Agent creates the same four kinds, so without the qualifier an Agent and an AgentTask of one name would ask for the same objects. The two Secrets would differ only by UID, and two UIDs can share their first eight characters. The qualifier is a dot because [rule 21](../resources/validation/names-and-tasks.md) keeps dots out of every Agent and AgentTask name, and every other child name is the workload name, with or without a dot-free prefix or suffix. No name the controller gives a child of another workload can equal a qualified one.
 - **The PVC is a workspace**, mounted at `spec.persistence.mountPath`, default `/var/task/workspace`, and provisioned only when the task spec requests persistence; there is no `existingClaim` on a task.
 
 ### The completion mailbox
@@ -122,18 +123,6 @@ What differs from an Agent:
 When [`completion.condition: agentReported`](../controller/task-lifecycle.md), the controller also provisions a per-task ConfigMap, pre-created with `data: {}`, where the gateway writes the completion payload, and a per-task Role and RoleBinding that grant the gateway ServiceAccount name-scoped `update` and `patch` on that one ConfigMap. The ConfigMap is a completion channel, not configuration delivery. It holds the agent's full `message` for as long as the task exists, except that a retry resets it; the task's status stores it cut to 4,096 bytes ([Status](../resources/agenttask.md#status)). The controller pre-creates it because RBAC cannot scope `create` to one name, so the Role carries no `create` verb ([Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions)).
 
 For an `agentReported` task, the reconciler writes the Pod's UID to `status.currentPodUID` on every Pod creation, initial and retry; a task in `exitCode` mode never has the field set. The gateway rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod`. The order in which a retry clears and rewrites the field is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
-
-## An Agent and an AgentTask cannot share a name
-
-An Agent and an AgentTask in the same namespace cannot share a name, because three of their children get the same name: the Certificate `{name}-tls`, the NetworkPolicy `{name}`, and, when the class sets `network.egress.allowedHosts` on a cluster with FQDN support, the CiliumNetworkPolicy `{name}-fqdn`.
-
-Whichever of the two provisions first keeps the names. The other reports `Ready=False, reason=ChildConflict` naming one of these children, creates no Pod, and keeps its phase; an AgentTask is not failed. [Child ownership](../controller/reconcilers/agent.md#child-ownership) gives the requeue and event behavior.
-
-The names stay taken until the other workload is deleted, not only until it stops running. A settled AgentTask keeps them until its `ttlSecondsAfterFinished` deletes it ([The class bounds timeout and retention](../resources/agenttask.md#the-class-bounds-timeout-and-retention)) or you delete it, and a hibernated Agent keeps them.
-
-To clear the clash, delete one of the two workloads, and recreate it under another name if you still need it. Don't delete the child instead. An Agent re-creates a deleted child on its next pass (a hibernated Agent, when it wakes), and so does an AgentTask with a Pod ([Task child-resource convergence](../controller/reconcilers/agenttask.md#task-child-resource-convergence)). Whichever pass comes first keeps the name, and the other workload still reports `ChildConflict`. If the Agent takes the NetworkPolicy, the running task's Pod is left without its own egress boundary.
-
-No apply-time check catches the clash, because Kaalm runs no admission webhook and a schema rule cannot see other objects ([No admission webhooks](../controller/overview.md#no-admission-webhooks)).
 
 ## Async response ConfigMaps are swept by label, not owned
 

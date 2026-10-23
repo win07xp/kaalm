@@ -7,7 +7,7 @@ participant "**AgentReconciler**\n**AgentTaskReconciler**" as R #87CEEB
 participant "cert-manager\n(kaalm-ca-issuer)" as CM #F5F5F5
 participant "**Pod**" as P #E6E6FA
 R -> CM : Certificate {name}-tls: Service SANs, server auth and client auth (Agent)
-R -> CM : Certificate {taskName}-tls: one task.kaalm.io SAN, client auth (AgentTask)
+R -> CM : Certificate {taskName}.task-tls: one task.kaalm.io SAN, client auth (AgentTask)
 CM -> CM : issue, write the output Secret in the workload's namespace
 loop until Certificate Ready
   R -> R : Ready=False, reason=CertificateNotReady, requeue 5s

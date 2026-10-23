@@ -98,7 +98,7 @@ func TestTask_PVCCreateRejectedByQuota(t *testing.T) {
 	const ns, name = "pvc-reject-quota-task", "pvc-quota-task"
 	mkPVCQuota(t, ns)
 	mkPersistentTaskIn(t, ns, name, "wc-pvc-reject-quota", nil)
-	eventually(t, func() error { return markCertReadyIn(ns, name) })
+	eventually(t, func() error { return markTaskCertReadyIn(ns, name) })
 
 	wantName := `creating PersistentVolumeClaim "` + name + `-workspace"`
 	eventually(t, func() error {
@@ -145,7 +145,7 @@ func TestTask_ChildWriteRejectedDeadline(t *testing.T) {
 		withShortDeadline(task)
 		task.Spec.Completion.BackoffLimit = 1
 	})
-	eventually(t, func() error { return markCertReadyIn(ns, name) })
+	eventually(t, func() error { return markTaskCertReadyIn(ns, name) })
 
 	expectEvent(t, "AgentTask", ns, name, "ProvisioningDeadlineExceeded",
 		corev1.EventTypeWarning, "retrying (1/1)")

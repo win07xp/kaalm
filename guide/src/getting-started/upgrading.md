@@ -64,6 +64,19 @@ agenttask.kaalm.io/nightly-report   Succeeded   standard   102s
 and their Pods keep their names and ages, while `helm history kaalm -n
 kaalm-system` shows the new revision as `deployed`.
 
+Every task that exists when you upgrade, finished ones included (such as
+`nightly-report`), keeps its Certificate, NetworkPolicy, and
+CiliumNetworkPolicy under the old names until the task is deleted, by its
+`ttlSecondsAfterFinished` or by hand. A running task also gets policies under
+the new names beside the old ones. If you delete the old Certificate of a
+running task, Kaalm creates one under the new name, which writes a different
+Secret than the one the Pod mounts. The Pod keeps its certificate until it
+expires or the task retries. An Agent given that task's name waits with
+`ChildConflict` until the task is deleted, because the old names are the ones
+that Agent uses. The design book's
+[AgentTask certificate](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agenttask.md#agenttask-certificate)
+section states the rule.
+
 ## Moving from 1.x or 0.x
 
 Kaalm 2.0.0 installs fresh. It has no upgrade path from 1.x or 0.x, so the two

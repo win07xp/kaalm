@@ -48,7 +48,7 @@ func TestTask_MissingRuntimeClassLeavesNoPod(t *testing.T) {
 		ac.Spec.Runtime.RuntimeClassName = &rcName
 	})
 	mkTask(t, "missing-rc-task", "wc-missing-rc-task", nil)
-	eventually(t, func() error { return markCertReadyErr("missing-rc-task") })
+	eventually(t, func() error { return markTaskCertReadyErr("missing-rc-task") })
 
 	eventually(t, func() error {
 		return expectReadyRejected(getTask(t, "missing-rc-task").Status.Conditions, wantMsg)
@@ -125,7 +125,7 @@ func TestTask_PodCreateRejectedByQuota(t *testing.T) {
 	if err := testClient.Create(ctxT(), task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	eventually(t, func() error { return markCertReadyIn(ns, name) })
+	eventually(t, func() error { return markTaskCertReadyIn(ns, name) })
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
 		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: name}, &got); err != nil {
@@ -155,7 +155,7 @@ func TestTask_PodCreateRejectedDeadline(t *testing.T) {
 		withShortDeadline(task)
 		task.Spec.Completion.BackoffLimit = 1
 	})
-	eventually(t, func() error { return markCertReadyErr("reject-deadline") })
+	eventually(t, func() error { return markTaskCertReadyErr("reject-deadline") })
 
 	expectEvent(t, "AgentTask", "default", "reject-deadline", "ProvisioningDeadlineExceeded",
 		corev1.EventTypeWarning, "retrying (1/1)")
@@ -196,7 +196,7 @@ func TestTask_PodCreateRejectedDeadlineFromStatus(t *testing.T) {
 		ac.Spec.Runtime.RuntimeClassName = &missing
 	})
 	mkTask(t, "reject-persisted", "wc-reject-persisted", nil)
-	eventually(t, func() error { return markCertReadyErr("reject-persisted") })
+	eventually(t, func() error { return markTaskCertReadyErr("reject-persisted") })
 	eventually(t, func() error {
 		if getTask(t, "reject-persisted").Status.CreateRejectedTime == nil {
 			return errString("createRejectedTime unset")
@@ -245,7 +245,7 @@ func TestTask_CreateRejectedTimeClearedOnRetry(t *testing.T) {
 	mkTask(t, "reject-retry", "wc-reject-retry", func(task *kaalmv1beta1.AgentTask) {
 		task.Spec.Completion.BackoffLimit = 1
 	})
-	eventually(t, func() error { return markCertReadyErr("reject-retry") })
+	eventually(t, func() error { return markTaskCertReadyErr("reject-retry") })
 	eventually(t, func() error {
 		if taskPod(t, "reject-retry") == nil {
 			return errString("no pod yet")
@@ -298,7 +298,7 @@ func TestTask_CreateRejectedTimeClearedOnSettle(t *testing.T) {
 		ac.Spec.Runtime.RuntimeClassName = &missing
 	})
 	mkTask(t, "reject-settle", "wc-reject-settle", nil)
-	eventually(t, func() error { return markCertReadyErr("reject-settle") })
+	eventually(t, func() error { return markTaskCertReadyErr("reject-settle") })
 	eventually(t, func() error {
 		if getTask(t, "reject-settle").Status.CreateRejectedTime == nil {
 			return errString("createRejectedTime unset")
@@ -331,7 +331,7 @@ func TestTask_CreateRejectedTimeClearedOnSettle(t *testing.T) {
 func TestTask_CreateRejectedTimeClearedOnLostWriteRepair(t *testing.T) {
 	mkWorkloadClass(t, "wc-reject-repair", nil)
 	mkTask(t, "reject-repair", "wc-reject-repair", nil)
-	eventually(t, func() error { return markCertReadyErr("reject-repair") })
+	eventually(t, func() error { return markTaskCertReadyErr("reject-repair") })
 	eventually(t, func() error {
 		if taskPod(t, "reject-repair") == nil {
 			return errString("no pod yet")

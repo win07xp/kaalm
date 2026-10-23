@@ -115,7 +115,7 @@ func expectStoredReady(t *testing.T, task *kaalmv1beta1.AgentTask, status metav1
 	}
 }
 
-// expectTaskCertificate checks Certificate {name}-tls exists, is controlled
+// expectTaskCertificate checks the task's Certificate exists, is controlled
 // by the task, and names the task's UID-suffixed Secret.
 func expectTaskCertificate(t *testing.T, c client.Client, task *kaalmv1beta1.AgentTask) {
 	t.Helper()
@@ -127,7 +127,7 @@ func expectTaskCertificate(t *testing.T, c client.Client, task *kaalmv1beta1.Age
 	if !metav1.IsControlledBy(&cert, task) {
 		t.Error("the task does not control its Certificate")
 	}
-	if want := certificateSecretName(task.Name, task.UID); cert.Spec.SecretName != want {
+	if want := taskCertificateSecretName(task.Name, task.UID); cert.Spec.SecretName != want {
 		t.Errorf("secretName = %q, want %q", cert.Spec.SecretName, want)
 	}
 }
@@ -137,7 +137,7 @@ func expectTaskCertificate(t *testing.T, c client.Client, task *kaalmv1beta1.Age
 func TestTask_CertificateDeletedWhileRunningIsRecreated(t *testing.T) {
 	mkWorkloadClass(t, "wc-cert-restore", nil)
 	pod := provisionRunningTask(t, "cert-restore", "wc-cert-restore", nil)
-	key := types.NamespacedName{Namespace: "default", Name: "cert-restore-tls"}
+	key := types.NamespacedName{Namespace: "default", Name: taskCertificateName("cert-restore")}
 	var old cmapi.Certificate
 	if err := testAPIReader.Get(ctxT(), key, &old); err != nil {
 		t.Fatal(err)
@@ -372,7 +372,7 @@ func TestTask_DeletedChildrenRecreatedWhileRunning(t *testing.T) {
 	mkWorkloadClass(t, "wc-child-restore", nil)
 	pod := provisionRunningTask(t, "child-restore", "wc-child-restore", nil)
 	children := []client.Object{
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "child-restore"}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: taskNetworkPolicyName("child-restore")}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: taskServiceAccountName("child-restore")}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: taskCompletionCMName("child-restore")}},
 		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: taskCompletionRoleName("child-restore")}},
@@ -431,7 +431,7 @@ func TestTask_DeletedChildrenRecreatedWhileRunning(t *testing.T) {
 func TestTask_NetworkPolicyDeletedWhileProvisioningIsRecreated(t *testing.T) {
 	mkWorkloadClass(t, "wc-np-restore-prov", nil)
 	mkTask(t, "np-restore-prov", "wc-np-restore-prov", nil)
-	eventually(t, func() error { return markCertReadyErr("np-restore-prov") })
+	eventually(t, func() error { return markTaskCertReadyErr("np-restore-prov") })
 	eventually(t, func() error {
 		if taskPod(t, "np-restore-prov") == nil {
 			return errString("no pod yet")
@@ -439,7 +439,7 @@ func TestTask_NetworkPolicyDeletedWhileProvisioningIsRecreated(t *testing.T) {
 		return nil
 	})
 	pod := taskPod(t, "np-restore-prov")
-	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "np-restore-prov", Namespace: "default"}}
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: taskNetworkPolicyName("np-restore-prov"), Namespace: "default"}}
 	if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(np), np); err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +471,7 @@ func TestTask_NetworkPolicyDeletedWhileProvisioningIsRecreated(t *testing.T) {
 func setFQDNHosts(t *testing.T, name string, hosts ...string) {
 	t.Helper()
 	eventually(t, func() error {
-		u, err := getFQDNPolicy(name)
+		u, err := getFQDNPolicy(taskFQDNPolicyName(name))
 		if err != nil {
 			return err
 		}
@@ -497,11 +497,11 @@ func TestTask_FQDNPolicyKeptToClassAtPodCreation(t *testing.T) {
 		ac.Spec.Network.Egress.AllowedHosts = []string{"a.example.com"}
 	})
 	provisionRunningTask(t, "fqdn-restore", "wc-fqdn-restore", nil)
-	expectFQDNHosts(t, "fqdn-restore", "AgentTask", "a.example.com")
+	expectFQDNHosts(t, taskFQDNPolicyName("fqdn-restore"), "fqdn-restore", "AgentTask", "a.example.com")
 
 	setClassHosts(t, "wc-fqdn-restore", []string{"b.example.com"})
 	consistently(t, 2*time.Second, func() error {
-		u, err := getFQDNPolicy("fqdn-restore")
+		u, err := getFQDNPolicy(taskFQDNPolicyName("fqdn-restore"))
 		if err != nil {
 			return err
 		}
@@ -515,9 +515,9 @@ func TestTask_FQDNPolicyKeptToClassAtPodCreation(t *testing.T) {
 	// The policy kind is not watched: a class edit brings the Running pass.
 	setFQDNHosts(t, "fqdn-restore", "evil.example.com")
 	setClassHosts(t, "wc-fqdn-restore", []string{"c.example.com"})
-	expectFQDNHosts(t, "fqdn-restore", "AgentTask", "a.example.com")
+	expectFQDNHosts(t, taskFQDNPolicyName("fqdn-restore"), "fqdn-restore", "AgentTask", "a.example.com")
 
-	u, err := getFQDNPolicy("fqdn-restore")
+	u, err := getFQDNPolicy(taskFQDNPolicyName("fqdn-restore"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,11 +525,11 @@ func TestTask_FQDNPolicyKeptToClassAtPodCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	setClassHosts(t, "wc-fqdn-restore", []string{"d.example.com"})
-	expectFQDNHosts(t, "fqdn-restore", "AgentTask", "a.example.com")
+	expectFQDNHosts(t, taskFQDNPolicyName("fqdn-restore"), "fqdn-restore", "AgentTask", "a.example.com")
 
 	setClassHosts(t, "wc-fqdn-restore", nil)
 	consistently(t, 2*time.Second, func() error {
-		_, err := getFQDNPolicy("fqdn-restore")
+		_, err := getFQDNPolicy(taskFQDNPolicyName("fqdn-restore"))
 		return err
 	})
 }
@@ -550,7 +550,7 @@ func setClassCIDRs(t *testing.T, class string, cidrs []string) {
 // npCIDRs lists the ipBlock CIDRs of a task's NetworkPolicy.
 func npCIDRs(name string) ([]string, error) {
 	var np networkingv1.NetworkPolicy
-	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &np); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: taskNetworkPolicyName(name)}, &np); err != nil {
 		return nil, err
 	}
 	var out []string
@@ -622,11 +622,11 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 	var np networkingv1.NetworkPolicy
 	var role rbacv1.Role
 	var rb rbacv1.RoleBinding
-	if err := testAPIReader.Get(ctxT(), key("child-revert"), &np); err != nil {
+	if err := testAPIReader.Get(ctxT(), key(taskNetworkPolicyName("child-revert")), &np); err != nil {
 		t.Fatal(err)
 	}
 	wantNP := np.Spec.DeepCopy()
-	npBefore, npEdit := editObject(t, key("child-revert"), &np, func() {
+	npBefore, npEdit := editObject(t, key(taskNetworkPolicyName("child-revert")), &np, func() {
 		np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}},
 		})
@@ -640,7 +640,7 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 
 	eventually(t, func() error {
 		var got networkingv1.NetworkPolicy
-		if err := testAPIReader.Get(ctxT(), key("child-revert"), &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), key(taskNetworkPolicyName("child-revert")), &got); err != nil {
 			return err
 		}
 		if err := writtenSince(&got, npBefore, npEdit); err != nil {
@@ -695,7 +695,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	setClassCIDRs(t, "wc-np-keep", []string{"10.2.0.0/16"})
 	consistently(t, 2*time.Second, expectKeptCIDRs("10.1.0.0/16"))
 
-	npKey := types.NamespacedName{Namespace: "default", Name: "np-keep"}
+	npKey := types.NamespacedName{Namespace: "default", Name: taskNetworkPolicyName("np-keep")}
 	var edited networkingv1.NetworkPolicy
 	before, edit := editObject(t, npKey, &edited, func() {
 		edited.Spec.Egress[len(edited.Spec.Egress)-1].To[0].IPBlock.CIDR = "0.0.0.0/0"
@@ -714,7 +714,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	// testClient reads from the manager's cache, which can still hold the
 	// deleted policy for a moment; wait for the restored one by its UID.
 	var old networkingv1.NetworkPolicy
-	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &old); err != nil {
+	if err := testAPIReader.Get(ctxT(), npKey, &old); err != nil {
 		t.Fatal(err)
 	}
 	if err := testClient.Delete(ctxT(), &old); err != nil {
@@ -722,7 +722,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
-		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &np); err != nil {
+		if err := testAPIReader.Get(ctxT(), npKey, &np); err != nil {
 			return err
 		}
 		if np.UID == old.UID {
@@ -855,7 +855,7 @@ func TestTaskReconcile_ConflictDoesNotStopOtherChildren(t *testing.T) {
 		t.Errorf("phase = %s, want Running", got.Status.Phase)
 	}
 	for _, obj := range []client.Object{
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: task.Name}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: taskNetworkPolicyName(task.Name)}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: taskServiceAccountName(task.Name)}},
 	} {
 		obj.SetNamespace("default")
@@ -894,7 +894,7 @@ func TestDriveProvisioning_TailRestoresWithoutFQDNRead(t *testing.T) {
 		t.Fatalf("driveProvisioning = (%+v, %v), want a certWaitRequeue requeue", res, err)
 	}
 	var np networkingv1.NetworkPolicy
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: task.Name}, &np); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: taskNetworkPolicyName(task.Name)}, &np); err != nil {
 		t.Fatalf("NetworkPolicy not re-created: %v", err)
 	}
 	if ugets != 0 {
@@ -1118,7 +1118,7 @@ func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
 	task, pod, cert := runningAgentReportedTask(t, "run-fqdn-drift")
 	task.Spec.Completion.Condition = completionExitCode
 	task.Status.ClassEgress = &kaalmv1beta1.AgentClassEgress{AllowedHosts: []string{"a.example.com"}}
-	drifted := desiredFQDNPolicy(task, taskPodLabels(task), []string{"evil.example.com"}, DNSSelector{})
+	drifted := desiredFQDNPolicy(task, taskFQDNPolicyName(task.Name), taskPodLabels(task), []string{"evil.example.com"}, DNSSelector{})
 	if err := controllerutil.SetControllerReference(task, drifted, testScheme(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -1151,8 +1151,121 @@ func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(drifted), u); err != nil {
 		t.Fatal(err)
 	}
-	want := desiredFQDNPolicy(task, taskPodLabels(task), []string{"a.example.com"}, DNSSelector{})
+	want := desiredFQDNPolicy(task, taskFQDNPolicyName(task.Name), taskPodLabels(task), []string{"a.example.com"}, DNSSelector{})
 	if !equality.Semantic.DeepEqual(u.Object["spec"], want.Object["spec"]) {
 		t.Errorf("FQDN policy spec = %v, want the recorded hosts", u.Object["spec"])
+	}
+}
+
+// legacyTaskCertificate is the Certificate {name}-tls a task created before
+// the task children carried the .task qualifier, Ready, naming secretName,
+// and controlled by owner when owner is set.
+func legacyTaskCertificate(t *testing.T, task *kaalmv1beta1.AgentTask, secretName string, owner client.Object) *cmapi.Certificate {
+	t.Helper()
+	cert := desiredTaskCertificate(task, CertLifetime{})
+	cert.Name = task.Name + "-tls"
+	cert.Spec.SecretName = secretName
+	cert.Status.Conditions = []cmapi.CertificateCondition{{
+		Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
+	}}
+	if owner != nil {
+		if err := controllerutil.SetControllerReference(owner, cert, testScheme(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cert
+}
+
+// A task that controls a Certificate {name}-tls from before the rename keeps
+// it: its Secret is the one the running Pod mounts, and a second Certificate
+// naming that Secret would make cert-manager re-issue it in turns.
+func TestEnsureTaskCertificate_KeepsLegacyCertificate(t *testing.T) {
+	task := restoreTask("legacy-cert", kaalmv1beta1.TaskRunning, true, "PodRunning")
+	legacy := legacyTaskCertificate(t, task, "legacy-cert-tls-abcdef12", task)
+	r, c := restoreReconciler(t, task, legacy)
+
+	secret, ready, err := r.ensureTaskCertificate(context.Background(), task)
+	if err != nil || !ready || secret != "legacy-cert-tls-abcdef12" {
+		t.Fatalf("ensureTaskCertificate = (%q, %v, %v), want (legacy-cert-tls-abcdef12, true, nil)", secret, ready, err)
+	}
+	var cert cmapi.Certificate
+	err = c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: task.Name + ".task-tls"}, &cert)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("Certificate %s.task-tls: err = %v, want NotFound beside the task's legacy Certificate", task.Name, err)
+	}
+}
+
+// A Certificate {name}-tls the task does not control is not the task's: the
+// task creates its own under the new name and leaves that one alone.
+func TestEnsureTaskCertificate_IgnoresLegacyCertificateItDoesNotControl(t *testing.T) {
+	agentOwner := func(task *kaalmv1beta1.AgentTask) client.Object {
+		return &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{
+			Name: task.Name, Namespace: "default", UID: types.UID(task.Name + "-agent-uid"),
+		}}
+	}
+	for _, tc := range []struct {
+		name  string
+		owner func(*kaalmv1beta1.AgentTask) client.Object
+	}{
+		{"no controller", func(*kaalmv1beta1.AgentTask) client.Object { return nil }},
+		{"an Agent of the same name", agentOwner},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := restoreTask("legacy-foreign", kaalmv1beta1.TaskPending, false, "CertificateNotReady")
+			legacy := legacyTaskCertificate(t, task, "legacy-foreign-tls-0f0f0f0f", tc.owner(task))
+			r, c := restoreReconciler(t, task, legacy)
+			var before cmapi.Certificate
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(legacy), &before); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, _, err := r.ensureTaskCertificate(context.Background(), task); err != nil {
+				t.Fatalf("ensureTaskCertificate: %v", err)
+			}
+			expectTaskCertificate(t, c, task)
+			var after cmapi.Certificate
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(legacy), &after); err != nil {
+				t.Fatalf("the legacy Certificate is gone: %v", err)
+			}
+			if after.ResourceVersion != before.ResourceVersion {
+				t.Error("the legacy Certificate was written")
+			}
+		})
+	}
+}
+
+// A running task from before the rename gets its NetworkPolicy under the new
+// name beside the old one, which stays until the task is deleted, so the Pod
+// is never without a policy. Its legacy Certificate gets no second one.
+func TestRestoreTaskChildren_AddsNewPolicyBesideLegacy(t *testing.T) {
+	task := restoreTask("legacy-run", kaalmv1beta1.TaskRunning, true, "PodRunning")
+	pod := restorePod(t, task, corev1.PodRunning, true)
+	oldNP := desiredTaskNetworkPolicy(task, nil, "kaalm-system", DNSSelector{})
+	oldNP.Name = task.Name
+	if err := controllerutil.SetControllerReference(task, oldNP, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	legacy := legacyTaskCertificate(t, task, "legacy-run-tls-12345678", task)
+	r, c := restoreReconciler(t, task, pod, oldNP, legacy)
+
+	if err := r.restoreTaskChildren(context.Background(), storedTask(t, c, task), &kaalmv1beta1.AgentClass{},
+		effectiveTaskSpec{}, pod, false); err != nil {
+		t.Fatalf("restoreTaskChildren: %v", err)
+	}
+	ctx := context.Background()
+	var np networkingv1.NetworkPolicy
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "default", Name: task.Name + ".task"}, &np); err != nil {
+		t.Fatalf("NetworkPolicy %s.task: %v", task.Name, err)
+	}
+	if !metav1.IsControlledBy(&np, task) {
+		t.Error("the task does not control its new NetworkPolicy")
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldNP), &np); err != nil {
+		t.Errorf("the old NetworkPolicy %s must stay until the task is deleted: %v", oldNP.Name, err)
+	}
+	var cert cmapi.Certificate
+	err := c.Get(ctx, types.NamespacedName{Namespace: "default", Name: task.Name + ".task-tls"}, &cert)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("Certificate %s.task-tls: err = %v, want NotFound beside the legacy Certificate", task.Name, err)
 	}
 }

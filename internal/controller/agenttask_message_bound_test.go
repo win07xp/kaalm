@@ -142,7 +142,7 @@ func TestTask_LongImagePullSecretQuotedInPart(t *testing.T) {
 func TestTask_LongInvalidImageMessageCut(t *testing.T) {
 	mkWorkloadClass(t, "tc-long-badimg", nil)
 	mkTask(t, "t-long-badimg", "tc-long-badimg", nil)
-	eventually(t, func() error { return markCertReadyErr("t-long-badimg") })
+	eventually(t, func() error { return markTaskCertReadyErr("t-long-badimg") })
 	eventually(t, func() error {
 		if taskPod(t, "t-long-badimg") == nil {
 			return errString("no pod yet")

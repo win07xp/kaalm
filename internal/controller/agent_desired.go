@@ -430,13 +430,13 @@ func agentServiceAccountName(agentName string) string {
 // end the output Secret name of a new per-workload Certificate.
 const certSecretUIDChars = 8
 
-// certificateSecretName is the output Secret name of a new per-workload
-// Certificate: the workload name, "-tls-", and the first certSecretUIDChars
-// characters of the workload's UID. The UID suffix makes the name unique to
-// this workload object, so it cannot name a Secret that existed before the
-// workload, and a workload re-created with the same name gets a new one. An
-// existing Certificate keeps whatever spec.secretName it carries. A UID
-// shorter than the suffix is used whole.
+// certificateSecretName is the output Secret name of a new Agent Certificate
+// (a task's goes through taskCertificateSecretName): the workload name,
+// "-tls-", and the first certSecretUIDChars characters of the workload's UID.
+// The UID suffix makes the name unique to this workload object, so it cannot
+// name a Secret that existed before the workload, and a workload re-created
+// with the same name gets a new one. An existing Certificate keeps whatever
+// spec.secretName it carries. A UID shorter than the suffix is used whole.
 func certificateSecretName(workloadName string, uid types.UID) string {
 	u := string(uid)
 	if len(u) > certSecretUIDChars {

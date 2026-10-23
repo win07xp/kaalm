@@ -1,0 +1,38 @@
+# An Agent and an AgentTask with the same name in one namespace. Each gets
+# its own NetworkPolicy, Certificate, and TLS Secret: shared-name,
+# shared-name-tls, and shared-name-tls-{uid} for the Agent, shared-name.task,
+# shared-name.task-tls, and shared-name.task-tls-{uid} for the task.
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: shared-name
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationDelay: 0s
+    idleTimeout: 0s
+    wakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentTask
+metadata:
+  name: shared-name
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  env:
+    - name: KAALM_TASK_AUTOCOMPLETE
+      value: success
+  completion:
+    condition: agentReported
+    timeout: 2m
+    onTimeout: Fail
+  # Long enough that the task's children are still there for the owner
+  # checks after it settles; AfterAll deletes it.
+  ttlSecondsAfterFinished: 600

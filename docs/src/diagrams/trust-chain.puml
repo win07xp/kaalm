@@ -23,7 +23,7 @@ rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0
 }
 rectangle "a user namespace" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
   rectangle "**Certificate** {name}-tls, per Agent" as agenttls #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
-  rectangle "**Certificate** {taskName}-tls, per AgentTask" as tasktls #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**Certificate** {taskName}.task-tls, per AgentTask" as tasktls #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
   rectangle "**ConfigMap** kaalm-ca at /var/run/kaalm/ca.crt" as cacm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 selfsigned -[#9E9E9E,bold]-> cacert : issuerRef

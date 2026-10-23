@@ -13,7 +13,7 @@ CM -> TP : /var/run/kaalm/tls.crt and tls.key
 == Verified ==
 AP -> GW : LLM request, heartbeat: presents {name}-tls
 GW -> AP : POST /v1/message: mTLS both ways
-TP -> GW : LLM request, task-complete: presents {taskName}-tls
+TP -> GW : LLM request, task-complete: presents {taskName}.task-tls
 TP -[#B71C1C]->x GW : POST /v1/agent/heartbeat: 403
 == Rotated ==
 loop within renewBefore

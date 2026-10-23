@@ -44,9 +44,10 @@ func fqdnPolicyName(owner string) string { return owner + "-fqdn" }
 // workload's NetworkPolicy; Cilium allows the union of both. Cilium learns
 // the IPs behind a toFQDNs name only from DNS traffic its proxy sees, so the
 // DNS rule names the same resolver Pods as the NetworkPolicy DNS peer, with a
-// dns rule attached.
+// dns rule attached. The caller names the policy: fqdnPolicyName for an
+// Agent, taskFQDNPolicyName for an AgentTask.
 func desiredFQDNPolicy(
-	owner client.Object, podLabels map[string]string, hosts []string, dns DNSSelector,
+	owner client.Object, name string, podLabels map[string]string, hosts []string, dns DNSSelector,
 ) *unstructured.Unstructured {
 	sorted := slices.Clone(hosts)
 	slices.Sort(sorted)
@@ -62,7 +63,7 @@ func desiredFQDNPolicy(
 
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(ciliumPolicyGVK)
-	u.SetName(fqdnPolicyName(owner.GetName()))
+	u.SetName(name)
 	u.SetNamespace(owner.GetNamespace())
 	u.Object["spec"] = map[string]any{
 		"endpointSelector": map[string]any{"matchLabels": selector},
@@ -80,24 +81,25 @@ func desiredFQDNPolicy(
 	return u
 }
 
-// ensureFQDNPolicy converges the owner's CiliumNetworkPolicy. With support and
-// hosts it creates or updates the policy; with support and no hosts it deletes
-// any policy left from an earlier spec. A policy of that name the owner does
-// not control is a ChildConflictError, never updated or deleted. Without support it does nothing: the
+// ensureFQDNPolicy converges the owner's CiliumNetworkPolicy under the name
+// the caller gives. With support and hosts it creates or updates the policy;
+// with support and no hosts it deletes any policy of that name left from an
+// earlier spec. A policy of that name the owner does not control is a
+// ChildConflictError, never updated or deleted. Without support it does nothing: the
 // kind may not exist, so even a read would fail. The probe result is cached
 // for the process lifetime, so the kind can still be missing with support
 // reported, for example after Cilium is uninstalled and before the controller
 // restarts and probes again; a no-match error is then also nothing to do.
 func ensureFQDNPolicy(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme,
-	owner client.Object, podLabels map[string]string, hosts []string, dns DNSSelector, supported bool,
+	owner client.Object, name string, podLabels map[string]string, hosts []string, dns DNSSelector, supported bool,
 ) error {
 	if !supported {
 		return nil
 	}
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(ciliumPolicyGVK)
-	key := types.NamespacedName{Namespace: owner.GetNamespace(), Name: fqdnPolicyName(owner.GetName())}
+	key := types.NamespacedName{Namespace: owner.GetNamespace(), Name: name}
 	err := c.Get(ctx, key, current)
 	if apimeta.IsNoMatchError(err) {
 		return nil
@@ -121,7 +123,7 @@ func ensureFQDNPolicy(
 		return rejectedWrite("deleting", scheme, current, client.IgnoreNotFound(c.Delete(ctx, current)))
 	}
 
-	desired := desiredFQDNPolicy(owner, podLabels, hosts, dns)
+	desired := desiredFQDNPolicy(owner, name, podLabels, hosts, dns)
 	if err := controllerutil.SetControllerReference(owner, desired, scheme); err != nil {
 		return err
 	}

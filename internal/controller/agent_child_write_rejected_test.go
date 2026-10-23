@@ -96,7 +96,7 @@ func TestAgent_ServiceCreateRejectedByQuota(t *testing.T) {
 	mkServiceQuota(t, ns)
 	mkWorkloadClass(t, "wc-svc-reject-quota", nil)
 	mkAgentIn(t, ns, name, "wc-svc-reject-quota")
-	eventually(t, func() error { return markCertReadyIn(ns, name) })
+	eventually(t, func() error { return markCertReadyIn(ns, agentCertificateName(name)) })
 
 	wantName := `creating Service "` + name + `"`
 	eventually(t, func() error {
@@ -137,7 +137,7 @@ func TestAgent_ChildWriteRejectedKeepsRunningPod(t *testing.T) {
 	}
 	mkWorkloadClass(t, "wc-svc-reject-running", nil)
 	mkAgentIn(t, ns, name, "wc-svc-reject-running")
-	eventually(t, func() error { return markCertReadyIn(ns, name) })
+	eventually(t, func() error { return markCertReadyIn(ns, agentCertificateName(name)) })
 	eventually(t, func() error {
 		if podIn(t, ns, "kaalm.io/agent", name) == nil {
 			return errString("no pod yet")
