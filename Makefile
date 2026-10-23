@@ -291,6 +291,10 @@ GO_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-go:$(CHART_APP_VERSION)
 runtime-test: ## Unit tests for the agentruntime module and the Go starter (native, -race).
 	go test -race ./agentruntime/... ./examples/starter-go/...
 
+.PHONY: runtime-bench
+runtime-bench: ## Benchmark the agentruntime state write path at a full dedup window (Python counterpart: images/agent-python/tests/bench_memory.py).
+	go test ./agentruntime/ -run '^$$' -bench 'Store' -benchmem -count $(BENCH_COUNT)
+
 .PHONY: go-agent-image
 go-agent-image: ## Build the kaalm-agent-go base image (its test stage runs before every build, so this also runs the suite).
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
