@@ -404,6 +404,9 @@ async def serve(agent: Agent) -> int:
         with contextlib.suppress(asyncio.CancelledError):
             await background
     await runner.cleanup()
+    # Requests are drained: fold the log into state.json, so it alone is
+    # complete after a clean stop.
+    agent.store.close()
     await agent.gateway.close()
     log.info("shut down cleanly")
     return agent.exit_code or 0
