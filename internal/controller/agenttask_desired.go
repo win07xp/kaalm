@@ -158,6 +158,8 @@ func effectiveTaskTTL(task *kaalmv1beta1.AgentTask, b *kaalmv1beta1.AgentTaskCla
 }
 
 func taskCertificateName(taskName string) string    { return taskName + "-tls" }
+func taskNetworkPolicyName(taskName string) string  { return taskName }
+func taskFQDNPolicyName(taskName string) string     { return fqdnPolicyName(taskName) }
 func taskPVCName(taskName string) string            { return taskName + "-workspace" }
 func taskServiceAccountName(taskName string) string { return "task-" + taskName }
 func taskCompletionCMName(taskName string) string   { return taskName + "-completion" }
@@ -422,7 +424,7 @@ func desiredTaskNetworkPolicy(
 	}
 
 	return &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: task.Name, Namespace: task.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: taskNetworkPolicyName(task.Name), Namespace: task.Namespace},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: taskPodLabels(task)},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},

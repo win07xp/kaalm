@@ -41,7 +41,7 @@ func TestDesiredFQDNPolicy_DNSSelector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"a.example.com"}, dns)
+	u := desiredFQDNPolicy(agent, fqdnPolicyName(agent.Name), agentPodLabels(agent), []string{"a.example.com"}, dns)
 	egress, _, _ := unstructured.NestedSlice(u.Object, "spec", "egress")
 	eps := egress[0].(map[string]any)["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"]
 	want := map[string]any{
@@ -54,7 +54,7 @@ func TestDesiredFQDNPolicy_DNSSelector(t *testing.T) {
 
 	// An empty Pod list selects every Pod in the namespaces.
 	dns, _ = ParseDNSSelector("kubernetes.io/metadata.name=dns", "")
-	u = desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"a.example.com"}, dns)
+	u = desiredFQDNPolicy(agent, fqdnPolicyName(agent.Name), agentPodLabels(agent), []string{"a.example.com"}, dns)
 	egress, _, _ = unstructured.NestedSlice(u.Object, "spec", "egress")
 	eps = egress[0].(map[string]any)["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"]
 	want = map[string]any{"k8s:io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name": "dns"}
@@ -65,7 +65,7 @@ func TestDesiredFQDNPolicy_DNSSelector(t *testing.T) {
 
 func TestDesiredFQDNPolicy_Shape(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "team"}}
-	u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"b.example.com", "a.example.com", "b.example.com"}, DNSSelector{})
+	u := desiredFQDNPolicy(agent, fqdnPolicyName(agent.Name), agentPodLabels(agent), []string{"b.example.com", "a.example.com", "b.example.com"}, DNSSelector{})
 
 	if u.GetAPIVersion() != "cilium.io/v2" || u.GetKind() != "CiliumNetworkPolicy" {
 		t.Errorf("gvk = %s %s", u.GetAPIVersion(), u.GetKind())
@@ -118,7 +118,7 @@ func TestDesiredFQDNPolicy_Shape(t *testing.T) {
 func TestEnsureFQDNPolicy_UnsupportedTouchesNothing(t *testing.T) {
 	// A nil client would panic on any call: unsupported must make none.
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "team"}}
-	if err := ensureFQDNPolicy(context.Background(), nil, nil, agent, nil, []string{"x.example.com"}, DNSSelector{}, false); err != nil {
+	if err := ensureFQDNPolicy(context.Background(), nil, nil, agent, fqdnPolicyName(agent.Name), nil, []string{"x.example.com"}, DNSSelector{}, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -222,19 +222,19 @@ func TestEnsureFQDNPolicy_RejectedWrite(t *testing.T) {
 	scheme := testScheme(t)
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "fq", Namespace: "default", UID: "agent-uid"}}
 	newClient := func(notFoundOnDelete bool) client.Client {
-		u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"a.example.com"}, DNSSelector{})
+		u := desiredFQDNPolicy(agent, fqdnPolicyName(agent.Name), agentPodLabels(agent), []string{"a.example.com"}, DNSSelector{})
 		if err := controllerutil.SetControllerReference(agent, u, scheme); err != nil {
 			t.Fatal(err)
 		}
 		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(u).
 			WithInterceptorFuncs(rejectingWrites(notFoundOnDelete)).Build()
 	}
-	err := ensureFQDNPolicy(ctxT(), newClient(false), scheme, agent, agentPodLabels(agent),
+	err := ensureFQDNPolicy(ctxT(), newClient(false), scheme, agent, fqdnPolicyName(agent.Name), agentPodLabels(agent),
 		[]string{"b.example.com"}, DNSSelector{}, true)
 	expectWriteRejected(t, err, "updating", "CiliumNetworkPolicy")
-	err = ensureFQDNPolicy(ctxT(), newClient(false), scheme, agent, agentPodLabels(agent), nil, DNSSelector{}, true)
+	err = ensureFQDNPolicy(ctxT(), newClient(false), scheme, agent, fqdnPolicyName(agent.Name), agentPodLabels(agent), nil, DNSSelector{}, true)
 	expectWriteRejected(t, err, "deleting", "CiliumNetworkPolicy")
-	if err := ensureFQDNPolicy(ctxT(), newClient(true), scheme, agent, agentPodLabels(agent), nil,
+	if err := ensureFQDNPolicy(ctxT(), newClient(true), scheme, agent, fqdnPolicyName(agent.Name), agentPodLabels(agent), nil,
 		DNSSelector{}, true); err != nil {
 		t.Errorf("delete of a policy already gone: err = %v, want nil", err)
 	}

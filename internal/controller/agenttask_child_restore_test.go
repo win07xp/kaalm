@@ -1118,7 +1118,7 @@ func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
 	task, pod, cert := runningAgentReportedTask(t, "run-fqdn-drift")
 	task.Spec.Completion.Condition = completionExitCode
 	task.Status.ClassEgress = &kaalmv1beta1.AgentClassEgress{AllowedHosts: []string{"a.example.com"}}
-	drifted := desiredFQDNPolicy(task, taskPodLabels(task), []string{"evil.example.com"}, DNSSelector{})
+	drifted := desiredFQDNPolicy(task, taskFQDNPolicyName(task.Name), taskPodLabels(task), []string{"evil.example.com"}, DNSSelector{})
 	if err := controllerutil.SetControllerReference(task, drifted, testScheme(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -1151,7 +1151,7 @@ func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(drifted), u); err != nil {
 		t.Fatal(err)
 	}
-	want := desiredFQDNPolicy(task, taskPodLabels(task), []string{"a.example.com"}, DNSSelector{})
+	want := desiredFQDNPolicy(task, taskFQDNPolicyName(task.Name), taskPodLabels(task), []string{"a.example.com"}, DNSSelector{})
 	if !equality.Semantic.DeepEqual(u.Object["spec"], want.Object["spec"]) {
 		t.Errorf("FQDN policy spec = %v, want the recorded hosts", u.Object["spec"])
 	}

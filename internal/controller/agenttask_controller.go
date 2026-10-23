@@ -843,7 +843,7 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 		}
 		supported = false
 	}
-	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskFQDNPolicyName(task.Name), taskPodLabels(task), hosts, r.DNS, supported)
 }
 
 // restoreTaskChildren keeps the children of a task that has a live Pod as
@@ -881,7 +881,7 @@ func (r *AgentTaskReconciler) restoreTaskChildren(
 	if hosts := egress.AllowedHosts; withFQDN && len(hosts) > 0 {
 		supported, err := fqdnSupported(r.FQDNSupport)
 		if err == nil {
-			err = ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+			err = ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskFQDNPolicyName(task.Name), taskPodLabels(task), hosts, r.DNS, supported)
 		}
 		errs = append(errs, err)
 	}
