@@ -10,8 +10,9 @@ append-only JSON-lines log of writes since the snapshot. Each write appends one
 record and fsyncs it before returning, so its cost does not grow with the dedup
 window and a write that returned survives a process or node crash. The log is
 folded into the snapshot (temp file, fsync, rename) when it outgrows a few
-times the snapshot and at a clean shutdown. Both files share their format with
-the Go runtime byte for byte, so a volume written by either reads in both.
+times the snapshot and at a clean shutdown. The log's record shape and the
+snapshot's keys are the same in the Go runtime, so each runtime parses the
+other's files and a volume written by either reads in both.
 
 The state carries two disjoint areas: the runtime-owned dedup window
 (messageId to cached reply, with LRU order), and a general key/value area.
@@ -41,6 +42,16 @@ COMPACT_LOG_MULTIPLE = 4
 COMPACT_LOG_MIN_BYTES = 1 << 20
 
 
+def _truncate_log(path: Path, size: int) -> None:
+    """Cut the log at path to size bytes and fsync it."""
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        os.ftruncate(fd, size)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _sync_dir(directory: Path) -> None:
     """fsync a directory, so a file created or renamed in it survives a node
     crash. A failure is logged, not fatal: the data itself is synced."""
@@ -68,7 +79,12 @@ class Store:
         self._path: Path | None = None
         self._log_path: Path | None = None
         self._log_fd: int | None = None  # opened on the first append
+        # Length of the log's good prefix: whole records only. A failed append
+        # truncates back to it.
         self._log_bytes = 0
+        # Set when the good prefix ends in a record without its newline, so
+        # the next append starts a new line first.
+        self._log_unterminated = False
         self._snapshot_bytes = 0
 
         if not directory:
@@ -128,7 +144,9 @@ class Store:
     def _replay_log(self) -> bool:
         """Apply state.log over the loaded snapshot; report whether the log
         held any bytes. A torn last line (a crash mid-append) is dropped; a bad
-        line before it stops the replay and keeps what came before."""
+        line before it stops the replay and keeps what came before. Either way
+        the log is cut back to the records that applied, so a later append
+        cannot join a bad line even when the compaction after replay fails."""
         assert self._path is not None and self._log_path is not None
         try:
             raw = self._log_path.read_bytes()
@@ -155,15 +173,21 @@ class Store:
             return False
         lines = raw.split(b"\n")
         applied = 0
+        pos = good = 0  # good: end of the last line that applied or was blank
         for number, line in enumerate(lines, start=1):
+            last = number == len(lines)
+            end = pos + len(line) + (0 if last else 1)
             if not line.strip():
+                if not last:
+                    good = end
+                pos = end
                 continue
             try:
                 record = json.loads(line)
             except ValueError:
                 record = None
             if not self._apply_locked(record):
-                if number == len(lines):
+                if last:
                     log.warning("memory: dropping an incomplete last record in %s", self._log_path)
                 else:
                     log.warning(
@@ -172,8 +196,18 @@ class Store:
                     )
                 break
             applied += 1
+            good = end
+            self._log_unterminated = last
+            pos = end
         log.info("memory: replayed %d records from %s", applied, self._log_path)
         self._log_bytes = len(raw)
+        if good < self._log_bytes:
+            try:
+                _truncate_log(self._log_path, good)
+            except OSError as exc:
+                log.warning("memory: truncating %s: %s", self._log_path, exc)
+            else:
+                self._log_bytes = good
         return True
 
     def _apply_locked(self, record: Any) -> bool:
@@ -205,6 +239,8 @@ class Store:
         if self._path is None or self._log_path is None:
             return
         data = (json.dumps(record, separators=(",", ":")) + "\n").encode()
+        if self._log_unterminated:
+            data = b"\n" + data
         try:
             if self._log_fd is None:
                 created = not self._log_path.exists()
@@ -221,11 +257,30 @@ class Store:
             # accepts one. The log is truncated only after a successful
             # rename, so a failed compaction loses nothing already logged.
             log.warning("memory: appending to %s: %s", self._log_path, exc)
+            self._drop_partial_append()
             self._compact_locked()
             return
+        self._log_unterminated = False
         self._log_bytes += len(data)
         if self._log_bytes > max(COMPACT_LOG_MULTIPLE * self._snapshot_bytes, COMPACT_LOG_MIN_BYTES):
             self._compact_locked()
+
+    def _drop_partial_append(self) -> None:
+        """Cut the log back to its good prefix after a failed append, so bytes
+        a partial write left behind cannot strand later records. Truncating
+        needs no free space. The descriptor is closed and reopened on the next
+        append, since a write error can leave it unusable."""
+        assert self._log_path is not None
+        if self._log_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._log_fd)
+            self._log_fd = None
+        try:
+            _truncate_log(self._log_path, self._log_bytes)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("memory: truncating %s: %s", self._log_path, exc)
 
     def _compact_locked(self) -> None:
         """Write the whole state as a new snapshot, then empty the log. The
@@ -257,8 +312,12 @@ class Store:
             elif self._log_path.exists():
                 os.truncate(self._log_path, 0)
         except OSError as exc:
+            # The log keeps records the snapshot now holds; replaying them is
+            # harmless, and a later append still lands after its good prefix.
             log.warning("memory: truncating %s: %s", self._log_path, exc)
+            return
         self._log_bytes = 0
+        self._log_unterminated = False
 
     def close(self) -> None:
         """Fold logged writes into the snapshot, so after a clean shutdown
