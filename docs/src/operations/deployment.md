@@ -142,8 +142,8 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `rbac.personas.platformAdmins` | `[]` | Subjects for ClusterRoleBinding `kaalm-platform-admin`, as `rbac.authorization.k8s.io/v1` Subject objects. Empty renders no binding. See [Roles for people](../security/rbac.md#roles-for-people). |
 | `rbac.personas.catalogReaders` | `[]` | Subjects for ClusterRoleBinding `kaalm-catalog-reader`. Empty renders no binding. See [Roles for people](../security/rbac.md#roles-for-people). |
 | `rbac.personas.secretsAdmins` | `[]` | Subjects for RoleBinding `kaalm-secrets-admin` in the release namespace only, which holds the provider and tool credentials. Empty renders no binding. See [Roles for people](../security/rbac.md#roles-for-people). |
-| `rbac.personas.namespaceSecretsAdmins` | `{}` | Map of an existing namespace to a subject list: that team's credential managers, who own its channel credentials. Each non-empty list gets RoleBinding `kaalm-secrets-admin` in that namespace, never a ClusterRoleBinding. A value that is not a map fails the render, and so does a non-empty entry for the release namespace. Ignored while `rbac.personas.enabled` is `false`. See [Roles for people](../security/rbac.md#roles-for-people). |
-| `rbac.personas.developers` | `{}` | Map of an existing namespace to a subject list. Each non-empty list gets RoleBinding `kaalm-developer` in that namespace. See [Roles for people](../security/rbac.md#roles-for-people). |
+| `rbac.personas.namespaceSecretsAdmins` | `{}` | Map of an existing namespace to a subject list: that team's credential managers, who own its channel credentials. Each non-empty list gets RoleBinding `kaalm-secrets-admin` in that namespace, never a ClusterRoleBinding. A value that is not a map fails the render, and so does a non-empty entry for the release namespace. The subject lists are checked too ([Values are checked before they render](#values-are-checked-before-they-render)). Ignored while `rbac.personas.enabled` is `false`. See [Roles for people](../security/rbac.md#roles-for-people). |
+| `rbac.personas.developers` | `{}` | Map of an existing namespace to a subject list. Each non-empty list gets RoleBinding `kaalm-developer` in that namespace. A value that is not a map fails the render, and the subject lists are checked ([Values are checked before they render](#values-are-checked-before-they-render)). See [Roles for people](../security/rbac.md#roles-for-people). |
 | `rbac.personas.developerExec` | `false` | Adds `get` and `create` on `pods/exec` to `kaalm-developer`. No effect while `rbac.personas.enabled` is `false`. See [Roles for people](../security/rbac.md#roles-for-people). |
 | `rbac.personas.developerSecrets` | `false` | Adds `get, list, watch, create, update, patch, delete` on `secrets` to `kaalm-developer`, in every namespace where it is bound. No effect while `rbac.personas.enabled` is `false`. See [Roles for people](../security/rbac.md#roles-for-people). |
 | `rbac.aggregateToDefaultRoles` | `false` | Adds `Agent`, `AgentTask`, and `AgentChannel` to the built-in `view`, `edit`, and `admin` roles. Works without `rbac.personas.enabled`. See [Roles for people](../security/rbac.md#roles-for-people). |
@@ -176,6 +176,29 @@ The values that need more than a sentence of explanation follow.
 **`gateway.maxResponseBodyBytes`.** The `900Ki` default sits well below the Kubernetes ~1 MiB ConfigMap object cap, so async responses fit in the per-request `kaalm-async-{requestId}` ConfigMap with envelope headroom ([Async webhook responses](../gateways/api/async-responses.md) gives the storage format). The cap also bounds the gateway's memory while it buffers a response in either mode. Over-cap responses return `response_too_large` to the caller (sync) or to `callbackUrl` / the polling endpoint (async). See [Gateway overview](../gateways/overview.md) and [Request flow](../gateways/user/overview.md#request-flow).
 
 **Negative values.** A negative value for `gateway.mcpMaxBodyBytes`, `gateway.mcpUpstreamTimeout`, `gateway.maxLLMRequestBodyBytes`, `gateway.maxMessageBodyBytes`, `gateway.maxResponseBodyBytes`, `gateway.maxFallbackDepth`, `gateway.providerFirstByteTimeout`, `gateway.syncDeliveryDeadline`, `gateway.agentReadTimeout`, `gateway.callbackReadTimeout`, `gateway.agentDeliveryConnectTimeout`, or `gateway.channelHealthWindow` fails gateway startup with an error that names the flag. No negative value means anything for these settings, and the gateway would otherwise fail every request or quietly use another value. Zero is accepted. For `gateway.mcpMaxBodyBytes` and `gateway.mcpUpstreamTimeout`, zero uses the LLM proxy's matching value (`gateway.maxLLMRequestBodyBytes`, `gateway.providerFirstByteTimeout`). For the others, zero uses the default in the table.
+
+### Values are checked before they render
+
+The chart ships `values.schema.json`. Helm checks your values against it before any template renders, on `helm lint`, `helm template`, `helm install`, and `helm upgrade`. A wrong type or an unknown key fails the command, and the error names the value, instead of the value being ignored or rendered wrong.
+
+The schema checks:
+
+- The type of every value in `values.yaml`.
+- Unknown keys. Every block the chart defines rejects a key it doesn't list, so a misspelled `controller.replica` fails.
+- The fields of each `rbac.personas` subject: `kind` and `name` are required, `kind` is `User`, `Group`, or `ServiceAccount`, and `apiGroup` and `namespace` are the only other fields.
+- That `rbac.personas.namespaceSecretsAdmins` and `rbac.personas.developers` map a namespace to a subject list.
+- The form of each `gateway.*Bytes` value: a plain integer, or an integer with a `Ki`, `Mi`, or `Gi` suffix, such as `900Ki` or `4Mi`.
+
+The schema doesn't look inside the pass-through objects: `controller.resources`, `gateway.resources`, `console.resources`, `trustManager.bundleSelector`, `trustManager.extraSources`, `networkPolicy.metricsFrom`, and `networkPolicy.userListenerFrom`. It checks only that each is an object, or a list of objects. The API server validates their contents when it receives the rendered objects, so `helm lint` doesn't catch a wrong field there.
+
+Four checks run in the templates, after the schema:
+
+- The replica floor ([The two Deployments](#the-two-deployments)).
+- The form of the shutdown durations ([Shutdown and rolling restarts](#shutdown-and-rolling-restarts)).
+- The ban on the release namespace in `rbac.personas.namespaceSecretsAdmins`. The schema can't read the release namespace.
+- The removed values `controller.trustClusterCAForProbes` and `controller.probeCA`. The schema accepts these two keys so that the template error can name the value to set instead.
+
+A value the schema rejects never reaches these checks. An error from one of them tells you the values passed the schema and the template rejected them.
 
 ### Services
 
