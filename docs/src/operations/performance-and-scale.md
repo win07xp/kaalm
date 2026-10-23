@@ -146,6 +146,8 @@ The first reconcile of the new leader is what the fleet waits for. Its 21 s divi
 1. **About 21 s of rollout.** The old leader is the last old Pod to exit, and the rollout finishes when it does.
 2. **Under 1 s of handoff and first reconcile after it.** The old leader releases the Lease as it shuts down, so the new Pod acquires it on its next retry (2 s) instead of waiting out the Lease duration, 15 s by default. The harness starts polling the reconcile counter when the rollout finishes, and its first poll, 0.2 s later, already saw a reconcile, so it cannot say how much earlier the first reconcile happened.
 
+A gateway request that fails because of the roll is a client connection error, counted under the status `error`, not a gateway response. The leg keeps the first five error samples, each starting with its UTC time in milliseconds. The restart phase logs when it issues the rollout and the kill time of each old gateway Pod, which is when that Pod's drain starts. A run places each failure in the drain delay, at the stop boundary one `gateway.shutdown.drainDelay` later, or at the shutdown timeout's cut. The kill time comes from the Pod's Event, which can have whole-second precision, so it can read up to a second earlier than the millisecond error times. For what a client should retry, see [Client errors during a rollout](deployment.md#client-errors-during-a-rollout).
+
 ### Fleet teardown
 
 Deleting all 400 agents and their channels: 400 agents gone in 57 s.
