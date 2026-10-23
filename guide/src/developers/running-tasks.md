@@ -28,10 +28,6 @@ spec:
   ttlSecondsAfterFinished: 300
 ```
 
-Give the task a name that no Agent in the namespace uses, because an Agent and
-an AgentTask of the same name block each other; see
-[Child resources](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/child-resources.md#an-agent-and-an-agenttask-cannot-share-a-name).
-
 `KAALM_TASK_AUTOCOMPLETE` is a test hook in both base images and in the
 starter templates. In a task, it reports its value as the completion status
 shortly after the container starts, beside whatever else the task does. The

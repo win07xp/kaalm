@@ -15,14 +15,15 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   [Workload is `Ready=False` with `SecretNotOptedIn`](#workload-is-readyfalse-with-secretnotoptedin).
 - **Certificate not issued** (`Provisioning`): the Pod waits for its
   serving certificate. `kubectl get certificates -n NAMESPACE` and check
-  cert-manager logs. The Certificate is named `NAME-tls`, and the Secret it
-  writes is named `NAME-tls-` plus the first eight characters of the
-  workload's UID, such as `support-assistant-tls-3f9c2a1e`. To find that
-  Secret from a script, read it from the Certificate instead of building the
-  name. Replace `NAME` with the Agent or AgentTask name:
+  cert-manager logs. The Certificate is named `NAME-tls` for an Agent and
+  `NAME.task-tls` for an AgentTask. The Secret it writes is named `NAME-tls-`
+  plus the first eight characters of the workload's UID, such as
+  `support-assistant-tls-3f9c2a1e`, for both kinds. To find that Secret from a
+  script, read it from the Certificate instead of building the name. Replace
+  `CERT` with the Certificate name:
 
   ```bash
-  kubectl get certificate NAME-tls -n NAMESPACE -o jsonpath='{.spec.secretName}'
+  kubectl get certificate CERT -n NAMESPACE -o jsonpath='{.spec.secretName}'
   ```
 
   The design book states the naming rule on

@@ -52,7 +52,7 @@ cert-manager re-issues each leaf within `spec.renewBefore` of its expiry.
 |---|---|---|---|
 | `kaalm-ca` | `43800h` (5y) | `8760h` (1y) | The chart |
 | `kaalm-gateway-tls`, `kaalm-controller-tls`, `kaalm-console-tls` | `2160h` (90d) | `720h` (30d) | The chart |
-| `{name}-tls` per Agent, `{taskName}-tls` per AgentTask | `2160h` (90d) | `720h` (30d) | The reconcilers, from the chart values `controller.certificate.duration` and `controller.certificate.renewBefore` |
+| `{name}-tls` per Agent, `{taskName}.task-tls` per AgentTask | `2160h` (90d) | `720h` (30d) | The reconcilers, from the chart values `controller.certificate.duration` and `controller.certificate.renewBefore` |
 
 The controller refuses to start when `duration` is under `1h`, `renewBefore` is under `5m`, or `renewBefore` is not shorter than `duration`. A changed lifetime applies to Certificates the reconcilers create after the change; an existing Certificate keeps its lifetime until its workload is re-created.
 
@@ -70,7 +70,7 @@ A CA re-key, for compromise recovery, is a manual runbook. Adding a source to th
 
 1. Copy the current CA certificate from the `kaalm-ca` Secret into a ConfigMap (or Secret) in the trust namespace, then add it as a source with `helm upgrade`, setting `trustManager.extraSources` and keeping your existing values (for example `--reuse-values --set-json 'trustManager.extraSources=[{"configMap":{"name":"kaalm-ca-old","key":"ca.crt"}}]'`, or the equivalent in a values file). From now on both bundles, `kaalm-ca` and `kaalm-ca-system`, carry the old CA twice.
 2. Delete the `kaalm-ca` Secret. cert-manager re-issues the CA with a new key pair, because `rotationPolicy: Never` has no existing key to reuse, and trust-manager re-projects both bundles as new CA plus the old copy. Every consumer rebuilds both pools.
-3. Run `cmctl renew` on every leaf `Certificate`: the chart's three, and every `{name}-tls` and `{taskName}-tls`. The re-issued leaves chain to the new key.
+3. Run `cmctl renew` on every leaf `Certificate`: the chart's three, and every `{name}-tls` and `{taskName}.task-tls`. The re-issued leaves chain to the new key.
 4. Remove the old CA source once no live leaf chains to it, with another `helm upgrade` that sets `trustManager.extraSources` back to `[]`. The window closes.
 
 An agent that missed the bundle change at step 2 fails at step 3, in both directions: its `RootCAs` rejects the re-issued gateway leaf, and its `ClientCAs` rejects the gateway's re-issued client certificate. The window is finite, so the agent does not recover on its own.
@@ -103,7 +103,7 @@ Both controllers are cluster-critical dependencies. Monitor them as such.
 
 ## Lifecycle of an AgentTask TLS client certificate
 
-1. **Created** by the AgentTaskReconciler ([AgentTask certificate](../controller/reconcilers/agenttask.md#agenttask-certificate)): a `Certificate` named `{taskName}-tls` in the task's namespace with an ownerRef to the AgentTask, the same `issuerRef`, one SAN `{taskName}.{namespace}.task.kaalm.io`, and usage `client auth` only. A task has no Service and is never a delivery target, so the certificate never serves TLS.
+1. **Created** by the AgentTaskReconciler ([AgentTask certificate](../controller/reconcilers/agenttask.md#agenttask-certificate)): a `Certificate` named `{taskName}.task-tls` in the task's namespace with an ownerRef to the AgentTask, the same `issuerRef`, one SAN `{taskName}.{namespace}.task.kaalm.io`, and usage `client auth` only. A task has no Service and is never a delivery target, so the certificate never serves TLS.
 2. **Stored** as `{taskName}-tls-{uid}` in the task's namespace, named by the same rule and held by the same Certificate wait as an Agent's.
 3. **Mounted** at the same paths. The task presents the certificate on LLM requests and task completion.
 4. **Verified** by the gateway against `kaalm-ca` on every call, reading the namespace from the SAN.
