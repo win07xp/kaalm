@@ -1,0 +1,486 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Kaalm chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "description": "Helm's shared values for subcharts. Unused by this chart.",
+      "type": "object"
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {
+          "type": "integer"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "maxConcurrentReconciles": {
+          "type": "integer"
+        },
+        "certificate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "duration": {
+              "$ref": "#/definitions/duration"
+            },
+            "renewBefore": {
+              "$ref": "#/definitions/duration"
+            }
+          }
+        },
+        "pprofPort": {
+          "type": "integer"
+        },
+        "logLevel": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "client": {
+          "$ref": "#/definitions/client"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dnsSelector": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "namespaceLabels": {
+                  "$ref": "#/definitions/labels"
+                },
+                "podLabels": {
+                  "$ref": "#/definitions/labels"
+                }
+              }
+            }
+          }
+        },
+        "trustClusterCAForProbes": {
+          "description": "Removed. Accepted here so the template guard fails the render naming the replacement."
+        },
+        "probeCA": {
+          "description": "Removed. Accepted here so the template guard fails the render naming the replacement."
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {
+          "type": "integer"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "maxFallbackDepth": {
+          "type": "integer"
+        },
+        "trustClusterCAForUpstream": {
+          "type": "boolean"
+        },
+        "upstreamCA": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          }
+        },
+        "trustClusterCAForCallbacks": {
+          "type": "boolean"
+        },
+        "externalHostnames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "callbackUrl": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowlist": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "platforms": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "discord": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "apiBaseUrl": {
+                  "type": "string"
+                }
+              }
+            },
+            "whatsapp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "apiBaseUrl": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "tracing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "otlpEndpoint": {
+              "type": "string"
+            },
+            "sampleRatio": {
+              "$ref": "#/definitions/numeric"
+            }
+          }
+        },
+        "channelHealthWindow": {
+          "$ref": "#/definitions/duration"
+        },
+        "agentDeliveryConnectTimeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "syncDeliveryDeadline": {
+          "$ref": "#/definitions/duration"
+        },
+        "maxWakeTimeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "maxPodWaitsPerAgent": {
+          "type": "integer"
+        },
+        "providerFirstByteTimeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "mcpUpstreamTimeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "agentReadTimeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "callbackReadTimeout": {
+          "$ref": "#/definitions/duration"
+        },
+        "agentDeliveryRetryBackoff": {
+          "type": "string"
+        },
+        "callbackRetryBackoff": {
+          "type": "string"
+        },
+        "maxResponseBodyBytes": {
+          "$ref": "#/definitions/byteSize"
+        },
+        "maxMessageBodyBytes": {
+          "$ref": "#/definitions/byteSize"
+        },
+        "maxLLMRequestBodyBytes": {
+          "$ref": "#/definitions/byteSize"
+        },
+        "mcpMaxBodyBytes": {
+          "$ref": "#/definitions/byteSize"
+        },
+        "healthPort": {
+          "type": "integer"
+        },
+        "pprofPort": {
+          "type": "integer"
+        },
+        "logLevel": {
+          "type": "string"
+        },
+        "client": {
+          "$ref": "#/definitions/client"
+        },
+        "shutdown": {
+          "$ref": "#/definitions/shutdown"
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "metricsFrom": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "userListenerFrom": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "certManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "clusterResourceNamespace": {
+          "type": "string"
+        }
+      }
+    },
+    "trustManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundleSelector": {
+          "type": "object"
+        },
+        "extraSources": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "standardAgentClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allowedProviders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "console": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "healthPort": {
+          "type": "integer"
+        },
+        "logLevel": {
+          "type": "string"
+        },
+        "client": {
+          "$ref": "#/definitions/client"
+        },
+        "shutdown": {
+          "$ref": "#/definitions/shutdown"
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "personas": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "platformAdmins": {
+              "$ref": "#/definitions/subjects"
+            },
+            "catalogReaders": {
+              "$ref": "#/definitions/subjects"
+            },
+            "secretsAdmins": {
+              "$ref": "#/definitions/subjects"
+            },
+            "namespaceSecretsAdmins": {
+              "$ref": "#/definitions/subjectsByNamespace"
+            },
+            "developers": {
+              "$ref": "#/definitions/subjectsByNamespace"
+            },
+            "developerExec": {
+              "type": "boolean"
+            },
+            "developerSecrets": {
+              "type": "boolean"
+            }
+          }
+        },
+        "aggregateToDefaultRoles": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "subject": {
+      "description": "An rbac.authorization.k8s.io/v1 Subject.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "User",
+            "Group",
+            "ServiceAccount"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "apiGroup": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ]
+    },
+    "subjects": {
+      "description": "A subject list. Empty or null renders no binding.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/subject"
+      }
+    },
+    "subjectsByNamespace": {
+      "description": "A map of namespace to subject list.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/subjects"
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "client": {
+      "description": "Kubernetes API client rate limit.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "qps": {
+          "$ref": "#/definitions/numeric"
+        },
+        "burst": {
+          "type": "integer"
+        }
+      }
+    },
+    "shutdown": {
+      "description": "Whole hours, minutes, or seconds; the template checks the form.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "drainDelay": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        }
+      }
+    },
+    "duration": {
+      "description": "A Go duration, such as 30s or 5m.",
+      "type": "string"
+    },
+    "byteSize": {
+      "description": "A plain integer or a Ki, Mi, or Gi quantity, such as 900Ki.",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^[0-9]+(Ki|Mi|Gi)?$"
+    },
+    "numeric": {
+      "description": "A number. --set passes a float as a string, so a numeric string is accepted.",
+      "type": [
+        "number",
+        "string"
+      ],
+      "pattern": "^[0-9]+(\\.[0-9]+)?$"
+    },
+    "labels": {
+      "description": "Label keys and string values.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

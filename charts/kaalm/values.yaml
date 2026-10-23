@@ -1,4 +1,5 @@
 # Kaalm Helm values. Defaults match the design (docs/src/operations/deployment.md).
+# values.schema.json types every value here; Helm checks a values file against it before rendering.
 # The controller and gateway both have a hard floor of 2 replicas, enforced by a
 # template guard; going below aborts rendering.
 
