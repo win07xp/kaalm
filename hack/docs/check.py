@@ -146,6 +146,7 @@ NON_SCENARIO_SPECS = {
     "Workload Certificate name held by a foreign Certificate": (
         "the child-ownership check against real cert-manager, not an acceptance scenario"
     ),
+    "Agent and AgentTask with the same name": "the task child-name qualifier, not an acceptance scenario",
 }
 SPEC_NODE = re.compile(
     r'\b[FPX]?(Describe|Context|When|It|Specify|DescribeTable)\(\s*(?:"((?:[^"\\]|\\.)*)"|`([^`]*)`)'
