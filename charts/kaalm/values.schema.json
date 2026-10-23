@@ -456,8 +456,13 @@
       }
     },
     "duration": {
-      "description": "A Go duration, such as 30s or 5m.",
-      "type": "string"
+      "description": "A Go duration, such as 30s or 5m. The integer 0 is the one number Go reads as a duration.",
+      "type": [
+        "string",
+        "integer"
+      ],
+      "minimum": 0,
+      "maximum": 0
     },
     "byteSize": {
       "description": "A plain integer or a Ki, Mi, or Gi quantity, such as 900Ki.",
@@ -473,7 +478,7 @@
         "number",
         "string"
       ],
-      "pattern": "^[0-9]+(\\.[0-9]+)?$"
+      "pattern": "^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?$"
     },
     "labels": {
       "description": "Label keys and string values.",
