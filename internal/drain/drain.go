@@ -26,11 +26,12 @@ limitations under the License.
 // keep getting an answer for the whole sequence.
 //
 // During the delay each response to a request that arrives after the drain
-// began tells the client to close the connection after the reply (Connection: close on HTTP/1.1, a GOAWAY on HTTP/2), so
-// the client reconnects and the Service routes it to another replica. Idle
-// connections stay open: closing one races a client that is reusing it, and
-// a client cannot retry a POST it has already sent. Shutdown closes what is
-// still idle at the end of the delay.
+// began tells the client to close the connection after the reply
+// (Connection: close on HTTP/1.1, a GOAWAY on HTTP/2), so the client
+// reconnects and the Service routes it to another replica. Idle connections
+// stay open: closing one races a client that is reusing it, and a client
+// cannot retry a POST it has already sent. Shutdown closes what is still idle
+// at the end of the delay.
 package drain
 
 import (
@@ -164,10 +165,10 @@ func (g Group) Serve(ctx context.Context, traffic []Server, health Server) error
 }
 
 // closeWhenDraining wraps next so that, once draining is set, the response to
-// each request that starts after that carries Connection: close. Go's HTTP/1.1 server then closes the connection
-// after the reply; its HTTP/2 server drops the header and sends a GOAWAY. The
-// ResponseWriter passes through unwrapped, so streaming handlers keep their
-// Flusher.
+// each request that starts after that carries Connection: close. Go's
+// HTTP/1.1 server then closes the connection after the reply; its HTTP/2
+// server drops the header and sends a GOAWAY. The ResponseWriter passes
+// through unwrapped, so streaming handlers keep their Flusher.
 func closeWhenDraining(draining *atomic.Bool, next http.Handler) http.Handler {
 	if next == nil {
 		next = http.DefaultServeMux
