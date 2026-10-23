@@ -6,10 +6,30 @@ contract item 7 requires to survive hibernation, and the user/ prefix wall."""
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import pytest
 
+from kaalm_agent import memory
 from kaalm_agent.memory import Store, UserMemory
+
+# The fixture the Go suite also uses, byte for byte, so a volume written by
+# either runtime reads the same in both.
+FIXTURE_SNAPSHOT = '{"kv":{"user/a":1},"dedup":{"m1":{"content":"one"}},"dedupOrder":["m1"]}'
+FIXTURE_LOG = (
+    '{"op":"remember","id":"m2","reply":{"content":"two"}}\n'
+    '{"op":"set","key":"user/b","value":"kept"}\n'
+    '{"op":"delete","key":"user/a"}\n'
+    '{"op":"remember","id":"m1","reply":{"content":"one"}}\n'
+)
+
+
+def write_state(d, snapshot, log_body):
+    d.mkdir(exist_ok=True)
+    if snapshot:
+        (d / "state.json").write_text(snapshot)
+    (d / "state.log").write_text(log_body)
 
 
 def test_roundtrip_and_restart_persistence(tmp_path):
@@ -55,8 +75,9 @@ def test_write_is_atomic_no_temp_residue(tmp_path):
     d = tmp_path / "mem"
     s = Store(str(d))
     s.put("k", "v")
-    leftovers = [p.name for p in d.iterdir()]
-    assert leftovers == ["state.json"]
+    s.close()
+    leftovers = {p.name for p in d.iterdir()}
+    assert leftovers == {"state.json", "state.log"}
     json.loads((d / "state.json").read_text())  # parses whole
 
 
@@ -151,3 +172,113 @@ def test_user_memory_prefix_wall(tmp_path):
 def test_user_memory_persistence_flag(tmp_path):
     assert UserMemory(Store(str(tmp_path / "mem"))).persistent
     assert not UserMemory(Store(None)).persistent
+
+
+def test_remember_appends_to_log(tmp_path):
+    """A mutation appends one record instead of rewriting the snapshot, so its
+    cost no longer grows with the dedup window."""
+    d = tmp_path / "mem"
+    Store(str(d)).remember("m1", {"content": "one"})
+    lines = (d / "state.log").read_text().splitlines()
+    assert [json.loads(line) for line in lines] == [
+        {"op": "remember", "id": "m1", "reply": {"content": "one"}}
+    ]
+    assert not (d / "state.json").exists()
+
+
+def test_replays_log_over_snapshot(tmp_path):
+    d = tmp_path / "mem"
+    write_state(d, FIXTURE_SNAPSHOT, FIXTURE_LOG)
+    s = Store(str(d))
+    assert s._dedup == {"m1": {"content": "one"}, "m2": {"content": "two"}}
+    assert s._dedup_order == ["m1", "m2"]
+    assert s._kv == {"user/b": "kept"}
+    # Load seals the replayed state into the snapshot and empties the log.
+    assert (d / "state.log").read_text() == ""
+    snap = json.loads((d / "state.json").read_text())
+    assert "m2" in snap["dedup"] and "user/b" in snap["kv"]
+
+
+def test_torn_last_line_is_dropped(tmp_path):
+    """A crash mid-append leaves a partial last line; it is dropped, and the
+    next append does not glue onto it."""
+    d = tmp_path / "mem"
+    write_state(d, FIXTURE_SNAPSHOT, FIXTURE_LOG + '{"op":"set","key":"user/c","val')
+    s = Store(str(d))
+    assert s.get("user/c") is None
+    assert s.get("user/b") == "kept"
+    assert s.recall("m2") == {"content": "two"}
+    s.put("user/d", 4)
+    third = Store(str(d))
+    assert third.get("user/d") == 4
+    assert third.get("user/b") == "kept"
+
+
+def test_bad_middle_record_stops_replay(tmp_path):
+    d = tmp_path / "mem"
+    write_state(d, "", (
+        '{"op":"set","key":"user/x","value":1}\n'
+        "{not json}\n"
+        '{"op":"set","key":"user/y","value":2}\n'
+    ))
+    s = Store(str(d))
+    assert s.get("user/x") == 1
+    assert s.get("user/y") is None
+
+
+def test_compacts_when_log_outgrows_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "COMPACT_LOG_MIN_BYTES", 256)
+    monkeypatch.setattr(memory, "COMPACT_LOG_MULTIPLE", 1)
+    d = tmp_path / "mem"
+    s = Store(str(d))
+    for i in range(100):
+        s.remember(f"m{i}", {"content": "reply"}, cap=4)
+        if (d / "state.log").read_text() == "":
+            break
+    else:
+        pytest.fail("the log must be compacted once it outgrows the threshold")
+    snap = json.loads((d / "state.json").read_text())
+    assert snap["dedup"] == s._dedup
+    s.remember("after", {"content": "x"}, cap=4)
+    assert (d / "state.log").read_text() != ""
+
+
+def test_close_compacts(tmp_path):
+    d = tmp_path / "mem"
+    s = Store(str(d))
+    s.remember("m1", {"content": "one"})
+    s.put("user/k", "v")
+    s.close()
+    assert (d / "state.log").read_text() == ""
+    snap = json.loads((d / "state.json").read_text())
+    assert "m1" in snap["dedup"] and snap["kv"]["user/k"] == "v"
+    assert not (d / "state.json.tmp").exists()
+    after = Store(str(d))
+    assert after.recall("m1") == {"content": "one"}
+    assert after.get("user/k") == "v"
+
+
+def test_replay_over_snapshot_is_harmless(tmp_path):
+    """A crash between the snapshot rename and the log truncate leaves records
+    in the log that the snapshot already holds; replaying them changes
+    nothing."""
+    d = tmp_path / "mem"
+    write_state(d, FIXTURE_SNAPSHOT, (
+        '{"op":"remember","id":"m1","reply":{"content":"one"}}\n'
+        '{"op":"set","key":"user/a","value":1}\n'
+    ))
+    s = Store(str(d))
+    assert s._dedup_order == ["m1"]
+    assert s._kv == {"user/a": 1}
+
+
+def test_snapshot_newer_than_log_discards_log(tmp_path):
+    """A log older than the snapshot means an older runtime rewrote state.json
+    after the log's last append; its records are stale."""
+    d = tmp_path / "mem"
+    write_state(d, '{"kv":{},"dedup":{},"dedupOrder":[]}', '{"op":"set","key":"user/stale","value":1}\n')
+    past = time.time() - 2
+    os.utime(d / "state.log", (past, past))
+    s = Store(str(d))
+    assert s.get("user/stale") is None
+    assert (d / "state.log").read_text() == ""
