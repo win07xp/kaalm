@@ -102,7 +102,7 @@ An AgentTask gets a similar set, adjusted for a short-lived workload that takes 
 | CiliumNetworkPolicy | `{name}.task-fqdn` | The class sets `network.egress.allowedHosts` and the CNI supports it | AgentTask | Deleted |
 | PVC | `{name}-workspace` | `spec.persistence.enabled` is `true` | AgentTask | Deleted |
 | Certificate | `{name}.task-tls` | Always | AgentTask | Deleted |
-| Secret | `{name}-tls-{uid}`, with `{uid}` the first eight characters of the workload's UID ([Agent certificate](../controller/reconcilers/agent.md#agent-certificate)) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |
+| Secret | `{name}.task-tls-{uid}`, with `{uid}` the first eight characters of the task's UID ([Agent certificate](../controller/reconcilers/agent.md#agent-certificate) gives the rule) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |
 | ConfigMap | `{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | AgentTask | Deleted |
@@ -115,7 +115,7 @@ What differs from an Agent:
 - **No Service.** A task receives no channel messages and has no stable endpoint.
 - **The Certificate carries `client auth` only** ([Lifecycle of an AgentTask TLS client certificate](../security/tls.md#lifecycle-of-an-agenttask-tls-client-certificate)). The task presents it on outbound calls, the LLM proxy and `/v1/task/complete`; there is no server-auth usage because the task exposes no HTTPS listener.
 - **The NetworkPolicy has no ingress allow rules.** With no listener and no Service, the synthesized policy carries the same egress rules as an Agent's and makes default-deny ingress explicit.
-- **The Certificate, NetworkPolicy, and CiliumNetworkPolicy names carry a `.task` qualifier.** An Agent creates the same three kinds, so without the qualifier an Agent and an AgentTask of one name would ask for the same objects. The qualifier is a dot because [rule 21](../resources/validation/names-and-tasks.md) keeps dots out of every Agent and AgentTask name, and every other child name is the workload name, with or without a dot-free prefix or suffix. No name the controller gives a child of another workload can equal a qualified one.
+- **The Certificate, TLS Secret, NetworkPolicy, and CiliumNetworkPolicy names carry a `.task` qualifier.** An Agent creates the same four kinds, so without the qualifier an Agent and an AgentTask of one name would ask for the same objects. The two Secrets would differ only by UID, and two UIDs can share their first eight characters. The qualifier is a dot because [rule 21](../resources/validation/names-and-tasks.md) keeps dots out of every Agent and AgentTask name, and every other child name is the workload name, with or without a dot-free prefix or suffix. No name the controller gives a child of another workload can equal a qualified one.
 - **The PVC is a workspace**, mounted at `spec.persistence.mountPath`, default `/var/task/workspace`, and provisioned only when the task spec requests persistence; there is no `existingClaim` on a task.
 
 ### The completion mailbox

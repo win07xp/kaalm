@@ -17,10 +17,12 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   serving certificate. `kubectl get certificates -n NAMESPACE` and check
   cert-manager logs. The Certificate is named `NAME-tls` for an Agent and
   `NAME.task-tls` for an AgentTask. The Secret it writes is named `NAME-tls-`
-  plus the first eight characters of the workload's UID, such as
-  `support-assistant-tls-3f9c2a1e`, for both kinds. To find that Secret from a
-  script, read it from the Certificate instead of building the name. Replace
-  `CERT` with the Certificate name:
+  for an Agent and `NAME.task-tls-` for an AgentTask, followed by the first
+  eight characters of the workload's UID, such as
+  `support-assistant-tls-3f9c2a1e`. An AgentTask created before the
+  `.task` rename keeps its `NAME-tls` Certificate and `NAME-tls-` Secret. To
+  find the Secret from a script, read it from the Certificate instead of
+  building the name. Replace `CERT` with the Certificate name:
 
   ```bash
   kubectl get certificate CERT -n NAMESPACE -o jsonpath='{.spec.secretName}'
