@@ -65,6 +65,19 @@ async def test_dedup_survives_a_wake_replacement(tmp_path):
     assert second_handler.calls == 0  # answered from the recovered window
 
 
+async def test_dedup_survives_crash_without_close(tmp_path):
+    """A crash gives the runtime no chance to compact: the reply written
+    through respond() must survive from the log alone."""
+    d = str(tmp_path / "mem")
+    first_life, _ = mk_agent(Store(d))
+    original = await first_life.respond({"messageId": "m1", "content": "hi"})
+    # No close(): the first life dies without a clean shutdown.
+
+    second_life, second_handler = mk_agent(Store(d))
+    assert await second_life.respond({"messageId": "m1", "content": "hi"}) == original
+    assert second_handler.calls == 0
+
+
 async def test_echo_contract():
     assert (await echo.handle_message({"content": "hi"}))["content"] == "echo: hi"
     assert (await echo.handle_message({}))["content"] == "echo: "
