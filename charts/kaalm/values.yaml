@@ -301,7 +301,8 @@ rbac:
   personas:
     # Installs four ClusterRoles: kaalm-platform-admin, kaalm-catalog-reader,
     # kaalm-developer, and kaalm-secrets-admin. The subject lists below bind
-    # them. Subject values set while this is false are ignored.
+    # them. While this is false the subject values render no binding, but
+    # values.schema.json still checks their shape.
     enabled: false
     # Subjects are rbac.authorization.k8s.io/v1 Subject objects, rendered
     # verbatim. A User or Group needs apiGroup: rbac.authorization.k8s.io, and
@@ -319,8 +320,8 @@ rbac:
     # gets RoleBinding kaalm-secrets-admin there, so that team's credential
     # manager owns that namespace's channel credentials. The namespace must
     # already exist, and it must not be the release namespace (use
-    # secretsAdmins). A value that is not a map fails the render. Ignored while
-    # personas.enabled is false. Example:
+    # secretsAdmins). A value that is not a map fails the render. Renders no
+    # binding while personas.enabled is false. Example:
     #   namespaceSecretsAdmins:
     #     team-support:
     #       - kind: Group
