@@ -539,8 +539,8 @@ func printRestart(r *restartResult) {
 		}
 	}
 	if f := r.Failover; f != nil {
-		fmt.Printf("  failover: killed %s, %s leads; first reconcile %.0fs, warm %.0fs, Deployment Ready %.0fs\n",
-			f.Killed, f.NewLeader, f.FirstReconcileSec, f.WarmupSec, f.RecoveredSec)
+		fmt.Printf("  failover: killed %s, Lease %s, %s leads; first reconcile %.0fs, warm %.0fs, Deployment Ready %.0fs\n",
+			f.Killed, f.Lease, f.NewLeader, f.FirstReconcileSec, f.WarmupSec, f.RecoveredSec)
 	}
 	if len(r.Figures) == 0 {
 		return

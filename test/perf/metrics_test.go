@@ -20,7 +20,9 @@ package main
 
 import (
 	"testing"
+	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -188,6 +190,70 @@ func TestLeaderPodName(t *testing.T) {
 	}
 	if got := leaderPodName("plain"); got != "plain" {
 		t.Errorf("a holder without an underscore: %q", got)
+	}
+}
+
+func TestLeaseRecordFromSpec(t *testing.T) {
+	renew := metav1.NewMicroTime(time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
+	acquire := metav1.NewMicroTime(renew.Add(-time.Minute))
+	holder, seconds := "ctl-a_0f3a", int32(15)
+	got := leaseRecordFromSpec(coordinationv1.LeaseSpec{
+		HolderIdentity: &holder, LeaseDurationSeconds: &seconds, RenewTime: &renew, AcquireTime: &acquire,
+	})
+	want := leaseRecord{holder: "ctl-a", renew: renew.Time, acquire: acquire.Time, duration: 15 * time.Second}
+	if got != want {
+		t.Errorf("leaseRecordFromSpec = %+v, want %+v", got, want)
+	}
+	if got := leaseRecordFromSpec(coordinationv1.LeaseSpec{}); got != (leaseRecord{}) {
+		t.Errorf("an empty spec reads %+v", got)
+	}
+}
+
+// The tracker tells a released Lease from an expired one: a holder that
+// releases writes an empty holder, and a new holder can only take a Lease
+// that was not released once the killed holder's last renewal has expired.
+func TestLeaseHandoff(t *testing.T) {
+	t0 := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	killed := leaseRecord{holder: "ctl-a", renew: t0, duration: 15 * time.Second}
+	next := func(acquire time.Time) leaseRecord {
+		return leaseRecord{holder: "ctl-b", renew: acquire, acquire: acquire, duration: 15 * time.Second}
+	}
+	for _, tc := range []struct {
+		name  string
+		reads []leaseRecord
+		want  string
+	}{
+		{"an empty holder is a release", []leaseRecord{
+			{holder: "ctl-a", renew: t0.Add(2 * time.Second), duration: 15 * time.Second},
+			{holder: "", renew: t0.Add(3 * time.Second), duration: time.Second},
+		}, leaseReleased},
+		{"a new holder before the expiry is a release we did not see", []leaseRecord{
+			next(t0.Add(4 * time.Second)),
+		}, leaseReleased},
+		{"a new holder after the expiry", []leaseRecord{
+			next(t0.Add(16 * time.Second)),
+		}, leaseExpired},
+		{"a late renewal by the killed holder moves the expiry", []leaseRecord{
+			{holder: "ctl-a", renew: t0.Add(2 * time.Second), duration: 15 * time.Second},
+			next(t0.Add(16 * time.Second)),
+		}, leaseReleased},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := newLeaseHandoff(killed)
+			got, done := "", false
+			for i, r := range tc.reads {
+				if done {
+					t.Fatalf("done before read %d", i)
+				}
+				got, done = tr.observe(r)
+			}
+			if !done || got != tc.want {
+				t.Errorf("observe = %q, %v; want %q, true", got, done, tc.want)
+			}
+		})
+	}
+	if got, done := newLeaseHandoff(killed).observe(killed); done || got != "" {
+		t.Errorf("the killed holder still in the Lease: %q, %v; want not done", got, done)
 	}
 }
 

@@ -34,6 +34,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -597,14 +598,85 @@ const leaderLease = "e06da714.io"
 // controllerLeader names the Pod holding the controller's Lease, or "" when
 // nobody holds it.
 func (k *cluster) controllerLeader(ctx context.Context) (string, error) {
+	rec, err := k.leaderLeaseRecord(ctx)
+	return rec.holder, err
+}
+
+// leaseRecord is one read of a leader-election Lease: the holder's Pod ("" when
+// nobody holds it), its last renewal and acquisition, and the lease duration.
+type leaseRecord struct {
+	holder   string
+	renew    time.Time
+	acquire  time.Time
+	duration time.Duration
+}
+
+func leaseRecordFromSpec(spec coordinationv1.LeaseSpec) leaseRecord {
+	var r leaseRecord
+	if spec.HolderIdentity != nil {
+		r.holder = leaderPodName(*spec.HolderIdentity)
+	}
+	if spec.RenewTime != nil {
+		r.renew = spec.RenewTime.Time
+	}
+	if spec.AcquireTime != nil {
+		r.acquire = spec.AcquireTime.Time
+	}
+	if spec.LeaseDurationSeconds != nil {
+		r.duration = time.Duration(*spec.LeaseDurationSeconds) * time.Second
+	}
+	return r
+}
+
+// leaderLeaseRecord reads the controller's leader-election Lease.
+func (k *cluster) leaderLeaseRecord(ctx context.Context) (leaseRecord, error) {
 	lease, err := k.cs.CoordinationV1().Leases("kaalm-system").Get(ctx, leaderLease, metav1.GetOptions{})
 	if err != nil {
-		return "", err
+		return leaseRecord{}, err
 	}
-	if lease.Spec.HolderIdentity == nil {
-		return "", nil
+	return leaseRecordFromSpec(lease.Spec), nil
+}
+
+// How a killed leader's Lease passed to the next holder.
+const (
+	// leaseReleased: the killed holder cleared the Lease on its way out (the
+	// manager releases on shutdown, and the kubelet sends SIGTERM even for a
+	// grace-period-0 delete), so the standby took it at its next retry.
+	leaseReleased = "released"
+	// leaseExpired: the Lease still named the killed holder, and the standby
+	// took it only after the last renewal's lease duration ran out.
+	leaseExpired = "expired"
+)
+
+// leaseHandoff follows successive reads of a Lease after its holder was
+// killed and says whether the holder released it or it expired.
+type leaseHandoff struct {
+	killed    string
+	lastRenew time.Time
+	duration  time.Duration
+}
+
+func newLeaseHandoff(killed leaseRecord) *leaseHandoff {
+	return &leaseHandoff{killed: killed.holder, lastRenew: killed.renew, duration: killed.duration}
+}
+
+// observe takes the next read and returns the outcome once it is known. A
+// release writes an empty holder; a new holder that acquired before the
+// killed holder's last renewal expired can only have found it released.
+func (l *leaseHandoff) observe(r leaseRecord) (string, bool) {
+	switch {
+	case r.holder == l.killed:
+		if r.renew.After(l.lastRenew) {
+			l.lastRenew, l.duration = r.renew, r.duration
+		}
+		return "", false
+	case r.holder == "":
+		return leaseReleased, true
+	case r.acquire.Before(l.lastRenew.Add(l.duration)):
+		return leaseReleased, true
+	default:
+		return leaseExpired, true
 	}
-	return leaderPodName(*lease.Spec.HolderIdentity), nil
 }
 
 // processFigures is one operator process at one point: Go runtime, RSS, the

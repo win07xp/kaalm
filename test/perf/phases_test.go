@@ -291,7 +291,7 @@ func TestRestartResultJSONKeys(t *testing.T) {
 		ControllerWarmupWatches: []watchSample{{AtSec: 2, SecretWatches: 10}},
 		SweepBefore:             []sweepTarget{{Target: "kaalm-gateway-a", Channels: 800, Served: 800}},
 		SweepAfter:              []sweepTarget{{Target: "kaalm-gateway-b", Channels: 800, Served: 799, Unserved: 1}},
-		Failover:                &failoverResult{Killed: "ctl-a", NewLeader: "ctl-b", WarmupSec: 30},
+		Failover:                &failoverResult{Killed: "ctl-a", NewLeader: "ctl-b", Lease: leaseReleased, WarmupSec: 30},
 		Figures: map[string]scaleFigures{pointBefore: {
 			Gateway:    []processFigures{{Pod: "kaalm-gateway-a", Watches: &watches}},
 			Controller: []processFigures{{Pod: "ctl-a", Leader: true}},
@@ -317,6 +317,7 @@ func TestRestartResultJSONKeys(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"served":800`, `"unserved":1`, `"servedSec"`, `"acceptMs"`, `"killed":"ctl-a"`, `"newLeader":"ctl-b"`,
+		`"lease":"released"`,
 		`"firstReconcileSec"`, `"warmupSec":30`, `"recoveredSec"`, `"before":{`, `"gateway":[`, `"controller":[`,
 		`"watches":7`, `"leader":true`, `"heapMiB"`, `"rssMiB"`, `"apiGets"`, `"goroutines"`,
 		`"apiserver":{"rssMiB":900,"cpuSeconds":12,"secretWatches":15}`,

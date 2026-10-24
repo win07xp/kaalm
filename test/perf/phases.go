@@ -209,8 +209,8 @@ type restartResult struct {
 	// replica after the gateway rollout.
 	SweepBefore []sweepTarget `json:"sweepBefore,omitempty"`
 	SweepAfter  []sweepTarget `json:"sweepAfter,omitempty"`
-	// Failover is the controller leader killed with no grace period; null
-	// when it was skipped.
+	// Failover is the controller leader Pod deleted with grace period 0;
+	// null when it was skipped.
 	Failover *failoverResult `json:"failover"`
 	// Figures is every operator process and the API server at the points
 	// figurePoints names.
@@ -224,12 +224,16 @@ type watchSample struct {
 	SecretWatches float64 `json:"secretWatches"`
 }
 
-// failoverResult is a controller leader crash: the Pod deleted with grace
-// period 0, so its Lease is never released and must expire, unlike the
-// rollout's graceful handoff. Each time is from the kill.
+// failoverResult is the controller leader Pod deleted with grace period 0.
+// The kubelet still sends SIGTERM first, and the manager releases its Lease
+// on shutdown, so the standby most likely takes over at its next retry
+// rather than after the Lease expires; Lease records which happened ("" when
+// the Lease reads could not tell). Either way the new leader starts its
+// Secret informers cold. Each time is from the kill.
 type failoverResult struct {
 	Killed            string        `json:"killed"`
 	NewLeader         string        `json:"newLeader"`
+	Lease             string        `json:"lease"`
 	FirstReconcileSec float64       `json:"firstReconcileSec"`
 	WarmupSec         float64       `json:"warmupSec"`
 	RecoveredSec      float64       `json:"recoveredSec"`
@@ -2260,12 +2264,13 @@ func (h *harness) sweepGateway(ctx context.Context, job string, count int) []swe
 	return res.Sweep
 }
 
-// failover kills the controller leader with no grace period and times the
-// first reconcile, the channel warm-up, and the Deployment's return to
-// Ready. A Lease without a holder, or a holder Pod that is gone, is a note
-// and returns nil.
+// failover deletes the controller leader Pod with grace period 0, follows
+// the Lease to its next holder, and times the first reconcile, the channel
+// warm-up, and the Deployment's return to Ready. A Lease without a holder,
+// or a holder Pod that is gone, is a note and returns nil.
 func (h *harness) failover(ctx context.Context, channels int) (*failoverResult, error) {
-	leader, err := h.k.controllerLeader(ctx)
+	before, err := h.k.leaderLeaseRecord(ctx)
+	leader := before.holder
 	if err != nil || leader == "" {
 		h.note("restart: failover skipped: no controller leader in the Lease (%v)", err)
 		return nil, nil
@@ -2284,9 +2289,25 @@ func (h *harness) failover(ctx context.Context, channels int) (*failoverResult, 
 		}
 		return nil, err
 	}
+	// The Lease is followed while the first reconcile is awaited, so the
+	// short window a release leaves empty is not missed.
+	type handoffResult struct {
+		outcome string
+		err     error
+	}
+	handoff := make(chan handoffResult, 1)
+	go func() {
+		outcome, err := h.followLeaseHandoff(ctx, before)
+		handoff <- handoffResult{outcome, err}
+	}()
 	res := &failoverResult{Killed: leader}
 	if err := h.awaitFirstReconcile(ctx); err != nil {
 		return nil, fmt.Errorf("no reconcile after killing %s: %w", leader, err)
+	}
+	if got := <-handoff; got.err != nil {
+		h.note("restart: failover: could not tell whether %s released the Lease: %v", leader, got.err)
+	} else {
+		res.Lease = got.outcome
 	}
 	res.FirstReconcileSec = round3(time.Since(t2).Seconds())
 	res.WarmupSec, res.Watches = h.awaitChannelWarmup(ctx, t2, channels)
@@ -2298,7 +2319,27 @@ func (h *harness) failover(ctx context.Context, channels int) (*failoverResult, 
 	if res.NewLeader, err = h.k.controllerLeader(ctx); err != nil {
 		h.note("restart: reading the new controller leader: %v", err)
 	}
-	h.logf("  failover: %s killed, %s leads; first reconcile %.0fs, warm %.0fs, recovered %.0fs",
-		res.Killed, res.NewLeader, res.FirstReconcileSec, res.WarmupSec, res.RecoveredSec)
+	h.logf("  failover: %s killed, Lease %s, %s leads; first reconcile %.0fs, warm %.0fs, recovered %.0fs",
+		res.Killed, res.Lease, res.NewLeader, res.FirstReconcileSec, res.WarmupSec, res.RecoveredSec)
 	return res, nil
+}
+
+// followLeaseHandoff reads the controller's Lease from the kill until a new
+// holder takes it and returns leaseReleased or leaseExpired. It reads often
+// enough to see the empty holder a release leaves before the standby's
+// next retry, and gives up after two minutes. It runs beside the failover's
+// other waits, so it reports through its error instead of a note.
+func (h *harness) followLeaseHandoff(ctx context.Context, killed leaseRecord) (string, error) {
+	tracker := newLeaseHandoff(killed)
+	outcome := ""
+	err := pollUntil(ctx, 2*time.Minute, 200*time.Millisecond, func() (bool, error) {
+		rec, err := h.k.leaderLeaseRecord(ctx)
+		if err != nil {
+			return false, err
+		}
+		var done bool
+		outcome, done = tracker.observe(rec)
+		return done, nil
+	})
+	return outcome, err
 }
