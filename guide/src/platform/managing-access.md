@@ -187,7 +187,12 @@ To give a team its roles:
 Subjects are Kubernetes RBAC `Subject` objects, rendered as you write them. A
 `User` or `Group` needs `apiGroup: rbac.authorization.k8s.io`, and a
 `ServiceAccount` needs a `namespace`. A list you leave empty renders no
-binding, and subject values are ignored while `enabled` is `false`.
+binding, and so do subject values while `enabled` is `false`.
+
+If a subject has no `kind` or `name`, or `developers` or
+`namespaceSecretsAdmins` is a list instead of a map, `helm upgrade` fails
+before it changes anything, and the error names the value. Fix that value and
+run the upgrade again.
 
 Each list does one job:
 
@@ -205,9 +210,6 @@ Each list does one job:
 - `namespaceSecretsAdmins` maps a team namespace to that team's credential
   managers, who own its channel credentials. See
   [Keep channel credentials in team namespaces](#keep-channel-credentials-in-team-namespaces).
-
-If `developers` or `namespaceSecretsAdmins` is not a map (for example, a
-list), the upgrade fails and the error names the value.
 
 ### Keep channel credentials in team namespaces
 
