@@ -80,6 +80,10 @@ func buildC(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (s
 	return newNameInformerReader(ctx, client, 0), nil
 }
 
+func buildLean(ctx context.Context, rc *rest.Config, client kubernetes.Interface) (secretReader, error) {
+	return newLeanReader(ctx, rc, client, 0)
+}
+
 func buildA(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
 	return newLabelInformerReader(ctx, client), nil
 }
@@ -88,7 +92,8 @@ func buildA(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (s
 // configured limit; A runs at the controller's limit because its request
 // count does not grow with the Secret count, so the limit cannot shape it.
 // C runs at both limits today runs at, so C against today isolates the
-// design change from the limit.
+// design change from the limit. lean runs at the gateway's limit because it
+// is compared with C-gw: same requests, without the informer machinery.
 func variants(cfg config) []variant {
 	return []variant{
 		{Name: "today-gw", QPS: gatewayQPS, Burst: gatewayBurst, Build: buildToday, ExpectedWatches: perSecret},
@@ -96,6 +101,7 @@ func variants(cfg config) []variant {
 		{Name: "B", QPS: float32(cfg.BQPS), Burst: cfg.BBurst, Build: buildToday, ExpectedWatches: perSecret},
 		{Name: "C-gw", QPS: gatewayQPS, Burst: gatewayBurst, Build: buildC, ExpectedWatches: perSecret},
 		{Name: "C-ctrl", QPS: controllerQPS, Burst: controllerBurst, Build: buildC, ExpectedWatches: perSecret},
+		{Name: "lean", QPS: gatewayQPS, Burst: gatewayBurst, Build: buildLean, ExpectedWatches: perSecret},
 		{Name: "A", QPS: controllerQPS, Burst: controllerBurst, Build: buildA, ExpectedWatches: perNamespace},
 	}
 }

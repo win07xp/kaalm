@@ -17,7 +17,7 @@ limitations under the License.
 */
 
 // Command secretbench is a component-level scale benchmark of the Secret
-// watcher (internal/secretwatch) and two prototype readers. It runs against
+// watcher (internal/secretwatch) and three prototype readers. It runs against
 // an envtest control plane, a real kube-apiserver and etcd from the envtest
 // assets, with no cluster and no agent Pods, so its figures are the
 // readers' own cost per Secret, which the perf harness's cluster run cannot
@@ -37,8 +37,17 @@ limitations under the License.
 //	B           the shipped Watcher at -b-qps and -b-burst
 //	C-gw        one informer per Secret that LISTs by metadata.name and
 //	C-ctrl      WATCHes from the LIST's version, at the two limits above
+//	lean        C's requests (a LIST by name, a WATCH from its version) with no
+//	            client-go informer: one shared cache, one goroutine per Secret,
+//	            at the gateway's limit
 //	A           one informer per namespace on the kaalm.io/channel-credential
 //	            label, at the controller's limit
+//
+// lean exists to split today's per-Secret cost between client-go's informer
+// machinery and the watch stream itself. It is held against C-gw to these
+// marks: about 30 KiB RSS per Secret or less, at most 2 goroutines per
+// Secret (its loop and net/http's per-stream goroutine), and cold start and
+// update delivery no slower than C-gw.
 //
 // One run steps the Secret count up inside one API server (-counts), once
 // per layout (every Secret in one namespace, or spread over -namespaces),
