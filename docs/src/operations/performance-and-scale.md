@@ -98,7 +98,7 @@ To measure the watcher's cost per Secret with no cluster and no fleet around it,
 
 ## The Secret watcher benchmark
 
-`make secretwatch-bench` runs a component-level benchmark of the Secret watcher (`internal/secretwatch`) and two prototype readers. It runs next to the harness because the cluster run cannot separate the watcher's cost from everything else a gateway or controller process holds. The benchmark runs against an envtest control plane (a real kube-apiserver and etcd from the envtest assets), with no k3d cluster and no agent Pods, so its figures are the cost of the readers themselves per Secret.
+`make secretwatch-bench` runs a component-level benchmark of the Secret watcher (`internal/secretwatch`) and three prototype readers. It runs next to the harness because the cluster run cannot separate the watcher's cost from everything else a gateway or controller process holds. The third prototype, `lean`, exists to split today's per-Secret cost between client-go's informer (with its reflector, queue, and processor) and the watch stream itself. The benchmark runs against an envtest control plane (a real kube-apiserver and etcd from the envtest assets), with no k3d cluster and no agent Pods, so its figures are the cost of the readers themselves per Secret.
 
 ### What a run measures
 
@@ -117,7 +117,7 @@ The table printed at the end gives a least-squares slope per Secret for each fig
 
 ### The variants
 
-Today's design is one single-object watch per Secret ([Credential handling](../security/credentials.md) for the gateway, [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount) for the controller). Variants A and C are prototypes inside the benchmark, not shipped code.
+Today's design is one single-object watch per Secret ([Credential handling](../security/credentials.md) for the gateway, [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount) for the controller). Variants A, C, and `lean` are prototypes inside the benchmark, not shipped code.
 
 | Variant | What differs |
 |---|---|
@@ -125,25 +125,46 @@ Today's design is one single-object watch per Secret ([Credential handling](../s
 | `today-ctrl` | Today's watcher at the controller's client limits: 20 QPS, burst 30. |
 | `B` | Today's watcher at a higher client limit: 500 QPS, burst 1000 by default (`-b-qps` and `-b-burst`). |
 | `C-gw`, `C-ctrl` | One informer per Secret that lists by name and watches from the list's version, so it needs no confirming GET. Run at the two limits above. |
+| `lean` | A reader with no client-go informer. Per Secret it issues one LIST by name and one WATCH from the list's version, the requests `C-gw` makes. It keeps every Secret in one shared cache and spends one goroutine of its own per Secret on the watch stream. Run at the gateway's limits, so you compare it with `C-gw`. |
 | `A` | One informer per namespace that lists and watches by the `kaalm.io/channel-credential` label. Run at the controller's limits. |
 
-Compare `B` with `today-gw` to see what the client limit changes, and `C-gw` with `today-gw` (or `C-ctrl` with `today-ctrl`) to see what the design change adds at the same limit.
+Compare `B` with `today-gw` to see what the client limit changes, and `C-gw` with `today-gw` (or `C-ctrl` with `today-ctrl`) to see what the design change adds at the same limit. Compare `lean` with `C-gw` to see what client-go's informer costs per Secret.
+
+`lean` is held to three marks against `C-gw`: about 30 KiB of RSS per Secret or less, at most 2 goroutines per Secret, and a cold start and update delivery no slower than `C-gw`. The second goroutine is net/http's, one per open HTTP/2 stream, so 2 per Secret is the floor for any Go reader that holds one stream per Secret. (The streams also share one goroutine per connection.)
+
+Like the shipped watcher, `C` and `A` stop a Secret's informer when its list is refused as Forbidden, and they answer that refusal. A revoked grant is therefore never served from their caches. This adds no goroutine or buffer, so their figures stay comparable.
 
 ### Run the benchmark
 
 ```bash
 make secretwatch-bench                                      # the full default sweep
 make secretwatch-bench SECRETBENCH_FLAGS='-repeats 1'       # one sweep
+make secretwatch-bench SECRETBENCH_FLAGS='-rbac-check'      # the RBAC check, instead of the sweep
 make secretwatch-bench-unit                                 # the benchmark's own tests
 ```
 
 `SECRETBENCH_FLAGS` passes flags to the benchmark. The ones you change are `-counts`, `-namespaces`, `-repeats`, and `-variants`, which takes the variant names above. The full list is in `test/secretbench/config.go`. The full default sweep takes several hours, because the variants at the controller's limit wait on the client rate limiter for their GETs and LISTs. One sweep (`-repeats 1`) takes a little over an hour.
 
-Results land in `test/secretbench/results/` as JSON, which is not committed. The file is rewritten after every step, so an interrupted run keeps the steps it finished. Neither target runs in CI or in `make test`: the `secretbench` build tag keeps the package out of their test runs, and only lint reads it.
+Results land in `test/secretbench/results/` as JSON, which is not committed. The file is rewritten after every step, so an interrupted run keeps the steps it finished. Neither target runs in CI or in `make test`: the `secretbench` build tag keeps the package out of their test runs, and only lint reads it. The RBAC check writes no JSON.
+
+### Check RBAC behavior
+
+The sweep runs as envtest's cluster administrator, so it cannot show whether a reader's requests pass RBAC. The prototypes list Secrets in a channel's namespace, where the shipped grants give the gateway and the operator only `get` and `watch` on named Secrets ([Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)). The grants do allow `list` on Secrets in `kaalm-system`. The open question is whether a `resourceNames`-scoped grant allows a name-selected list and watch.
+
+`-rbac-check` answers it instead of running the sweep. It runs the `C-gw` and `lean` readers as a user whose Role grants `get`, `list`, and `watch` on three named Secrets only, through the API server's RBAC authorizer. It prints one PASS or FAIL line per check and exits non-zero when any check fails. It ignores the sweep flags. The four checks are:
+
+- **(a) Granted names are served from the watch.** Each granted Secret is served, an update reaches the reader over the watch, and no read falls back to a live GET.
+- **(b) A list or watch with no name selector is refused.** A LIST or WATCH on Secrets without a name selector returns Forbidden.
+- **(c) An ungranted name is refused.** A name-selected LIST or WATCH on an ungranted name returns Forbidden, and a reader's Get of it returns the refusal with no live GET.
+- **(d) A revoked name stops being served.** After the Role drops one name, the reader returns Forbidden for it within 30 s and keeps serving the names still granted.
+
+Checks (b) and the direct part of (c) test the API server, not a reader, so they print once with the reader column `user`. The other lines print once for each reader.
+
+Check (d) has a time bound because an open watch outlives its grant: the authorizer runs when a request starts, so the refusal appears only when the reader next makes a request. The check shortens the watch timeout to 5 s so the watch re-opens every 5 s, and each (d) line prints the time it took. `lean` stops a name on a refused WATCH, so it refuses when the watch re-opens, about 5 s in. `C-gw` sends a refused WATCH to the reflector's relist, so it refuses at the next LIST after a backoff, about 6 s in. A production watch lasts 5 to 10 minutes, so a revoked grant can keep a Secret served for that long before the refusal shows.
 
 ### What the benchmark leaves out
 
-The benchmark runs as envtest's cluster administrator, so it measures cost, not RBAC. The prototypes list Secrets in a channel's namespace, where the shipped grants give the gateway and the operator only `get` and `watch` on named Secrets ([Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)). The grants do allow `list` on Secrets in `kaalm-system`. The administrator's requests are also exempt from API priority and fairness, so the API server never queues them. RBAC and queueing stay with the harness's restart phase ([Restart under load](#restart-under-load)).
+The sweep measures cost, not RBAC. The administrator's requests are also exempt from API priority and fairness, so the API server never queues them. Queueing stays with the harness's restart phase ([Restart under load](#restart-under-load)).
 
 ## The baseline environment
 
