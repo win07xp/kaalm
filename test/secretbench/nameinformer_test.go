@@ -32,7 +32,7 @@ func TestNameInformerReaderFollowsOneSecret(t *testing.T) {
 	ctx := context.Background()
 	ns := testNamespace(t)
 	client, counter := countedClient(t)
-	r := newNameInformerReader(ctx, client)
+	r := newNameInformerReader(ctx, client, 0)
 	defer stopAndDrain(t, r, counter)
 
 	created := createSecret(t, ns, "one", false)
@@ -76,7 +76,7 @@ func TestNameInformerReaderListsThenWatches(t *testing.T) {
 	ctx := context.Background()
 	ns := testNamespace(t)
 	client, counter := countedClient(t)
-	r := newNameInformerReader(ctx, client)
+	r := newNameInformerReader(ctx, client, 0)
 	defer stopAndDrain(t, r, counter)
 
 	createSecret(t, ns, "one", false)
@@ -92,5 +92,40 @@ func TestNameInformerReaderListsThenWatches(t *testing.T) {
 	}
 	if got := counter.snapshot(); got != (requestCounts{List: 1, Watch: 1}) {
 		t.Fatalf("requests after a cached read = %+v, want List 1, Watch 1", got)
+	}
+}
+
+// Today's Watcher stops an informer whose list is refused as Forbidden and
+// answers the refusal; C must too, or it serves its store after the grant is
+// gone. An open watch outlives its grant, so the refusal shows once the
+// 1 s watch ends and the relist is refused.
+func TestNameInformerReaderStopsOnRevokedGrant(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	ns := testNamespace(t)
+	createSecret(t, ns, "one", false)
+	createSecret(t, ns, "two", false)
+	userCfg, regrant := grantedUser(t, ns, "one", "two")
+	_, client, counter := countedClientFor(t, userCfg)
+	r := newNameInformerReader(ctx, client, time.Second)
+	defer stopAndDrain(t, r, counter)
+
+	if _, err := r.Get(ctx, ns, "one"); err != nil {
+		t.Fatalf("Get as the granted user: %v", err)
+	}
+	regrant("two")
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, err := r.Get(ctx, ns, "one")
+		if apierrors.IsForbidden(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Get after the grant was removed = %v, want Forbidden within 15s", err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if _, err := r.Get(ctx, ns, "two"); err != nil {
+		t.Fatalf("Get of a still-granted Secret: %v", err)
 	}
 }

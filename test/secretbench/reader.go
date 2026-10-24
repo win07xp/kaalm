@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -76,7 +77,7 @@ func buildToday(ctx context.Context, _ *rest.Config, client kubernetes.Interface
 }
 
 func buildC(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
-	return newNameInformerReader(ctx, client), nil
+	return newNameInformerReader(ctx, client, 0), nil
 }
 
 func buildA(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
@@ -137,7 +138,38 @@ func (r *todayReader) Stop() { r.cancel() }
 type informerEntry struct {
 	informer cache.SharedInformer
 	stop     chan struct{}
+	stopOnce sync.Once
 	listErr  atomic.Pointer[error]
+	// revoked is set when the informer's list was refused as Forbidden and
+	// the informer was stopped for it, as today's Watcher does. Reads answer
+	// the refusal, and the next read replaces the entry.
+	revoked atomic.Bool
+}
+
+// halt stops the informer once.
+func (e *informerEntry) halt() { e.stopOnce.Do(func() { close(e.stop) }) }
+
+// stopOnForbidden mirrors the shipped Watcher's watch error handler: it
+// logs as the default handler does, then stops the informer when its latest
+// list was refused as Forbidden, so a revoked grant is never served from the
+// store. A refused watch alone is left to the reflector's relist, whose LIST
+// decides. It adds no goroutine and no buffer, so C's figures stay
+// comparable with the sweep's.
+func stopOnForbidden(e *informerEntry) cache.WatchErrorHandlerWithContext {
+	return func(ctx context.Context, r *cache.Reflector, err error) {
+		cache.DefaultWatchErrorHandler(ctx, r, err)
+		if apierrors.IsForbidden(e.failed()) {
+			e.revoked.Store(true)
+			e.halt()
+		}
+	}
+}
+
+// start installs the Forbidden handler and runs the informer. Setting the
+// handler fails only once the informer runs, and it does not run yet.
+func (e *informerEntry) start() {
+	_ = e.informer.SetWatchErrorHandlerWithContext(stopOnForbidden(e))
+	go e.informer.Run(e.stop)
 }
 
 // recordList keeps the informer's last list error, or clears it on success.
@@ -162,7 +194,7 @@ func (e *informerEntry) failed() error {
 // absent key is NotFound.
 func (e *informerEntry) read(ctx context.Context, client kubernetes.Interface,
 	namespace, name string) (*corev1.Secret, error) {
-	synced, err := waitSynced(ctx, e.informer, e.failed, syncTimeout)
+	synced, err := waitSynced(ctx, e, syncTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -182,15 +214,18 @@ func (e *informerEntry) read(ctx context.Context, client kubernetes.Interface,
 
 // waitSynced polls HasSynced every 5 ms, as secretwatch does, until the
 // informer syncs (true), its list fails (the error), or the timeout or ctx
-// ends (false, nil).
-func waitSynced(ctx context.Context, informer cache.SharedInformer, failed func() error,
-	timeout time.Duration) (bool, error) {
+// ends (false, nil). A revoked informer answers its refusal even if it had
+// synced, so its stale store is never served.
+func waitSynced(ctx context.Context, e *informerEntry, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		if informer.HasSynced() {
+		if e.revoked.Load() {
+			return false, e.failed()
+		}
+		if e.informer.HasSynced() {
 			return true, nil
 		}
-		if err := failed(); err != nil {
+		if err := e.failed(); err != nil {
 			return false, err
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {

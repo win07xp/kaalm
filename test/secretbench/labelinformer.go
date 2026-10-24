@@ -62,8 +62,12 @@ func (r *labelInformerReader) Get(ctx context.Context, namespace, name string) (
 func (r *labelInformerReader) entryFor(namespace string) *informerEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if e, ok := r.entries[namespace]; ok {
+	if e, ok := r.entries[namespace]; ok && !e.revoked.Load() {
 		return e
+	} else if ok {
+		// A refused entry is replaced on the next read, as the Watcher does
+		// with ErrorTTL 0, so a returned grant is picked up.
+		e.halt()
 	}
 	e := &informerEntry{stop: make(chan struct{})}
 	secrets := r.client.CoreV1().Secrets(namespace)
@@ -83,7 +87,7 @@ func (r *labelInformerReader) entryFor(namespace string) *informerEntry {
 		},
 	}
 	e.informer = cache.NewSharedIndexInformer(listThenWatch{lw}, &corev1.Secret{}, 0, cache.Indexers{})
-	go e.informer.Run(e.stop)
+	e.start()
 	r.entries[namespace] = e
 	return e
 }
@@ -92,7 +96,7 @@ func (r *labelInformerReader) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ns, e := range r.entries {
-		close(e.stop)
+		e.halt()
 		delete(r.entries, ns)
 	}
 }

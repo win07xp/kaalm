@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,17 +45,30 @@ import (
 // instead of two GETs and one WATCH.
 //
 // A LIST, even a name-filtered one, needs the list verb on Secrets, which
-// resourceNames-scoped grants do not give; the benchmark measures cost, not
-// RBAC.
+// the shipped grants do not include. The API server reads the name from an
+// exact metadata.name field selector, so a resourceNames-scoped grant that
+// adds list allows it; -rbac-check checks that, and the sweep measures cost.
+//
+// Like the shipped Watcher, it stops an informer whose list is refused as
+// Forbidden and answers the refusal (stopOnForbidden).
 type nameInformerReader struct {
 	client kubernetes.Interface
+	// watchTimeout, when set, replaces the reflector's 5 to 10 minute watch
+	// timeout, so a check can see a revoked grant without waiting minutes.
+	watchTimeout time.Duration
 
 	mu      sync.Mutex
 	entries map[types.NamespacedName]*informerEntry
 }
 
-func newNameInformerReader(_ context.Context, client kubernetes.Interface) *nameInformerReader {
-	return &nameInformerReader{client: client, entries: map[types.NamespacedName]*informerEntry{}}
+// newNameInformerReader starts C on client. watchTimeout 0 keeps the
+// reflector's own watch timeout.
+func newNameInformerReader(_ context.Context, client kubernetes.Interface,
+	watchTimeout time.Duration) *nameInformerReader {
+	return &nameInformerReader{
+		client: client, watchTimeout: watchTimeout,
+		entries: map[types.NamespacedName]*informerEntry{},
+	}
 }
 
 func (r *nameInformerReader) Get(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
@@ -65,8 +79,12 @@ func (r *nameInformerReader) entryFor(namespace, name string) *informerEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := types.NamespacedName{Namespace: namespace, Name: name}
-	if e, ok := r.entries[key]; ok {
+	if e, ok := r.entries[key]; ok && !e.revoked.Load() {
 		return e
+	} else if ok {
+		// A refused entry is replaced on the next read, as the Watcher does
+		// with ErrorTTL 0, so a returned grant is picked up.
+		e.halt()
 	}
 	e := &informerEntry{stop: make(chan struct{})}
 	selector := fields.OneTermEqualSelector("metadata.name", name).String()
@@ -85,11 +103,15 @@ func (r *nameInformerReader) entryFor(namespace, name string) *informerEntry {
 		// watch resumes exactly where the list left off.
 		WatchFuncWithContext: func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
 			opts.FieldSelector = selector
+			if r.watchTimeout > 0 {
+				secs := int64(r.watchTimeout / time.Second)
+				opts.TimeoutSeconds = &secs
+			}
 			return secrets.Watch(ctx, opts)
 		},
 	}
 	e.informer = cache.NewSharedInformer(listThenWatch{lw}, &corev1.Secret{}, 0)
-	go e.informer.Run(e.stop)
+	e.start()
 	r.entries[key] = e
 	return e
 }
@@ -98,7 +120,7 @@ func (r *nameInformerReader) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for key, e := range r.entries {
-		close(e.stop)
+		e.halt()
 		delete(r.entries, key)
 	}
 }
