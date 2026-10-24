@@ -120,11 +120,6 @@ func TestChannelNamesAndSecretPairs(t *testing.T) {
 	if hook, hmac := secretPairNames(7); hook != "perf-hook-0007" || hmac != "perf-callback-hmac-0007" {
 		t.Errorf("secretPairNames(7) = %q, %q", hook, hmac)
 	}
-	for _, c := range []struct{ channels, n, want int }{{400, 0, 2}, {400, 200, 400}, {400, 500, 800}} {
-		if got := referencedSecrets(c.channels, c.n); got != c.want {
-			t.Errorf("referencedSecrets(%d, %d) = %d, want %d", c.channels, c.n, got, c.want)
-		}
-	}
 	f := fleet{prefix: "ramp-"}
 	if i, ok := f.index("ramp-0042"); !ok || i != 42 {
 		t.Errorf("index(ramp-0042) = %d, %v", i, ok)
@@ -174,6 +169,72 @@ func TestFleetChannelsSpreadOverPairs(t *testing.T) {
 		if ref := wh.CallbackAuth.HMAC.SecretRef; ref.Name != w.hmac || ref.Key != "key" {
 			t.Errorf("channel %d: HMAC ref %s/%s, want %s/key", i, ref.Name, ref.Key, w.hmac)
 		}
+	}
+}
+
+// fleetChannelItems is the channels of agents 0..agents-1 as a list would
+// return them.
+func fleetChannelItems(f fleet, agents int, cfg config) []kaalmv1beta1.AgentChannel {
+	var out []kaalmv1beta1.AgentChannel
+	for i := 0; i < agents; i++ {
+		for _, o := range f.channels(i, cfg, "https://cb") {
+			out = append(out, *o.(*kaalmv1beta1.AgentChannel))
+		}
+	}
+	return out
+}
+
+// The restart counts the Secrets the listed channels reference, whatever
+// flags this run was given.
+func TestDistinctChannelSecretsOverFleetChannels(t *testing.T) {
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	for _, c := range []struct {
+		name   string
+		agents int
+		cfg    config
+		want   int
+	}{
+		{"shared pair", 400, config{ChannelsPerAgent: 1}, 2},
+		{"one pair per channel", 400, config{ChannelsPerAgent: 1, ChannelSecrets: 400}, 800},
+		{"pairs reused", 400, config{ChannelsPerAgent: 1, ChannelSecrets: 200}, 400},
+		{"more pairs than channels", 100, config{ChannelsPerAgent: 1, ChannelSecrets: 500}, 200},
+		{"two channels per agent", 200, config{ChannelsPerAgent: 2, ChannelSecrets: 500}, 800},
+	} {
+		if got := distinctChannelSecrets(fleetChannelItems(f, c.agents, c.cfg)); got != c.want {
+			t.Errorf("%s: distinctChannelSecrets = %d, want %d", c.name, got, c.want)
+		}
+	}
+	// The same Secret name in two namespaces is two Secrets.
+	two := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf", "perf-b"}}
+	if got := distinctChannelSecrets(fleetChannelItems(two, 4, config{ChannelsPerAgent: 1})); got != 4 {
+		t.Errorf("shared pair over two namespaces: %d, want 4", got)
+	}
+	if got := distinctChannelSecrets(nil); got != 0 {
+		t.Errorf("no channels: %d, want 0", got)
+	}
+}
+
+// The restart sweep posts to the slots every swept agent has listed, not to
+// the slots this run's -channels-per-agent names.
+func TestSweepSlotsFollowListedChannels(t *testing.T) {
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	two := fleetChannelItems(f, 5, config{ChannelsPerAgent: 2})
+	if k, skipped := sweepSlots(f, two, 5); k != 2 || skipped != 0 {
+		t.Errorf("two slots per agent: k %d, skipped %d, want 2, 0", k, skipped)
+	}
+	if k, skipped := sweepSlots(f, two, 3); k != 2 || skipped != 0 {
+		t.Errorf("first three agents: k %d, skipped %d, want 2, 0", k, skipped)
+	}
+	// Agent 1 lacks slot 1: the sweep keeps to slot 0 and counts the rest.
+	gap := append(append([]kaalmv1beta1.AgentChannel(nil), two[:3]...), two[4:]...)
+	if k, skipped := sweepSlots(f, gap, 5); k != 1 || skipped != 4 {
+		t.Errorf("a missing slot: k %d, skipped %d, want 1, 4", k, skipped)
+	}
+	if k, _ := sweepSlots(f, nil, 5); k != 0 {
+		t.Errorf("no channels: k %d, want 0", k)
+	}
+	if k, _ := sweepSlots(f, two, 0); k != 0 {
+		t.Errorf("no agents: k %d, want 0", k)
 	}
 }
 

@@ -267,14 +267,80 @@ func (f fleet) index(name string) (int, bool) {
 	return i, true
 }
 
-// referencedSecrets is how many distinct Secrets a fleet of channels
-// references with n Secret pairs: the shared two when n is 0, else two per
-// pair a channel uses.
-func referencedSecrets(channels, n int) int {
-	if n == 0 {
-		return 2
+// distinctChannelSecrets is how many distinct Secrets the channels' bearer
+// and callback HMAC refs name, each Secret counted once per namespace.
+func distinctChannelSecrets(chs []kaalmv1beta1.AgentChannel) int {
+	seen := map[string]bool{}
+	for _, ch := range chs {
+		wh := ch.Spec.Webhook
+		if wh == nil {
+			continue
+		}
+		if ref := wh.Auth.SecretRef; ref != nil {
+			seen[ch.Namespace+"/"+ref.Name] = true
+		}
+		if cb := wh.CallbackAuth; cb != nil && cb.HMAC != nil {
+			seen[ch.Namespace+"/"+cb.HMAC.SecretRef.Name] = true
+		}
 	}
-	return 2 * min(n, channels)
+	return len(seen)
+}
+
+// sweepSlots is the channels per agent a sweep of the first count agents
+// posts to: the slots 0..k-1 that every one of those agents has among chs.
+// skipped is how many of those agents' listed channels lie past k.
+func sweepSlots(f fleet, chs []kaalmv1beta1.AgentChannel, count int) (k, skipped int) {
+	if count <= 0 {
+		return 0, 0
+	}
+	slots := make([]map[int]bool, count)
+	listed := 0
+	for _, ch := range chs {
+		i, ok := f.index(ch.Spec.AgentRef.Name)
+		if !ok || i >= count || ch.Namespace != f.namespaceOf(i) {
+			continue
+		}
+		slot, ok := channelSlot(ch.Spec.AgentRef.Name, ch.Name)
+		if !ok {
+			continue
+		}
+		if slots[i] == nil {
+			slots[i] = map[int]bool{}
+		}
+		slots[i][slot] = true
+		listed++
+	}
+	k = -1
+	for _, have := range slots {
+		n := 0
+		for have[n] {
+			n++
+		}
+		if k < 0 || n < k {
+			k = n
+		}
+	}
+	return k, listed - k*count
+}
+
+// channelSlot parses a channel name back to its slot of agent.
+func channelSlot(agent, name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, agent)
+	if !ok {
+		return 0, false
+	}
+	if rest == "" {
+		return 0, true
+	}
+	digits, ok := strings.CutPrefix(rest, channelSlotSuffix)
+	if !ok {
+		return 0, false
+	}
+	slot, err := strconv.Atoi(digits)
+	if err != nil || slot < 1 || channelSuffix(slot) != rest {
+		return 0, false
+	}
+	return slot, true
 }
 
 func taskObj(ns, name, class, image string) *kaalmv1beta1.AgentTask {

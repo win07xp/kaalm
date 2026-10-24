@@ -1997,13 +1997,23 @@ func (h *harness) runRestart(ctx context.Context) error {
 	res := &restartResult{
 		Agents:         len(timings),
 		Channels:       len(channels.Items),
-		ChannelSecrets: referencedSecrets(len(channels.Items), cfg.ChannelSecrets),
+		ChannelSecrets: distinctChannelSecrets(channels.Items),
 		Figures:        map[string]scaleFigures{},
 	}
-	count := readyRun(timings, h.rampFleet())
+	f := h.rampFleet()
+	count := readyRun(timings, f)
 	h.logf("restart: %d agents, %d channels referencing %d Secrets", res.Agents, res.Channels, res.ChannelSecrets)
+	if want := count * cfg.ChannelsPerAgent; res.Channels != want {
+		h.note("restart: the fleet lists %d channels, not the %d that %d Ready agents times -channels-per-agent %d give; "+
+			"the figures and sweeps follow the listed channels", res.Channels, want, count, cfg.ChannelsPerAgent)
+	}
+	perAgent, skipped := sweepSlots(f, channels.Items, count)
+	if skipped > 0 {
+		h.note("restart: the sweeps post to %d channels per agent, the slots every one of the %d Ready agents lists; "+
+			"%d of their listed channels are left out", perAgent, count, skipped)
+	}
 	h.recordFigures(ctx, res, pointBefore)
-	res.SweepBefore = h.sweepGateway(ctx, "loadgen-sweep-before", count)
+	res.SweepBefore = h.sweepGateway(ctx, "loadgen-sweep-before", count, perAgent)
 
 	h.logf("restart: rolling the controller with %d agents up", res.Agents)
 	t0 := time.Now()
@@ -2076,7 +2086,7 @@ func (h *harness) runRestart(ctx context.Context) error {
 	for _, e := range out.res.Errors {
 		h.logf("  client error %s", e)
 	}
-	res.SweepAfter = h.sweepGateway(ctx, "loadgen-sweep-after", count)
+	res.SweepAfter = h.sweepGateway(ctx, "loadgen-sweep-after", count, perAgent)
 	// The sweep's async replies push callbacks, which load the HMAC Secrets.
 	if err := sleepCtx(ctx, 30*time.Second); err != nil {
 		return err
@@ -2225,13 +2235,14 @@ func sweepGatewayArgs(f fleet, ips []string, count, perAgent int) []string {
 	}
 }
 
-// sweepGateway sweeps every channel of the first count ramp agents against
-// each gateway replica and returns the per-replica results named by Pod. A
-// sweep that fails is a note, so the phase keeps its other numbers.
-func (h *harness) sweepGateway(ctx context.Context, job string, count int) []sweepTarget {
+// sweepGateway sweeps perAgent channels of each of the first count ramp
+// agents against each gateway replica and returns the per-replica results
+// named by Pod. A sweep that fails is a note, so the phase keeps its other
+// numbers.
+func (h *harness) sweepGateway(ctx context.Context, job string, count, perAgent int) []sweepTarget {
 	cfg := h.cfg
-	if count == 0 {
-		h.note("restart: %s skipped: no Ready ramp agents", job)
+	if count == 0 || perAgent == 0 {
+		h.note("restart: %s skipped: no Ready ramp agents with listed channels", job)
 		return nil
 	}
 	pods, err := h.k.componentPods(ctx, "kaalm-system", "gateway")
@@ -2246,9 +2257,9 @@ func (h *harness) sweepGateway(ctx context.Context, job string, count int) []swe
 			byIP["https://"+p.Status.PodIP+":8080"] = p.Name
 		}
 	}
-	h.logf("restart: %s: %d channels against %d gateway replicas", job, count*cfg.ChannelsPerAgent, len(ips))
+	h.logf("restart: %s: %d channels against %d gateway replicas", job, count*perAgent, len(ips))
 	res, err := h.k.runLoadgen(ctx, cfg.Namespace, job, cfg.LoadgenImage,
-		sweepGatewayArgs(h.rampFleet(), ips, count, cfg.ChannelsPerAgent), "", 8*time.Minute)
+		sweepGatewayArgs(h.rampFleet(), ips, count, perAgent), "", 8*time.Minute)
 	if err != nil {
 		h.note("restart: %s: %v", job, err)
 		return nil
