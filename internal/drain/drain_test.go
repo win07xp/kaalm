@@ -17,7 +17,9 @@ limitations under the License.
 package drain
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -156,6 +158,67 @@ func TestGroup_ServesThroughTheDelay(t *testing.T) {
 	if conn, err := net.DialTimeout("tcp", h.traffic.Addr().String(), time.Second); err == nil {
 		_ = conn.Close()
 		t.Error("the traffic listener still accepts after Serve returned")
+	}
+}
+
+// rawGet sends one HTTP/1.1 request on conn and reads the response.
+func rawGet(t *testing.T, conn net.Conn, br *bufio.Reader) (*http.Response, error) {
+	t.Helper()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: t\r\n\r\n")); err != nil {
+		return nil, err
+	}
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp, nil
+}
+
+func TestGroup_KeepsIdleConnectionsThroughTheDelay(t *testing.T) {
+	h := start(t, Group{Delay: time.Second, Timeout: 5 * time.Second}, nil)
+	dial := func() (net.Conn, *bufio.Reader) {
+		conn, err := net.Dial("tcp", h.traffic.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		br := bufio.NewReader(conn)
+		resp, err := rawGet(t, conn, br)
+		if err != nil {
+			t.Fatalf("request before the drain: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK || resp.Close {
+			t.Fatalf("before the drain: status %d, close %v; want 200 and keep-alive", resp.StatusCode, resp.Close)
+		}
+		return conn, br
+	}
+	reused, reusedBuf := dial()
+	idle, idleBuf := dial()
+
+	h.drain()
+	time.Sleep(100 * time.Millisecond)
+	resp, err := rawGet(t, reused, reusedBuf)
+	if err != nil {
+		t.Fatalf("a connection that was idle when the drain began must still serve: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("reused connection during the delay = %d, want 200", resp.StatusCode)
+	}
+	if !resp.Close {
+		t.Error("a response during the drain must carry Connection: close")
+	}
+
+	if _, err := h.wait(t, 5*time.Second); err != nil {
+		t.Errorf("Serve = %v, want nil", err)
+	}
+	// A read deadline keeps a broken stop stage from hanging the test; a
+	// timeout means the connection is still open, so only EOF passes.
+	_ = idle.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := idleBuf.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Errorf("read on a connection idle through the delay = %v, want EOF (closed at the stop stage)", err)
 	}
 }
 

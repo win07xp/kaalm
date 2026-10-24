@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1927,6 +1928,7 @@ func (h *harness) runRestart(ctx context.Context) error {
 		return err
 	}
 	t1 := time.Now()
+	h.logf("  gateway rollout issued at %s", t1.UTC().Format(errorStampLayout))
 	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "restart", "deploy/kaalm-gateway"); err != nil {
 		return err
 	}
@@ -1946,6 +1948,47 @@ func (h *harness) runRestart(ctx context.Context) error {
 	}
 	h.logf("  gateway rolled in %.0fs; %d requests, %d failed during the roll (statuses %v)",
 		res.GatewayRolloutSec, out.res.Requests, res.GatewayFailed, out.res.Statuses)
+	// The kill times and the stamped error samples together place each
+	// failure in the drain delay, at the stop boundary, or at the timeout.
+	events, err := h.k.cs.CoreV1().Events("kaalm-system").List(ctx, metav1.ListOptions{FieldSelector: "reason=Killing"})
+	if err != nil {
+		h.logf("  warning: listing the gateway Killing events: %v", err)
+	} else {
+		for _, line := range killingTimes(events.Items, "kaalm-gateway-") {
+			h.logf("  killed %s", line)
+		}
+	}
+	for _, e := range out.res.Errors {
+		h.logf("  client error %s", e)
+	}
 	h.sum.Restart = res
 	return nil
+}
+
+// killingTimes returns "<pod> <time>" for each Killing event of a Pod whose
+// name starts with podPrefix, oldest first, in the error samples' layout.
+// The event time has the precision the API keeps: EventTime when the
+// recorder set it, else LastTimestamp, which is whole seconds.
+func killingTimes(events []corev1.Event, podPrefix string) []string {
+	type kill struct {
+		pod string
+		at  time.Time
+	}
+	var kills []kill
+	for _, e := range events {
+		if e.Reason != "Killing" || e.InvolvedObject.Kind != "Pod" || !strings.HasPrefix(e.InvolvedObject.Name, podPrefix) {
+			continue
+		}
+		at := e.LastTimestamp.Time
+		if !e.EventTime.IsZero() {
+			at = e.EventTime.Time
+		}
+		kills = append(kills, kill{e.InvolvedObject.Name, at})
+	}
+	sort.Slice(kills, func(i, j int) bool { return kills[i].at.Before(kills[j].at) })
+	lines := make([]string, 0, len(kills))
+	for _, k := range kills {
+		lines = append(lines, k.pod+" "+k.at.UTC().Format(errorStampLayout))
+	}
+	return lines
 }

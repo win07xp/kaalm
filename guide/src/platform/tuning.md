@@ -204,6 +204,15 @@ and any node drain waiting on it stays around that much longer. Set durations
 in whole hours, minutes, or seconds, or the render fails. See
 [Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#shutdown-and-rolling-restarts).
 
+During a rollout a request can fail at the client with a connection error.
+`connection refused`, `server closed idle connection`, and an immediate `EOF`
+are safe to retry on a new connection. An `EOF` after the request ran for a
+while is not. A `connection refused` after a
+rollout means the cluster took longer than `gateway.shutdown.drainDelay`
+(`5s` by default) to stop routing to the old Pod, so raise that value. See
+[Client errors during a rollout](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#client-errors-during-a-rollout)
+for what each error means.
+
 ---
 
 *How this works: design book pages Operations, Deployment (the values

@@ -20,11 +20,18 @@ limitations under the License.
 // once, but kube-proxy and ingress controllers take a few seconds to apply
 // that. A server that closes its listeners on SIGTERM refuses the
 // connections still routed to it in that window. So the sequence first
-// marks the server not ready and turns keep-alives off, keeps serving for a
-// delay while the endpoint removal spreads, and only then shuts the traffic
-// servers down, waiting a bounded time for in-flight work. The health
-// server stops last, so probes keep getting an answer for the whole
-// sequence.
+// marks the server not ready, keeps serving for a delay while the endpoint
+// removal spreads, and only then shuts the traffic servers down, waiting a
+// bounded time for in-flight work. The health server stops last, so probes
+// keep getting an answer for the whole sequence.
+//
+// During the delay each response to a request that arrives after the drain
+// began tells the client to close the connection after the reply
+// (Connection: close on HTTP/1.1, a GOAWAY on HTTP/2), so the client
+// reconnects and the Service routes it to another replica. Idle connections
+// stay open: closing one races a client that is reusing it, and a client
+// cannot retry a POST it has already sent. Shutdown closes what is still idle
+// at the end of the delay.
 package drain
 
 import (
@@ -35,6 +42,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -79,6 +87,10 @@ func Validate(delay, timeout time.Duration) error {
 // Serve runs every server until ctx ends or one of them fails, then drains.
 // It returns the first serve error, or nil after a drain that ctx started.
 func (g Group) Serve(ctx context.Context, traffic []Server, health Server) error {
+	var draining atomic.Bool
+	for _, s := range traffic {
+		s.HTTP.Handler = closeWhenDraining(&draining, s.HTTP.Handler)
+	}
 	all := append(append([]Server(nil), traffic...), health)
 	errCh := make(chan error, len(all))
 	for _, s := range all {
@@ -94,13 +106,10 @@ func (g Group) Serve(ctx context.Context, traffic []Server, health Server) error
 	if g.OnDrain != nil {
 		g.OnDrain()
 	}
+	// Responses from here on carry Connection: close. Idle connections are
+	// left open; see the package comment.
+	draining.Store(true)
 	slog.Info("draining", "delay", g.Delay, "timeout", g.Timeout)
-	// HTTP/1.1 responses now carry Connection: close and idle connections
-	// close; HTTP/2 connections get a GOAWAY once their streams end. Clients
-	// reconnect, and the Service routes them to another replica.
-	for _, s := range traffic {
-		s.HTTP.SetKeepAlivesEnabled(false)
-	}
 
 	// A failed server skips the delay: the replica is going down anyway.
 	if serveErr == nil && g.Delay > 0 {
@@ -112,6 +121,7 @@ func (g Group) Serve(ctx context.Context, traffic []Server, health Server) error
 		timer.Stop()
 	}
 
+	slog.Info("stopping traffic listeners")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), g.Timeout)
 	defer cancel()
 	results := make([]error, len(traffic))
@@ -152,6 +162,23 @@ func (g Group) Serve(ctx context.Context, traffic []Server, health Server) error
 		return serveErr
 	}
 	return nil
+}
+
+// closeWhenDraining wraps next so that, once draining is set, the response to
+// each request that starts after that carries Connection: close. Go's
+// HTTP/1.1 server then closes the connection after the reply; its HTTP/2
+// server drops the header and sends a GOAWAY. The ResponseWriter passes
+// through unwrapped, so streaming handlers keep their Flusher.
+func closeWhenDraining(draining *atomic.Bool, next http.Handler) http.Handler {
+	if next == nil {
+		next = http.DefaultServeMux
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if draining.Load() {
+			w.Header().Set("Connection", "close")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func serve(s Server) error {

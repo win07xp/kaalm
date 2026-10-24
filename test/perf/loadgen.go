@@ -200,6 +200,10 @@ type recorder struct {
 	errors    []string
 }
 
+// errorStampLayout is the UTC time each sampled error starts with, so a run
+// can place a failure against the cluster events of the same moment.
+const errorStampLayout = "2006-01-02T15:04:05.000Z"
+
 func newRecorder() *recorder { return &recorder{statuses: map[string]int{}} }
 
 func (r *recorder) record(status int, latency time.Duration, err error) {
@@ -226,7 +230,7 @@ func (r *recorder) recordOutcome(o outcome) {
 	if o.err != nil {
 		r.statuses["error"]++
 		if len(r.errors) < 5 {
-			r.errors = append(r.errors, o.err.Error())
+			r.errors = append(r.errors, time.Now().UTC().Format(errorStampLayout)+" "+o.err.Error())
 		}
 		return
 	}
