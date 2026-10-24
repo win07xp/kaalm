@@ -6,6 +6,8 @@ learn/book/
 dist/
 # Perf harness runs; the published baseline lives in test/perf/baseline/.
 test/perf/results/
+# Secret watcher benchmark runs (make secretwatch-bench).
+test/secretbench/results/
 
 *.exe
 *.exe~

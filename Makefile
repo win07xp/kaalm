@@ -455,6 +455,24 @@ perf-images: ## Build and import what the perf run needs: controller, gateway, m
 bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into benchstat to compare.
 	go test ./internal/gateway/ -run '^$$' -bench . -benchmem -count $(BENCH_COUNT)
 
+# The Secret watcher benchmark runs against envtest (a real kube-apiserver and
+# etcd, no cluster and no agent Pods), not the perf cluster: there a process's
+# figures mix the watcher with everything else it holds, while here they are
+# the watcher's own cost per Secret. Extra flags (see
+# test/secretbench/config.go), for example
+# SECRETBENCH_FLAGS='-repeats 1 -variants today-ctrl,C-ctrl,A'.
+SECRETBENCH_FLAGS ?=
+
+.PHONY: secretwatch-bench
+secretwatch-bench: setup-envtest ## Scale benchmark of the Secret watcher and its prototypes against envtest (no cluster); results land in test/secretbench/results/.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go run -tags secretbench ./test/secretbench $(SECRETBENCH_FLAGS)
+
+.PHONY: secretwatch-bench-unit
+secretwatch-bench-unit: setup-envtest ## Run the Secret watcher benchmark's own tests; the secretbench tag keeps them out of make test and CI.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test -tags secretbench -count=1 ./test/secretbench/
+
 .PHONY: perf-deploy
 perf-deploy: chart-sync ## Install the chart onto the perf cluster with the mock provider trusted for upstream and callbacks.
 	helm --kube-context k3d-$(PERF_CLUSTER) upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
