@@ -199,11 +199,16 @@ func countedConfig(base *rest.Config, qps float32, burst int) (*rest.Config, *co
 	cfg.QPS = qps
 	cfg.Burst = burst
 	cfg.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
-	// The clientset builds its transport once, when it is created, and the
-	// wrapper sets the counter's base then.
+	// A client builds its transport once, when it is created, and the
+	// wrapper sets the counter's base then. The config is uncacheable, so a
+	// second client built from it would build a new base and overwrite the
+	// first; the counter keeps the first, so every client from this config
+	// counts through one counter and one set of connections.
 	counter := newCountingTransport(nil)
 	cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper {
-		counter.base = rt
+		if counter.base == nil {
+			counter.base = rt
+		}
 		return counter
 	})
 	return cfg, counter

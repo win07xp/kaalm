@@ -27,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/win07xp/kaalm/internal/secretwatch"
@@ -57,7 +58,9 @@ type variant struct {
 	Name  string
 	QPS   float32
 	Burst int
-	Build func(ctx context.Context, client kubernetes.Interface) secretReader
+	// Build starts a cold reader on client. rc is the config client was
+	// built from, for a reader that needs a second client of its own.
+	Build func(ctx context.Context, rc *rest.Config, client kubernetes.Interface) (secretReader, error)
 	// ExpectedWatches is how many distinct watches the reader opens once it
 	// has served secrets Secrets spread over namespacesUsed namespaces.
 	ExpectedWatches func(secrets, namespacesUsed int) int
@@ -67,17 +70,17 @@ func perSecret(secrets, _ int) int { return secrets }
 
 func perNamespace(_, namespacesUsed int) int { return namespacesUsed }
 
-func buildToday(ctx context.Context, client kubernetes.Interface) secretReader {
+func buildToday(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	return &todayReader{w: secretwatch.New(ctx, client), cancel: cancel}
+	return &todayReader{w: secretwatch.New(ctx, client), cancel: cancel}, nil
 }
 
-func buildC(ctx context.Context, client kubernetes.Interface) secretReader {
-	return newNameInformerReader(ctx, client)
+func buildC(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
+	return newNameInformerReader(ctx, client), nil
 }
 
-func buildA(ctx context.Context, client kubernetes.Interface) secretReader {
-	return newLabelInformerReader(ctx, client)
+func buildA(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
+	return newLabelInformerReader(ctx, client), nil
 }
 
 // variants lists every variant in its default run order. B runs at the

@@ -110,7 +110,10 @@ func (b *bench) measure(ctx context.Context, v variant, layout string, repeat in
 	if err != nil {
 		return s, fmt.Errorf("client for %s: %w", v.Name, err)
 	}
-	reader := v.Build(ctx, client)
+	reader, err := v.Build(ctx, rc, client)
+	if err != nil {
+		return s, fmt.Errorf("reader for %s: %w", v.Name, err)
+	}
 	stopped := false
 	defer func() {
 		if !stopped {

@@ -31,7 +31,10 @@ func TestTodayReaderRequestsTwoGetsAndOneWatch(t *testing.T) {
 	ctx := context.Background()
 	ns := testNamespace(t)
 	client, counter := countedClient(t)
-	r := buildToday(ctx, client)
+	r, err := buildToday(ctx, nil, client)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	createSecret(t, ns, "one", false)
 	if _, err := r.Get(ctx, ns, "one"); err != nil {
