@@ -3,6 +3,8 @@
 package agentruntime
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +69,39 @@ func TestMemory_DecodeMismatchReturnsError(t *testing.T) {
 	ok, err := m.Get("k", &wrong)
 	if !ok || err == nil {
 		t.Fatalf("type mismatch must surface: ok=%v err=%v", ok, err)
+	}
+}
+
+// Memory writes go to the log under their full user/-prefixed key, so a
+// replay restores them in the same namespace.
+func TestMemory_SetIsLoggedWithPrefix(t *testing.T) {
+	dir := t.TempDir()
+	m := &Memory{s: newStore(dir)}
+	if err := m.Set("k", 1); err != nil {
+		t.Fatal(err)
+	}
+	m.Delete("gone")
+
+	lines := strings.Split(strings.TrimSuffix(readLog(t, dir), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two log lines, got %q", lines)
+	}
+	var set, del map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &set); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &del); err != nil {
+		t.Fatal(err)
+	}
+	if set["op"] != "set" || set["key"] != "user/k" || set["value"] != float64(1) {
+		t.Errorf("set record = %s", lines[0])
+	}
+	if del["op"] != "delete" || del["key"] != "user/gone" {
+		t.Errorf("delete record = %s", lines[1])
+	}
+
+	var got int
+	if ok, err := (&Memory{s: newStore(dir)}).Get("k", &got); !ok || err != nil || got != 1 {
+		t.Errorf("a new Memory must see the logged value: ok=%v err=%v got=%d", ok, err, got)
 	}
 }
