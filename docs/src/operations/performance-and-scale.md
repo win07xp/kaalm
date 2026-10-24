@@ -1,6 +1,6 @@
 # Performance and scale
 
-This page states the performance harness, the environment it runs on, and the baseline it produced. The numbers are a baseline, not a pass mark: a release runs the same harness on the same environment and compares against it, and the page states what a real cluster changes.
+This page states the performance harness, the environment it runs on, the baseline it produced, and the Secret watcher benchmark that runs beside it. The numbers are a baseline, not a pass mark: a release runs the same harness on the same environment and compares against it, and the page states what a real cluster changes.
 
 ## What the harness measures
 
@@ -93,6 +93,57 @@ make perf PERF_FLAGS='-phases ramp,hold,restart,teardown -ramp-target 400 -chann
 ```
 
 `-ramp-target 400` gives every run the same fleet, so a per-Secret cost is not mixed with a per-agent one. The default target of 500 ends wherever the machine's first limit falls. The last run needs `-channels-per-agent 2` because 500 pairs need at least 500 channels, and the fleet of 400 agents has 400 with one channel each.
+
+To measure the watcher's cost per Secret with no cluster and no fleet around it, run [the Secret watcher benchmark](#the-secret-watcher-benchmark).
+
+## The Secret watcher benchmark
+
+`make secretwatch-bench` runs a component-level benchmark of the Secret watcher (`internal/secretwatch`) and two prototype readers. It runs next to the harness because the cluster run cannot separate the watcher's cost from everything else a gateway or controller process holds. The benchmark runs against an envtest control plane (a real kube-apiserver and etcd from the envtest assets), with no k3d cluster and no agent Pods, so its figures are the cost of the readers themselves per Secret.
+
+### What a run measures
+
+A run raises the Secret count in steps inside one API server: 0, 250, 500, 1,000, 2,000, and 5,000 by default (`-counts`). It does this once with every Secret in one namespace and once with the Secrets spread over 20 namespaces (`-namespaces`), then repeats the whole sweep 3 times (`-repeats`). At each step it runs every variant from a cold start and waits for the previous variant's watches and goroutines to drain before it starts the next. The variants therefore see the same API server state, and no variant inherits another's cache or open watches.
+
+At each step and variant, the run records these figures:
+
+- **Heap, goroutines, and RSS.** The Go heap in use after a garbage collection, the goroutines the reader adds, and the benchmark process's RSS. They give the memory and goroutine cost per Secret. The RSS compares with the per-process `rssMiB` the harness reports in its restart figures.
+- **API requests.** Requests by verb (GET, LIST, WATCH) and the number the API server answers with 429 (Too Many Requests). They show what a cold start asks of the API server, and whether the server throttles it.
+- **Time until every Secret is served.** The time from the first read until every Secret has been read once. It is the first-use delay of a restarted gateway or a new controller leader.
+- **Time until every watch is open.** The time until every Secret's watch (for variant A, every namespace's watch) has opened at least once. The run then waits for 1 s with no GET or LIST before it samples the other figures, and that wait is not part of this time. It does not count the watches open at one instant, because reflectors re-open their watches every 5 to 10 minutes. It is the full cold-start cost of the same restart.
+- **Update delivery time.** The median over 10 single-Secret updates (`-update-samples`) of the time from the start of the administrator's write until the reader returns the new resourceVersion. It is the rotation latency. It includes the write's own round trip, which is the same for every variant, so compare variants with each other.
+- **The API server's side.** The API server's open Secret watches, and the RSS of kube-apiserver and etcd. The watch count subtracts the count read before any reader ran, because envtest's kube-apiserver holds one Secret watch of its own.
+
+The table printed at the end gives a least-squares slope per Secret for each figure and variant, fitted over every count and repeat, and the mean of each figure at the largest count. Read the slope. The per-Secret slope is the number that transfers to a real cluster, because a single reading also holds the fixed cost of the process.
+
+### The variants
+
+Today's design is one single-object watch per Secret ([Credential handling](../security/credentials.md) for the gateway, [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount) for the controller). Variants A and C are prototypes inside the benchmark, not shipped code.
+
+| Variant | What differs |
+|---|---|
+| `today-gw` | Today's watcher at the gateway's client limits: 100 QPS, burst 200. |
+| `today-ctrl` | Today's watcher at the controller's client limits: 20 QPS, burst 30. |
+| `B` | Today's watcher at a higher client limit: 500 QPS, burst 1000 by default (`-b-qps` and `-b-burst`). |
+| `C-gw`, `C-ctrl` | One informer per Secret that lists by name and watches from the list's version, so it needs no confirming GET. Run at the two limits above. |
+| `A` | One informer per namespace that lists and watches by the `kaalm.io/channel-credential` label. Run at the controller's limits. |
+
+Compare `B` with `today-gw` to see what the client limit changes, and `C-gw` with `today-gw` (or `C-ctrl` with `today-ctrl`) to see what the design change adds at the same limit.
+
+### Run the benchmark
+
+```bash
+make secretwatch-bench                                      # the full default sweep
+make secretwatch-bench SECRETBENCH_FLAGS='-repeats 1'       # one sweep
+make secretwatch-bench-unit                                 # the benchmark's own tests
+```
+
+`SECRETBENCH_FLAGS` passes flags to the benchmark. The ones you change are `-counts`, `-namespaces`, `-repeats`, and `-variants`, which takes the variant names above. The full list is in `test/secretbench/config.go`. The full default sweep takes several hours, because the variants at the controller's limit wait on the client rate limiter for their GETs and LISTs. One sweep (`-repeats 1`) takes a little over an hour.
+
+Results land in `test/secretbench/results/` as JSON, which is not committed. The file is rewritten after every step, so an interrupted run keeps the steps it finished. Neither target runs in CI or in `make test`: the `secretbench` build tag keeps the package out of both.
+
+### What the benchmark leaves out
+
+The benchmark runs as envtest's cluster administrator, so it measures cost, not RBAC. The prototypes list Secrets in a channel's namespace, where the shipped grants give the gateway and the operator only `get` and `watch` on named Secrets ([Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)). The grants do allow `list` on Secrets in `kaalm-system`. The administrator's requests are also exempt from API priority and fairness, so the API server never queues them. RBAC and queueing stay with the harness's restart phase ([Restart under load](#restart-under-load)).
 
 ## The baseline environment
 
