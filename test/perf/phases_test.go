@@ -20,7 +20,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -278,5 +280,115 @@ func TestReadyRunStopsAtTheFirstGap(t *testing.T) {
 	}
 	if got := readyRun(ts, f); got != 2 {
 		t.Errorf("readyRun = %d, want 2", got)
+	}
+}
+
+// The restart block's JSON keys are what the performance page documents.
+func TestRestartResultJSONKeys(t *testing.T) {
+	watches, secretWatches := 7, 15.0
+	res := restartResult{
+		Agents: 400, Channels: 800, ChannelSecrets: 1000, ControllerWarmupSec: 42,
+		ControllerWarmupWatches: []watchSample{{AtSec: 2, SecretWatches: 10}},
+		SweepBefore:             []sweepTarget{{Target: "kaalm-gateway-a", Channels: 800, Served: 800}},
+		SweepAfter:              []sweepTarget{{Target: "kaalm-gateway-b", Channels: 800, Served: 799, Unserved: 1}},
+		Failover:                &failoverResult{Killed: "ctl-a", NewLeader: "ctl-b", WarmupSec: 30},
+		Figures: map[string]scaleFigures{pointBefore: {
+			Gateway:    []processFigures{{Pod: "kaalm-gateway-a", Watches: &watches}},
+			Controller: []processFigures{{Pod: "ctl-a", Leader: true}},
+			APIServer:  apiserverFigures{RSSMiB: 900, CPUSeconds: 12, SecretWatches: &secretWatches},
+		}},
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"agents", "controllerRolloutSec", "controllerFirstReconcileSec", "gatewayRolloutSec", "gatewayClient",
+		"gatewayFailed", "channels", "channelSecrets", "controllerWarmupSec", "controllerWarmupWatches",
+		"sweepBefore", "sweepAfter", "failover", "figures",
+	} {
+		if _, ok := top[key]; !ok {
+			t.Errorf("restart JSON has no %q key: %s", key, raw)
+		}
+	}
+	for _, want := range []string{
+		`"served":800`, `"unserved":1`, `"servedSec"`, `"acceptMs"`, `"killed":"ctl-a"`, `"newLeader":"ctl-b"`,
+		`"firstReconcileSec"`, `"warmupSec":30`, `"recoveredSec"`, `"before":{`, `"gateway":[`, `"controller":[`,
+		`"watches":7`, `"leader":true`, `"heapMiB"`, `"rssMiB"`, `"apiGets"`, `"goroutines"`,
+		`"apiserver":{"rssMiB":900,"cpuSeconds":12,"secretWatches":15}`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("restart JSON lacks %s: %s", want, raw)
+		}
+	}
+	skipped, err := json.Marshal(restartResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(skipped), `"failover":null`) {
+		t.Errorf("a skipped failover should read null: %s", skipped)
+	}
+	printRestart(&res) // the summary table must not trip over any field
+}
+
+func TestChannelsWarm(t *testing.T) {
+	snap := func(reconciles, depth, active float64) *snapshot {
+		body := fmt.Sprintf("# TYPE controller_runtime_reconcile_total counter\n"+
+			"controller_runtime_reconcile_total{controller=\"agentchannel\",result=\"success\"} %v\n"+
+			"controller_runtime_reconcile_total{controller=\"agent\",result=\"success\"} 9999\n"+
+			"# TYPE workqueue_depth gauge\nworkqueue_depth{controller=\"agentchannel\",name=\"agentchannel\"} %v\n"+
+			"# TYPE controller_runtime_active_workers gauge\n"+
+			"controller_runtime_active_workers{controller=\"agentchannel\"} %v\n", reconciles, depth, active)
+		fams, err := parseMetrics([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &snapshot{metrics: map[string][]sample{}}
+		s.merge(fams)
+		return s
+	}
+	cases := []struct {
+		name                      string
+		reconciles, depth, active float64
+		want                      bool
+	}{
+		{"every channel reconciled, queue empty", 400, 0, 0, true},
+		{"fewer reconciles than channels", 399, 0, 0, false},
+		{"queue not empty", 500, 3, 0, false},
+		{"a worker still busy", 500, 0, 1, false},
+	}
+	for _, c := range cases {
+		if got := channelsWarm(snap(c.reconciles, c.depth, c.active), 400); got != c.want {
+			t.Errorf("%s: channelsWarm = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// The restart sweep posts where the fleet serves each channel.
+func TestSweepGatewayArgsMatchFleetChannels(t *testing.T) {
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	args := sweepGatewayArgs(f, []string{"10.42.0.7", "10.42.1.9"}, 3, 2)
+	flags := map[string]string{}
+	for i := 0; i+1 < len(args); i += 2 {
+		flags[args[i]] = args[i+1]
+	}
+	if flags["-mode"] != modeSweep || flags["-count"] != "6" || flags["-per-agent"] != "2" {
+		t.Errorf("sweep args %v", args)
+	}
+	if flags["-targets"] != "https://10.42.0.7:8080,https://10.42.1.9:8080" ||
+		flags["-server-name"] != "kaalm-gateway.kaalm-system.svc" {
+		t.Errorf("targets %q, server name %q", flags["-targets"], flags["-server-name"])
+	}
+	c := loadgenConfig{pathPrefix: flags["-path-prefix"], pad: 4, perAgent: 2}
+	cfg := config{ChannelsPerAgent: 2}
+	for j := 0; j < 6; j++ {
+		ch := f.channels(j/2, cfg, "https://cb")[j%2].(*kaalmv1beta1.AgentChannel)
+		if got := channelJobURL(c, "", j); got != ch.Spec.Webhook.Path {
+			t.Errorf("job %d: sweep posts to %s, fleet serves %s", j, got, ch.Spec.Webhook.Path)
+		}
 	}
 }

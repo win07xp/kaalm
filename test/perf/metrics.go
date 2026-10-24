@@ -20,12 +20,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -117,13 +120,36 @@ func (k *cluster) scrapeComponentOnce(ctx context.Context, namespace, component,
 func scrapeTargets(pods []corev1.Pod) []string {
 	var names []string
 	for i := range pods {
-		if pods[i].Status.Phase != corev1.PodRunning || pods[i].DeletionTimestamp != nil {
-			continue
+		if scrapeable(&pods[i]) {
+			names = append(names, pods[i].Name)
 		}
-		names = append(names, pods[i].Name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+func scrapeable(p *corev1.Pod) bool {
+	return p.Status.Phase == corev1.PodRunning && p.DeletionTimestamp == nil
+}
+
+// componentPods lists one chart component's Pods that scrapeTargets would
+// scrape, sorted by name.
+func (k *cluster) componentPods(ctx context.Context, namespace, component string) ([]corev1.Pod, error) {
+	var pods corev1.PodList
+	if err := k.c.List(ctx, &pods, client.InNamespace(namespace), client.MatchingLabels{
+		"app.kubernetes.io/name":      "kaalm",
+		"app.kubernetes.io/component": component,
+	}); err != nil {
+		return nil, err
+	}
+	var out []corev1.Pod
+	for i := range pods.Items {
+		if scrapeable(&pods.Items[i]) {
+			out = append(out, pods.Items[i])
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
 // podsChanged reports whether two snapshots summed different Pods, so
@@ -492,4 +518,196 @@ func cpuPerRequestMs(cpuSeconds, requests float64) float64 {
 		return 0
 	}
 	return round3(cpuSeconds * 1000 / requests)
+}
+
+// gaugeSum sums matching gauge samples in a snapshot, where gauge takes the
+// max: the apiserver splits one count over label sets such as scope.
+func (s *snapshot) gaugeSum(name string, want map[string]string) float64 {
+	if s == nil {
+		return 0
+	}
+	var total float64
+	for _, smp := range s.metrics[name] {
+		if match(want)(smp.labels) && smp.hist == nil {
+			total += smp.value
+		}
+	}
+	return total
+}
+
+// metricSecretWatches is the apiserver's gauge of open long-running
+// requests; its WATCH samples on secrets count the open Secret watches of
+// every client, kubelets included. The k8s.io/apiserver this module builds
+// against has no apiserver_registered_watchers.
+const metricSecretWatches = "apiserver_longrunning_requests"
+
+// secretWatches sums the open Secret watches over every scope, or reports
+// false when the apiserver exposes no such gauge.
+func secretWatches(s *snapshot) (float64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	if _, ok := s.metrics[metricSecretWatches]; !ok {
+		return 0, false
+	}
+	return s.gaugeSum(metricSecretWatches, map[string]string{"verb": "WATCH", "resource": "secrets"}), true
+}
+
+// watchGoroutine is the frame of the goroutine client-go runs per open watch
+// stream; counting it in a goroutine profile counts a process's watches.
+const watchGoroutine = "watch.(*StreamWatcher).receive"
+
+// countGoroutines sums the goroutines in a debug=1 goroutine profile whose
+// stack has a frame containing needle. Each block starts "<N> @ 0x..." and
+// lists its frames as "#\t0x... <func>+0x...".
+func countGoroutines(profile []byte, needle string) int {
+	total, n, hit := 0, 0, false
+	flush := func() {
+		if hit {
+			total += n
+		}
+		n, hit = 0, false
+	}
+	for _, line := range strings.Split(string(profile), "\n") {
+		if count, rest, ok := strings.Cut(line, " @ "); ok && strings.HasPrefix(rest, "0x") {
+			flush()
+			if v, err := strconv.Atoi(strings.TrimSpace(count)); err == nil {
+				n = v
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "#") && strings.Contains(line, needle) {
+			hit = true
+		}
+	}
+	flush()
+	return total
+}
+
+// leaderPodName is the Pod in a controller-runtime Lease holder identity,
+// "<pod>_<uuid>".
+func leaderPodName(holder string) string {
+	pod, _, _ := strings.Cut(holder, "_")
+	return pod
+}
+
+// leaderLease is the controller's leader-election Lease in kaalm-system.
+const leaderLease = "e06da714.io"
+
+// controllerLeader names the Pod holding the controller's Lease, or "" when
+// nobody holds it.
+func (k *cluster) controllerLeader(ctx context.Context) (string, error) {
+	lease, err := k.cs.CoordinationV1().Leases("kaalm-system").Get(ctx, leaderLease, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	if lease.Spec.HolderIdentity == nil {
+		return "", nil
+	}
+	return leaderPodName(*lease.Spec.HolderIdentity), nil
+}
+
+// processFigures is one operator process at one point: Go runtime, RSS, the
+// GETs its API client has made since it started, and its open watch streams
+// (nil when the goroutine profile could not be read).
+type processFigures struct {
+	Pod        string  `json:"pod"`
+	Leader     bool    `json:"leader,omitempty"`
+	Goroutines float64 `json:"goroutines"`
+	HeapMiB    float64 `json:"heapMiB"`
+	RSSMiB     float64 `json:"rssMiB"`
+	APIGets    float64 `json:"apiGets"`
+	Watches    *int    `json:"watches,omitempty"`
+}
+
+// apiserverFigures is the API server process at one point. On k3s the one
+// server process hosts every control-plane component.
+type apiserverFigures struct {
+	RSSMiB        float64  `json:"rssMiB"`
+	CPUSeconds    float64  `json:"cpuSeconds"`
+	SecretWatches *float64 `json:"secretWatches,omitempty"`
+}
+
+// scaleFigures is every operator process and the API server at one point.
+type scaleFigures struct {
+	At         time.Time        `json:"at"`
+	Gateway    []processFigures `json:"gateway"`
+	Controller []processFigures `json:"controller"`
+	APIServer  apiserverFigures `json:"apiserver"`
+}
+
+// processFiguresFrom reads a process's figures from its /metrics families.
+func processFiguresFrom(pod string, families map[string]*dto.MetricFamily) processFigures {
+	snap := &snapshot{metrics: map[string][]sample{}}
+	snap.merge(families)
+	return processFigures{
+		Pod:        pod,
+		Goroutines: snap.gauge("go_goroutines", nil),
+		HeapMiB:    round3(snap.gauge("go_memstats_heap_inuse_bytes", nil) / (1 << 20)),
+		RSSMiB:     round3(snap.gauge("process_resident_memory_bytes", nil) / (1 << 20)),
+		APIGets:    snap.counter("rest_client_requests_total", map[string]string{"method": "GET"}),
+	}
+}
+
+// apiserverFiguresFrom reads the API server's figures from a snapshot.
+func apiserverFiguresFrom(s *snapshot) apiserverFigures {
+	out := apiserverFigures{
+		RSSMiB:     round3(s.gauge("process_resident_memory_bytes", nil) / (1 << 20)),
+		CPUSeconds: round3(s.counter("process_cpu_seconds_total", nil)),
+	}
+	if n, ok := secretWatches(s); ok {
+		out.SecretWatches = &n
+	}
+	return out
+}
+
+// errNoWatchCount marks figures whose watch count is missing because the
+// goroutine profile could not be read; the rest of the figures hold.
+var errNoWatchCount = errors.New("no goroutine profile")
+
+// podFigures scrapes one operator Pod's /metrics and, when pprofPort is set,
+// counts its open watch streams from its goroutine profile. A profile that
+// cannot be read returns the figures without Watches and an error wrapping
+// errNoWatchCount.
+func (k *cluster) podFigures(ctx context.Context, namespace string, pod corev1.Pod, metricsPort string,
+	pprofPort int) (processFigures, error) {
+	families, err := k.scrapePod(namespace, pod.Name, metricsPort)
+	if err != nil {
+		return processFigures{Pod: pod.Name}, err
+	}
+	fig := processFiguresFrom(pod.Name, families)
+	if pprofPort <= 0 {
+		return fig, fmt.Errorf("%w: pprof port off", errNoWatchCount)
+	}
+	profile, err := k.goroutineProfile(ctx, namespace, pod.Name, pprofPort)
+	if err != nil {
+		return fig, fmt.Errorf("%w from %s: %v", errNoWatchCount, pod.Name, err)
+	}
+	n := countGoroutines(profile, watchGoroutine)
+	fig.Watches = &n
+	return fig, nil
+}
+
+// goroutineProfile reads a Pod's debug=1 goroutine profile through a
+// port-forward to its pprof listener.
+func (k *cluster) goroutineProfile(ctx context.Context, namespace, pod string, port int) ([]byte, error) {
+	local, stop, err := k.portForward(namespace, "pod/"+pod, strconv.Itoa(port))
+	if err != nil {
+		return nil, err
+	}
+	defer stop()
+	url := fmt.Sprintf("http://127.0.0.1:%d/debug/pprof/goroutine?debug=1", local)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("goroutine profile: HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }

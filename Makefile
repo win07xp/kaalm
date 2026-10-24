@@ -476,9 +476,12 @@ perf-deploy: chart-sync ## Install the chart onto the perf cluster with the mock
 perf-unit: ## Unit tests of the perf harness's pure helpers (no cluster; the perftest tag keeps them out of make test).
 	go test -tags perftest -count=1 ./test/perf/
 
+# perf-run passes the pprof port so the harness can count each operator
+# process's watches from its goroutine profile.
 .PHONY: perf-run
 perf-run: ## Run the harness against an existing perf cluster (the inner loop); results land in test/perf/results/.
-	go run -tags perftest ./test/perf run -context k3d-$(PERF_CLUSTER) -loadgen-image $(PERF_LOADGEN_IMG) $(PERF_FLAGS)
+	go run -tags perftest ./test/perf run -context k3d-$(PERF_CLUSTER) -loadgen-image $(PERF_LOADGEN_IMG) \
+		-pprof-port $(PERF_PPROF_PORT) $(PERF_FLAGS)
 
 .PHONY: perf
 perf: ## One-shot scale proof: fresh perf cluster, images, chart, the full run.
