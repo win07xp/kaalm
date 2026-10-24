@@ -111,7 +111,7 @@ At each step and variant, the run records these figures:
 - **Time until every Secret is served.** The time from the first read until every Secret has been read once. It is the first-use delay of a restarted gateway or a new controller leader.
 - **Time until every watch is open.** The time until every Secret's watch (for variant A, every namespace's watch) has opened at least once. The run then waits for 1 s with no GET or LIST before it samples the other figures, and that wait is not part of this time. It does not count the watches open at one instant, because reflectors re-open their watches every 5 to 10 minutes. It is the full cold-start cost of the same restart.
 - **Update delivery time.** The median over 10 single-Secret updates (`-update-samples`) of the time from the start of the administrator's write until the reader returns the new resourceVersion. It is the rotation latency. It includes the write's own round trip, which is the same for every variant, so compare variants with each other.
-- **The API server's side.** The API server's open Secret watches, and the RSS of kube-apiserver and etcd. The watch count subtracts the count read before any reader ran, because envtest's kube-apiserver holds one Secret watch of its own.
+- **The API server's side.** The API server's open Secret watches, and the RSS of kube-apiserver and etcd. The watch count subtracts the count read before any reader ran, because envtest's kube-apiserver holds one Secret watch of its own. The RSS of kube-apiserver and etcd also carries memory from the variants that ran before it at the same step, because those processes keep freed memory resident for a while and the benchmark cannot make them return it. Compare variants by the open Secret watches, and read the control-plane RSS as a trend over Secret counts.
 
 The table printed at the end gives a least-squares slope per Secret for each figure and variant, fitted over every count and repeat, and the mean of each figure at the largest count. Read the slope. The per-Secret slope is the number that transfers to a real cluster, because a single reading also holds the fixed cost of the process.
 
@@ -139,7 +139,7 @@ make secretwatch-bench-unit                                 # the benchmark's ow
 
 `SECRETBENCH_FLAGS` passes flags to the benchmark. The ones you change are `-counts`, `-namespaces`, `-repeats`, and `-variants`, which takes the variant names above. The full list is in `test/secretbench/config.go`. The full default sweep takes several hours, because the variants at the controller's limit wait on the client rate limiter for their GETs and LISTs. One sweep (`-repeats 1`) takes a little over an hour.
 
-Results land in `test/secretbench/results/` as JSON, which is not committed. The file is rewritten after every step, so an interrupted run keeps the steps it finished. Neither target runs in CI or in `make test`: the `secretbench` build tag keeps the package out of both.
+Results land in `test/secretbench/results/` as JSON, which is not committed. The file is rewritten after every step, so an interrupted run keeps the steps it finished. Neither target runs in CI or in `make test`: the `secretbench` build tag keeps the package out of their test runs, and only lint reads it.
 
 ### What the benchmark leaves out
 
