@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -220,11 +221,19 @@ func waitQuiet(ctx context.Context, counter *countingTransport) bool {
 	})
 }
 
+// releaseMemory collects garbage and returns the freed pages to the OS. A
+// GC alone keeps freed pages until the background scavenger gives them back
+// over seconds to minutes, so the RSS of a variant sampled right after
+// another would still hold the previous variant's informers.
+func releaseMemory() {
+	runtime.GC()
+	debug.FreeOSMemory()
+}
+
 // sampleState records memory, goroutines, requests, and the control plane's
-// side after a forced GC.
+// side after a forced GC that returns freed pages to the OS.
 func (b *bench) sampleState(ctx context.Context, s *sample, counter *countingTransport) {
-	runtime.GC()
-	runtime.GC()
+	releaseMemory()
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	s.HeapInuseBytes = int64(ms.HeapInuse)

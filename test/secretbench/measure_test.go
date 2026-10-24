@@ -20,9 +20,39 @@ package main
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
+
+// heldForRSS keeps an allocation reachable until the test drops it, so the
+// compiler cannot free it early.
+var heldForRSS []byte
+
+// A GC frees heap spans but keeps their pages until the background scavenger
+// returns them, so an RSS read right after a GC still holds what the previous
+// variant dropped. releaseMemory must hand those pages back first.
+func TestReleaseMemoryReturnsFreedPagesToTheOS(t *testing.T) {
+	const size = 256 << 20
+	heldForRSS = make([]byte, size)
+	for i := range heldForRSS {
+		heldForRSS[i] = 1
+	}
+	held, err := rssBytes(os.Getpid())
+	if err != nil {
+		t.Skipf("no /proc RSS: %v", err)
+	}
+	heldForRSS = nil
+	releaseMemory()
+	after, err := rssBytes(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held-after < size/2 {
+		t.Fatalf("RSS %d MiB while holding, %d MiB after releaseMemory; want at least %d MiB returned",
+			held>>20, after>>20, size>>21)
+	}
+}
 
 func TestMeasureVariantSamplesOneStep(t *testing.T) {
 	requireEnvtest(t)
