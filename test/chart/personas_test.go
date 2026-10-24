@@ -370,14 +370,14 @@ func renderFails(t *testing.T, values, msg string) {
 
 // namespaceSecretsAdmins must be a map of namespace to subjects.
 func TestPersonas_NamespaceSecretsAdminsMustBeAMap(t *testing.T) {
-	renderFails(t, `
+	schemaFails(t, "namespaceSecretsAdmins", valuesFile(t, `
 rbac:
   personas:
     enabled: true
     namespaceSecretsAdmins:
       - kind: Group
         name: team-a-credentials
-`, "rbac.personas.namespaceSecretsAdmins must be a map of namespace to a list of subjects")
+`)...)
 }
 
 // The release namespace belongs to secretsAdmins; naming it in
@@ -501,10 +501,7 @@ rbac:
 
 // developers must be a map of namespace to subjects; a list fails the render.
 func TestPersonas_DevelopersMustBeAMap(t *testing.T) {
-	if _, err := exec.LookPath("helm"); err != nil {
-		t.Skip("helm is not installed")
-	}
-	out, err := runFullTemplate(valuesFile(t, `
+	schemaFails(t, "developers", valuesFile(t, `
 rbac:
   personas:
     enabled: true
@@ -512,13 +509,6 @@ rbac:
       - kind: Group
         name: team-a-devs
 `)...)
-	if err == nil {
-		t.Fatalf("helm template succeeded with developers as a list\n%s", out)
-	}
-	msg := "rbac.personas.developers must be a map of namespace to a list of subjects"
-	if !strings.Contains(string(out), msg) {
-		t.Errorf("helm template output lacks %q:\n%s", msg, out)
-	}
 }
 
 // aggregateToDefaultRoles adds the namespaced kinds to view, edit and admin,

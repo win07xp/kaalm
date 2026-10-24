@@ -13,12 +13,6 @@ admin roles.
 {{- $rbac := .Values.rbac | default dict }}
 {{- $p := $rbac.personas | default dict }}
 {{- if $p.enabled }}
-{{- if and $p.developers (not (kindIs "map" $p.developers)) }}
-{{- fail "kaalm: rbac.personas.developers must be a map of namespace to a list of subjects" }}
-{{- end }}
-{{- if and $p.namespaceSecretsAdmins (not (kindIs "map" $p.namespaceSecretsAdmins)) }}
-{{- fail "kaalm: rbac.personas.namespaceSecretsAdmins must be a map of namespace to a list of subjects" }}
-{{- end }}
 {{- if and $p.namespaceSecretsAdmins (get $p.namespaceSecretsAdmins .Release.Namespace) }}
 {{- fail "kaalm: rbac.personas.namespaceSecretsAdmins must not list the release namespace; use rbac.personas.secretsAdmins" }}
 {{- end }}
