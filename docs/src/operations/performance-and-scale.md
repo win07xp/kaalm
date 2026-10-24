@@ -132,7 +132,7 @@ Compare `B` with `today-gw` to see what the client limit changes, and `C-gw` wit
 
 `lean` is held to three marks against `C-gw`: about 30 KiB of RSS per Secret or less, at most 2 goroutines per Secret, and a cold start and update delivery no slower than `C-gw`. The second goroutine is net/http's, one per open HTTP/2 stream, so 2 per Secret is the floor for any Go reader that holds one stream per Secret. (The streams also share one goroutine per connection.)
 
-Like the shipped watcher, `C` and `A` stop a Secret's informer when its list is refused as Forbidden, and they answer that refusal. A revoked grant is therefore never served from their caches. This adds no goroutine or buffer, so their figures stay comparable.
+Like the shipped watcher, `C` and `A` stop an informer when its list is refused as Forbidden, and they answer that refusal. Once a relist is refused, the reader stops serving the Secret from its cache. This adds no goroutine or buffer, so their figures stay comparable.
 
 ### Run the benchmark
 
