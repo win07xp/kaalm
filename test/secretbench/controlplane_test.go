@@ -70,11 +70,20 @@ apiserver_longrunning_requests{resource="secrets",scope="cluster",verb="WATCH"} 
 apiserver_longrunning_requests{resource="configmaps",scope="namespace",verb="WATCH"} 40
 apiserver_longrunning_requests{resource="pods",scope="namespace",verb="CONNECT"} 1
 `
-	got, ok := secretWatches([]byte(text))
-	if !ok || got != 9 {
-		t.Fatalf("secretWatches = %v, %v; want 9, true", got, ok)
+	got, ok, err := secretWatches([]byte(text))
+	if err != nil || !ok || got != 9 {
+		t.Fatalf("secretWatches = %v, %v, %v; want 9, true, nil", got, ok, err)
 	}
-	if _, ok := secretWatches([]byte("# TYPE other gauge\nother 1\n")); ok {
-		t.Fatal("secretWatches found the family in text without it")
+	if _, ok, err := secretWatches([]byte("# TYPE other gauge\nother 1\n")); ok || err != nil {
+		t.Fatalf("secretWatches on text without the family = ok %v, err %v; want false, nil", ok, err)
+	}
+}
+
+// Text the parser rejects must fail the read, not read as zero watches:
+// a zero would also let the drain check after Stop pass at once.
+func TestSecretWatchesFailsOnUnparsableText(t *testing.T) {
+	text := "apiserver_longrunning_requests{resource=\"secrets\",verb=\"WATCH\" 3\n"
+	if n, ok, err := secretWatches([]byte(text)); err == nil {
+		t.Fatalf("secretWatches = %v, %v, nil; want a parse error", n, ok)
 	}
 }

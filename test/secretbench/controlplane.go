@@ -140,16 +140,18 @@ func rssBytes(pid int) (int64, error) {
 
 // secretWatches sums the API server's open Secret watches over every scope
 // from its Prometheus text: apiserver_longrunning_requests with verb WATCH
-// and resource secrets. ok is false when the text has no such family.
-func secretWatches(metrics []byte) (float64, bool) {
+// and resource secrets. ok is false when the text has no such family; err is
+// set when the parser rejects the text, so a failed parse never reads as
+// zero watches.
+func secretWatches(metrics []byte) (float64, bool, error) {
 	parser := expfmt.NewTextParser(model.UTF8Validation)
 	families, err := parser.TextToMetricFamilies(strings.NewReader(string(metrics)))
 	if err != nil {
-		return 0, false
+		return 0, false, fmt.Errorf("parse API server metrics: %w", err)
 	}
 	mf, ok := families["apiserver_longrunning_requests"]
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	var sum float64
 	for _, m := range mf.Metric {
@@ -157,7 +159,7 @@ func secretWatches(metrics []byte) (float64, bool) {
 			sum += m.GetGauge().GetValue()
 		}
 	}
-	return sum, true
+	return sum, true, nil
 }
 
 func label(m *dto.Metric, name string) string {
@@ -180,7 +182,10 @@ func apiServerSecretWatches(ctx context.Context, admin kubernetes.Interface) (fl
 	if err != nil {
 		return 0, err
 	}
-	n, ok := secretWatches(body)
+	n, ok, err := secretWatches(body)
+	if err != nil {
+		return 0, err
+	}
 	if !ok {
 		// No Secret watch has been served yet, so the family has no rows.
 		return 0, nil
