@@ -84,6 +84,20 @@ type config struct {
 	// The providers phase: this many extra ModelProviders and as many
 	// AgentClasses, each class allowing every one of them.
 	ProvidersCount int
+
+	// ChannelSecrets is the number of distinct hook and callback HMAC Secret
+	// pairs the ramp fleet's channels spread over, round-robin; 0 shares the
+	// two infra Secrets. The gateway and the controller hold one Secret
+	// informer per distinct Secret, so this, not the channel count, is what
+	// scales their watch cost.
+	ChannelSecrets int
+	// ChannelsPerAgent gives each ramp agent this many channels, so the
+	// Secret count can pass the machine's Pod ceiling.
+	ChannelsPerAgent int
+	// PprofPort is the operator's pprof listener, through which the restart
+	// phase reads each process's goroutine profile to count its open watch
+	// streams; 0 leaves the count out.
+	PprofPort int
 }
 
 // Phase names.
@@ -109,6 +123,10 @@ const (
 	modeTools           = "tools"
 	flagMode            = "-mode"
 	flagDuration        = "-duration"
+	flagPerAgent        = "-per-agent"
+	flagTargets         = "-targets"
+	flagServerName      = "-server-name"
+	modeSweep           = "sweep"
 	loadgenName         = "loadgen" // the subcommand, the ServiceAccount, and the Job label
 	tokenVolume         = "token"
 	hookSecretKey       = "token"
@@ -118,6 +136,26 @@ const (
 	// gatewayBase is the gateway's LLM and tool listener inside the cluster.
 	gatewayBase = "https://kaalm-gateway.kaalm-system.svc:8443"
 )
+
+// A ramp agent's extra channels are named after it with this suffix and
+// their slot (ramp-0001-c1); slot 0 keeps the agent's own name.
+const channelSlotSuffix = "-c"
+
+// The per-channel Secret pairs -channel-secrets creates, numbered after
+// these prefixes (perf-hook-0007, perf-callback-hmac-0007).
+const (
+	hookSecretPrefix     = "perf-hook-"
+	callbackSecretPrefix = "perf-callback-hmac-"
+)
+
+// channelSuffix is what slot appends to the agent name in a channel's name
+// and path: nothing for slot 0, so a one-channel fleet keeps today's names.
+func channelSuffix(slot int) string {
+	if slot == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s%d", channelSlotSuffix, slot)
+}
 
 // The four ModelProviders testdata/infra.yaml defines, told apart by the
 // mock's endpoint prefix: immediate, 50 ms, immediate under hard budget, and
@@ -227,6 +265,15 @@ func parseRunFlags(args []string) (config, error) {
 	fs.IntVar(&c.ProvidersCount, "providers-count", 50,
 		"providers phase: ModelProviders to add, and as many AgentClasses that each allow all of them")
 
+	fs.IntVar(&c.ChannelSecrets, "channel-secrets", 0,
+		"distinct hook and callback HMAC Secret pairs the ramp fleet's channels spread over, round-robin "+
+			"(0 shares the two infra Secrets)")
+	fs.IntVar(&c.ChannelsPerAgent, "channels-per-agent", 1,
+		"channels per ramp agent, so the Secret count can pass the Pod ceiling")
+	fs.IntVar(&c.PprofPort, "pprof-port", 6060,
+		"the operator's pprof port; the restart phase counts each process's open watch streams "+
+			"from its goroutine profile (0 skips the count)")
+
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -248,6 +295,12 @@ func parseRunFlags(args []string) (config, error) {
 	}
 	if c.ProvidersCount <= 0 {
 		return c, fmt.Errorf("providers-count must be positive")
+	}
+	if c.ChannelSecrets < 0 || c.ChannelsPerAgent < 1 {
+		return c, fmt.Errorf("channel-secrets must be 0 or more and channels-per-agent 1 or more")
+	}
+	if c.PprofPort < 0 {
+		return c, fmt.Errorf("pprof-port must be 0 or more")
 	}
 	return c, nil
 }

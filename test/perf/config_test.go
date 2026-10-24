@@ -86,3 +86,28 @@ func TestSpreadFlagsMustBePositive(t *testing.T) {
 			c.NamespacesCount, c.NamespacesAgents, c.ProvidersCount)
 	}
 }
+
+func TestChannelSecretFlags(t *testing.T) {
+	c, err := parseRunFlags(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ChannelSecrets != 0 || c.ChannelsPerAgent != 1 || c.PprofPort != 6060 {
+		t.Errorf("defaults: channel-secrets %d, channels-per-agent %d, pprof-port %d",
+			c.ChannelSecrets, c.ChannelsPerAgent, c.PprofPort)
+	}
+	for _, args := range [][]string{{"-channel-secrets", "-1"}, {"-channels-per-agent", "0"}} {
+		_, err := parseRunFlags(args)
+		if err == nil || !strings.Contains(err.Error(), "channel-secrets") ||
+			!strings.Contains(err.Error(), "channels-per-agent") {
+			t.Errorf("%v: err = %v, want one naming both flags", args, err)
+		}
+	}
+	c, err = parseRunFlags([]string{"-channel-secrets", "500", "-channels-per-agent", "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ChannelSecrets != 500 || c.ChannelsPerAgent != 2 {
+		t.Errorf("parsed channel-secrets %d, channels-per-agent %d", c.ChannelSecrets, c.ChannelsPerAgent)
+	}
+}

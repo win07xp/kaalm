@@ -83,7 +83,7 @@ func TestManyProvidersAndClasses(t *testing.T) {
 // which the refactor over fleets must leave as they were.
 func TestHoldArgsForOneNamespace(t *testing.T) {
 	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
-	got := holdLoadgenArgs(f, 400, 6.6667, 3*time.Minute)
+	got := holdLoadgenArgs(f, 400, 1, 6.6667, 3*time.Minute)
 	want := []string{
 		"-mode", "channels", "-path-prefix", "/channels/perf/ramp-", "-count", "400",
 		"-pad", "4", "-rate", "6.6667", "-duration", "3m0s",
@@ -171,7 +171,7 @@ func TestToolsClassAndAgentCoverBothProviders(t *testing.T) {
 // fleet's arguments, posts to the namespace the ramp put each agent in.
 func TestSpreadHoldMatchesPlacement(t *testing.T) {
 	f := fleet{phase: phaseNamespaces, prefix: "spread-", namespaces: spreadNamespaces("perf", 20)}
-	args := holdLoadgenArgs(f, 400, 1, time.Minute)
+	args := holdLoadgenArgs(f, 400, 1, 1, time.Minute)
 	var prefix string
 	var nss []string
 	for i := 0; i+1 < len(args); i++ {
@@ -255,5 +255,28 @@ func TestKillingTimesForPods(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("killingTimes = %q, want %q", got, want)
+	}
+}
+
+func TestHoldArgsWithChannelsPerAgent(t *testing.T) {
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	got := holdLoadgenArgs(f, 400, 2, 6.6667, 3*time.Minute)
+	want := []string{
+		"-mode", "channels", "-path-prefix", "/channels/perf/ramp-", "-count", "800",
+		"-pad", "4", "-rate", "6.6667", "-duration", "3m0s", "-per-agent", "2",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hold args = %v, want %v", got, want)
+	}
+}
+
+func TestReadyRunStopsAtTheFirstGap(t *testing.T) {
+	f := fleet{prefix: "ramp-"}
+	ts := []agentTiming{
+		{Name: "ramp-0000", ReadyNow: true}, {Name: "ramp-0001", ReadyNow: true},
+		{Name: "ramp-0002"}, {Name: "ramp-0003", ReadyNow: true},
+	}
+	if got := readyRun(ts, f); got != 2 {
+		t.Errorf("readyRun = %d, want 2", got)
 	}
 }

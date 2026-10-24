@@ -861,22 +861,24 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := h.createChannelSecrets(ctx, f); err != nil {
+		return nil, err
+	}
 	for wave := 0; wave*cfg.WaveSize < f.target; wave++ {
 		lo, hi := wave*cfg.WaveSize, (wave+1)*cfg.WaveSize
 		if hi > f.target {
 			hi = f.target
 		}
 		names := map[string]string{} // agent name to namespace
-		objs := make([]client.Object, 0, 2*(hi-lo))
+		objs := make([]client.Object, 0, (1+cfg.ChannelsPerAgent)*(hi-lo))
 		for i := lo; i < hi; i++ {
 			name, ns := f.name(i), f.namespaceOf(i)
 			names[name] = ns
-			// The channel is created with its agent so the channel
+			// The channels are created with their agent so the channel
 			// reconciler's work overlaps the waves instead of stacking up
 			// in front of the hold phase.
-			objs = append(objs,
-				agentObj(ns, name, activeClassName, cfg.AgentImage, f.phase, false),
-				channelObj(ns, name, f.phase, h.callbackURL()))
+			objs = append(objs, agentObj(ns, name, activeClassName, cfg.AgentImage, f.phase, false))
+			objs = append(objs, f.channels(i, cfg, h.callbackURL())...)
 		}
 		h.logf("%s wave %d: creating agents %d..%d with their channels", f.phase, wave, lo, hi-1)
 		waveStart := time.Now()
@@ -959,7 +961,7 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 			// The wave that hit the ceiling is trimmed, so the fleet the
 			// later phases run on is the largest one that came up clean.
 			h.logf("  trimming wave %d (%d agents)", wave, len(names))
-			if err := h.k.deleteAgents(ctx, names, 5*time.Minute); err != nil {
+			if err := h.k.deleteAgents(ctx, names, cfg.ChannelsPerAgent, 5*time.Minute); err != nil {
 				h.note("trimming wave %d: %v", wave, err)
 			}
 			if ts, err := h.k.agentTimings(ctx, f.scope(), f.phase); err == nil {
@@ -974,6 +976,33 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// createChannelSecrets creates the -channel-secrets pairs in each of the
+// fleet's namespaces, copied from the infra pair in the run's namespace.
+// Nothing happens with the default 0, which keeps the shared pair.
+func (h *harness) createChannelSecrets(ctx context.Context, f fleet) error {
+	cfg := h.cfg
+	if cfg.ChannelSecrets <= 0 {
+		return nil
+	}
+	var hook, hmac corev1.Secret
+	for name, sec := range map[string]*corev1.Secret{hookSecretName: &hook, callbackSecretName: &hmac} {
+		if err := h.k.c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: name}, sec); err != nil {
+			return fmt.Errorf("reading %s/%s to copy: %w", cfg.Namespace, name, err)
+		}
+	}
+	var objs []client.Object
+	for _, ns := range f.namespaces {
+		objs = append(objs, channelSecretObjs(ns, f.phase, cfg.ChannelSecrets, &hook, &hmac)...)
+	}
+	h.logf("%s: creating %d channel Secrets (%d pairs in each of %d namespaces)",
+		f.phase, len(objs), cfg.ChannelSecrets, len(f.namespaces))
+	if channels := f.target * cfg.ChannelsPerAgent; cfg.ChannelSecrets > channels {
+		h.note("channel-secrets %d exceeds the %d channels: %d pairs unused; raise -channels-per-agent",
+			cfg.ChannelSecrets, channels, cfg.ChannelSecrets-channels)
+	}
+	return h.k.createAll(ctx, objs)
 }
 
 func readyAmong(ts []agentTiming, names map[string]string) int {
@@ -1008,25 +1037,49 @@ func (h *harness) runHold(ctx context.Context) error {
 }
 
 // holdLoadgenArgs is the hold's channel traffic: one message per agent per
-// interval, round-robin over the first count agents. A fleet spread over
-// several namespaces puts {ns} in the path prefix and passes the namespace
-// list, so the loadgen places agent i where the fleet did.
-func holdLoadgenArgs(f fleet, count int, rate float64, duration time.Duration) []string {
+// interval, round-robin over the first count agents' perAgent channels each.
+// A fleet spread over several namespaces puts {ns} in the path prefix and
+// passes the namespace list, so the loadgen places agent i where the fleet
+// did. One channel per agent gives the arguments a run had before agents
+// could carry several.
+func holdLoadgenArgs(f fleet, count, perAgent int, rate float64, duration time.Duration) []string {
 	prefix := "/channels/" + f.namespaces[0] + "/" + f.prefix
 	var spread []string
 	if len(f.namespaces) > 1 {
 		prefix = "/channels/{ns}/" + f.prefix
 		spread = []string{"-namespaces", strings.Join(f.namespaces, ",")}
 	}
+	channels := count
+	if perAgent > 1 {
+		channels = count * perAgent
+		spread = append(spread, flagPerAgent, strconv.Itoa(perAgent))
+	}
 	args := []string{
 		flagMode, modeChannels,
 		"-path-prefix", prefix,
-		"-count", strconv.Itoa(count),
+		"-count", strconv.Itoa(channels),
 		"-pad", "4",
 		"-rate", strconv.FormatFloat(rate, 'f', 4, 64),
 		flagDuration, duration.String(),
 	}
 	return append(args, spread...)
+}
+
+// readyRun is the longest run of Ready agents from index 0, the agents the
+// hold and the restart sweeps send to, so a partially failed final wave never
+// turns delivery errors into noise.
+func readyRun(timings []agentTiming, f fleet) int {
+	readySet := map[string]bool{}
+	for _, t := range timings {
+		if t.ReadyNow {
+			readySet[t.Name] = true
+		}
+	}
+	count := 0
+	for readySet[f.name(count)] {
+		count++
+	}
+	return count
 }
 
 // hold drives messages across a fleet's Ready agents for the hold duration
@@ -1040,25 +1093,16 @@ func (h *harness) hold(ctx context.Context, f fleet) (*holdResult, error) {
 	if len(timings) == 0 {
 		return nil, fmt.Errorf("hold needs the %[1]s fleet; run the %[1]s phase first", f.phase)
 	}
-	// Messages go to the longest run of Ready agents from index 0, so a
-	// partially failed final wave never turns delivery errors into noise.
-	readySet := map[string]bool{}
-	for _, t := range timings {
-		if t.ReadyNow {
-			readySet[t.Name] = true
-		}
-	}
-	count := 0
-	for readySet[f.name(count)] {
-		count++
-	}
+	count := readyRun(timings, f)
 	if count == 0 {
 		return nil, fmt.Errorf("hold: no Ready %s agents", f.phase)
 	}
 
-	objs := make([]client.Object, 0, len(timings))
+	objs := make([]client.Object, 0, len(timings)*cfg.ChannelsPerAgent)
 	for _, t := range timings {
-		objs = append(objs, channelObj(t.Namespace, t.Name, f.phase, h.callbackURL()))
+		if i, ok := f.index(t.Name); ok {
+			objs = append(objs, f.channels(i, cfg, h.callbackURL())...)
+		}
 	}
 	h.logf("hold: creating %d channels", len(objs))
 	chStart := time.Now()
@@ -1090,7 +1134,7 @@ func (h *harness) hold(ctx context.Context, f fleet) (*holdResult, error) {
 	sampler := h.sampleUsage(ctx)
 	runtimeSamples := h.sampleRuntime(ctx, cfg.HoldSampleInterval)
 	client, err := h.k.runLoadgen(ctx, cfg.Namespace, f.holdJob, cfg.LoadgenImage,
-		holdLoadgenArgs(f, count, rate, cfg.HoldDuration), "", cfg.HoldDuration+3*time.Minute)
+		holdLoadgenArgs(f, count, cfg.ChannelsPerAgent, rate, cfg.HoldDuration), "", cfg.HoldDuration+3*time.Minute)
 	peak := sampler.finish()
 	res.Series = runtimeSamples.finish()
 	if err != nil {
