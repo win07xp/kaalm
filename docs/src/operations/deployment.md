@@ -46,14 +46,26 @@ With `console.enabled`, the chart adds a third, optional Deployment, `kaalm-cons
 
 Kubernetes removes a terminating Pod from the Service endpoints at once, but kube-proxy and ingress controllers take a few seconds to apply the change. A gateway that closed its listeners at SIGTERM would refuse the new connections still routed to it in that window, so a rollout or node drain would fail requests. The gateway shuts down in two stages instead:
 
-1. **Drain.** `/readyz` starts answering `503` ([Gateway readiness](../gateways/llm/operations.md#gateway-readiness)), and the Pod keeps serving new and existing connections for `gateway.shutdown.drainDelay`. It closes each persistent connection after its current response, so clients reconnect and the Service routes them to another replica.
-2. **Stop.** The Pod stops accepting connections and waits up to `gateway.shutdown.timeout` for in-flight requests and for background deliveries (async webhooks and platform replies) to finish. It then publishes its budget spend once more ([Budget state on crash](../gateways/llm/budgets-and-rate-limits.md#budget-state-on-crash)) and exits.
+1. **Drain.** `/readyz` starts answering `503` ([Gateway readiness](../gateways/llm/operations.md#gateway-readiness)), and the Pod keeps serving new and existing connections for `gateway.shutdown.drainDelay`. Each response to a request that arrives during the drain tells the client to close the connection after the reply (`Connection: close` on HTTP/1.1, a GOAWAY on HTTP/2), so the client opens a new connection and the Service routes it to another replica. A connection nobody uses during the delay stays open until the stop stage. Closing an idle connection races a client that is about to reuse it, and a client cannot retry a POST it has already sent, so during the drain the Pod closes a connection only after answering on it.
+2. **Stop.** The Pod stops accepting connections, closes the ones still idle, and waits up to `gateway.shutdown.timeout` for in-flight requests and for background deliveries (async webhooks and platform replies) to finish. It then publishes its budget spend once more ([Budget state on crash](../gateways/llm/budgets-and-rate-limits.md#budget-state-on-crash)) and exits.
 
 Whatever is still running when the timeout ends is cut: LLM streams, brokered MCP calls (up to `gateway.mcpUpstreamTimeout`), and async and platform deliveries, which are dropped like any other [replica failure](../gateways/api/async-responses.md#replica-failure). The default timeout equals `gateway.syncDeliveryDeadline`, so a sync webhook accepted before the stop stage begins can run to its own deadline. The timeout is the only setting that decides how many long streams survive a rollout. A longer value lets more of them finish, and keeps each old Pod, and any node drain waiting on it, around that much longer.
 
 The chart sets the Pod's `terminationGracePeriodSeconds` to `drainDelay + timeout + 5s`, 40s by default, so Kubernetes never kills a Pod mid-sequence. The extra 5s cover the work after the timeout: the health listener's shutdown (up to 2s) and the gateway's final budget publish (bounded at 3s). Both values must be whole hours, minutes, or seconds (`5s`, `1m`, `1m30s`), because the grace period is a whole number of seconds. Any other value fails the render. A `drainDelay` of `0s` skips the drain wait, and a `timeout` of `0s` waits for nothing in flight.
 
 A draining Pod is not Ready, so the Deployment and the PodDisruptionBudget treat it as unavailable. The rollout paces itself as before and `kubectl rollout status` can finish while old Pods are still draining. The `minAvailable: 1` budget still blocks a node drain from evicting the second gateway Pod until a replacement is Ready.
+
+#### Client errors during a rollout
+
+During a rollout a request can still fail at the client with a connection error instead of a gateway status. Not every error is safe to retry for any method. The first two below never reached a handler, so a retry on a new connection is safe for any method, POST included. The third depends on timing.
+
+- `connection refused`: the Service routed a new connection to a Pod that had passed its drain delay and stopped accepting.
+- `server closed idle connection` (Go's wording): a connection that sat idle for the whole drain delay was reused as the stop stage closed it.
+- `EOF`: it has two causes, and the timing tells them apart.
+  - An `EOF` that arrives right away on a new connection comes from a connection the Service routed to a Pod past its drain delay. The connection closed before its TLS handshake finished, so the client never sent the request and a retry is safe for any method.
+  - An `EOF` that arrives only after the request has run for up to `gateway.shutdown.timeout` is the cut described above. When the timeout runs out, the Pod exits and cuts the requests still running. A request cut before its response started also ends in `EOF`, but it reached a handler, so retrying a POST can run it twice.
+
+`gateway.shutdown.drainDelay` is how long the cluster gets to stop routing new connections to the Pod. A `connection refused` right after a rollout means kube-proxy or the ingress controller took longer than the delay on that cluster. Raise the value. Each old Pod then stays that much longer, as it does for the timeout.
 
 ### The operator's own NetworkPolicy
 

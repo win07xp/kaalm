@@ -20,6 +20,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,6 +83,28 @@ func TestRecorderLabels(t *testing.T) {
 	res := rec.result(modeTools, 1e9, 0)
 	if res.Statuses["rpc_error"] != 1 || res.Statuses["200"] != 1 || res.Requests != 2 {
 		t.Errorf("statuses = %v, requests %d", res.Statuses, res.Requests)
+	}
+}
+
+func TestRecorderStampsErrorSamples(t *testing.T) {
+	rec := newRecorder()
+	before := time.Now().UTC().Truncate(time.Millisecond)
+	rec.recordOutcome(outcome{err: errors.New("Post x: EOF")})
+	after := time.Now().UTC()
+	res := rec.result(modeGateway, time.Second, 0)
+	if len(res.Errors) != 1 {
+		t.Fatalf("errors = %v, want one sample", res.Errors)
+	}
+	stamp, msg, ok := strings.Cut(res.Errors[0], " ")
+	if !ok || msg != "Post x: EOF" {
+		t.Fatalf("sample = %q, want <time> Post x: EOF", res.Errors[0])
+	}
+	at, err := time.Parse(errorStampLayout, stamp)
+	if err != nil {
+		t.Fatalf("sample time %q: %v", stamp, err)
+	}
+	if len(stamp) != len("2006-01-02T15:04:05.000Z") || at.Before(before) || at.After(after) {
+		t.Errorf("sample time %v, want a UTC time with milliseconds between %v and %v", stamp, before, after)
 	}
 }
 
