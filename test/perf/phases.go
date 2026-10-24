@@ -2291,26 +2291,22 @@ func (h *harness) failover(ctx context.Context, channels int) (*failoverResult, 
 	}
 	// The Lease is followed while the first reconcile is awaited, so the
 	// short window a release leaves empty is not missed.
-	type handoffResult struct {
-		outcome string
-		err     error
-	}
 	handoff := make(chan handoffResult, 1)
 	go func() {
 		outcome, err := h.followLeaseHandoff(ctx, before)
 		handoff <- handoffResult{outcome, err}
 	}()
 	res := &failoverResult{Killed: leader}
-	if err := h.awaitFirstReconcile(ctx); err != nil {
+	leaseErr, err := timeFailoverWaits(t2, res,
+		func() error { return h.awaitFirstReconcile(ctx) },
+		func() (float64, []watchSample) { return h.awaitChannelWarmup(ctx, t2, channels) },
+		handoff)
+	if err != nil {
 		return nil, fmt.Errorf("no reconcile after killing %s: %w", leader, err)
 	}
-	if got := <-handoff; got.err != nil {
-		h.note("restart: failover: could not tell whether %s released the Lease: %v", leader, got.err)
-	} else {
-		res.Lease = got.outcome
+	if leaseErr != nil {
+		h.note("restart: failover: could not tell whether %s released the Lease: %v", leader, leaseErr)
 	}
-	res.FirstReconcileSec = round3(time.Since(t2).Seconds())
-	res.WarmupSec, res.Watches = h.awaitChannelWarmup(ctx, t2, channels)
 	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "status",
 		"deploy/kaalm-controller", "--timeout=5m"); err != nil {
 		return nil, err
@@ -2322,6 +2318,32 @@ func (h *harness) failover(ctx context.Context, channels int) (*failoverResult, 
 	h.logf("  failover: %s killed, Lease %s, %s leads; first reconcile %.0fs, warm %.0fs, recovered %.0fs",
 		res.Killed, res.Lease, res.NewLeader, res.FirstReconcileSec, res.WarmupSec, res.RecoveredSec)
 	return res, nil
+}
+
+// handoffResult is what followLeaseHandoff returned: the Lease outcome, or
+// why it could not be told.
+type handoffResult struct {
+	outcome string
+	err     error
+}
+
+// timeFailoverWaits runs the waits after the leader kill at start and fills
+// res: the first reconcile, then the channel warm-up, then the Lease outcome
+// from handoff. The Lease is read last so its follower, which can poll for
+// up to two minutes, never delays either timing. It returns the handoff's error apart from the first
+// reconcile's, since an unknown Lease outcome still leaves the timings.
+func timeFailoverWaits(start time.Time, res *failoverResult, firstReconcile func() error,
+	warmup func() (float64, []watchSample), handoff <-chan handoffResult) (leaseErr, err error) {
+	if err := firstReconcile(); err != nil {
+		return nil, err
+	}
+	res.FirstReconcileSec = round3(time.Since(start).Seconds())
+	res.WarmupSec, res.Watches = warmup()
+	got := <-handoff
+	if got.err == nil {
+		res.Lease = got.outcome
+	}
+	return got.err, nil
 }
 
 // followLeaseHandoff reads the controller's Lease from the kill until a new

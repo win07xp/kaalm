@@ -393,3 +393,63 @@ func TestSweepGatewayArgsMatchFleetChannels(t *testing.T) {
 		}
 	}
 }
+
+// The failover's first-reconcile time and warm-up start do not wait for the
+// Lease follower: a slow handoff still leaves both near the kill.
+func TestFailoverWaitsDoNotWaitOnTheLeaseHandoff(t *testing.T) {
+	const handoffDelay = 500 * time.Millisecond
+	start := time.Now()
+	handoff := make(chan handoffResult, 1)
+	go func() {
+		time.Sleep(handoffDelay)
+		handoff <- handoffResult{outcome: leaseReleased}
+	}()
+	var warmupAt time.Duration
+	res := &failoverResult{}
+	leaseErr, err := timeFailoverWaits(start, res,
+		func() error { return nil },
+		func() (float64, []watchSample) {
+			warmupAt = time.Since(start)
+			return 1, nil
+		},
+		handoff)
+	if err != nil || leaseErr != nil {
+		t.Fatalf("timeFailoverWaits: err %v, lease err %v", err, leaseErr)
+	}
+	if limit := handoffDelay.Seconds() / 2; res.FirstReconcileSec >= limit {
+		t.Errorf("firstReconcileSec = %.3f, want under %.3f: it waited on the Lease handoff", res.FirstReconcileSec, limit)
+	}
+	if warmupAt >= handoffDelay/2 {
+		t.Errorf("warm-up started at %v, want under %v: it waited on the Lease handoff", warmupAt, handoffDelay/2)
+	}
+	if res.Lease != leaseReleased || res.WarmupSec != 1 {
+		t.Errorf("result = %+v, want lease %q and warmupSec 1", res, leaseReleased)
+	}
+}
+
+// A failed first reconcile is the failover's error; a failed Lease read is
+// returned apart and leaves the timings and an empty outcome.
+func TestFailoverWaitsErrors(t *testing.T) {
+	handoff := make(chan handoffResult, 1)
+	handoff <- handoffResult{}
+	if _, err := timeFailoverWaits(time.Now(), &failoverResult{},
+		func() error { return errors.New("no reconcile") },
+		func() (float64, []watchSample) { t.Error("warm-up ran after a failed first reconcile"); return 0, nil },
+		handoff); err == nil {
+		t.Error("timeFailoverWaits succeeded; want the first-reconcile error")
+	}
+
+	handoff = make(chan handoffResult, 1)
+	handoff <- handoffResult{outcome: leaseExpired, err: errors.New("lease read failed")}
+	res := &failoverResult{}
+	leaseErr, err := timeFailoverWaits(time.Now(), res,
+		func() error { return nil },
+		func() (float64, []watchSample) { return 2, nil },
+		handoff)
+	if err != nil || leaseErr == nil {
+		t.Fatalf("err %v, lease err %v; want only a lease error", err, leaseErr)
+	}
+	if res.Lease != "" || res.WarmupSec != 2 {
+		t.Errorf("result = %+v, want no lease outcome and warmupSec 2", res)
+	}
+}
