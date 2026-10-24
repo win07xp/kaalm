@@ -105,6 +105,23 @@ func newToken() []byte {
 	return []byte(hex.EncodeToString(b)) // 32 bytes
 }
 
+// benchSecret is a Secret labeled as a channel credential, as a channel's
+// bearer or HMAC Secret is, and as the benchmark's own.
+func benchSecret(namespace, name string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+			Labels: map[string]string{
+				kaalmv1beta1.LabelChannelCredential: "true",
+				labelPhase:                          phaseValue,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"token": newToken()},
+	}
+}
+
 // ensureSecrets creates Secrets from..to-1 of a layout with 16 workers, each
 // labeled as a channel credential, as a channel's bearer or HMAC Secret is.
 func ensureSecrets(ctx context.Context, admin kubernetes.Interface, layout string, namespaces, from, to int) error {
@@ -119,18 +136,7 @@ func ensureSecrets(ctx context.Context, admin kubernetes.Interface, layout strin
 	for range 16 {
 		wg.Go(func() {
 			for i := range jobs {
-				sec := &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: namespaceFor(i, layout, namespaces),
-						Name:      secretName(i),
-						Labels: map[string]string{
-							kaalmv1beta1.LabelChannelCredential: "true",
-							labelPhase:                          phaseValue,
-						},
-					},
-					Type: corev1.SecretTypeOpaque,
-					Data: map[string][]byte{"token": newToken()},
-				}
+				sec := benchSecret(namespaceFor(i, layout, namespaces), secretName(i))
 				_, err := admin.CoreV1().Secrets(sec.Namespace).Create(ctx, sec, metav1.CreateOptions{})
 				if err != nil && !apierrors.IsAlreadyExists(err) {
 					select {

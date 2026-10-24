@@ -97,3 +97,16 @@ func TestParseFlagsRejectsUnknownVariant(t *testing.T) {
 		t.Fatalf("selectVariants = %v, want A then today-ctrl", got)
 	}
 }
+
+func TestParseFlagsRBACCheck(t *testing.T) {
+	cfg, err := parseFlags([]string{"-rbac-check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RBACCheck || cfg.Out != "" {
+		t.Fatalf("cfg = %+v, want RBACCheck and no summary path", cfg)
+	}
+	if _, err := parseFlags([]string{"-rbac-check", "-variants", "C-gw,lean"}); err != nil {
+		t.Fatalf("-rbac-check with -variants: %v", err)
+	}
+}

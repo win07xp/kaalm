@@ -244,11 +244,3 @@ func countedClientFor(t *testing.T, cfg *rest.Config) (*rest.Config, kubernetes.
 	}
 	return rc, client, counter
 }
-
-// secretRule grants get, list, and watch on the named Secrets.
-func secretRule(names []string) rbacv1.PolicyRule {
-	return rbacv1.PolicyRule{
-		APIGroups: []string{""}, Resources: []string{"secrets"},
-		Verbs: []string{"get", "list", "watch"}, ResourceNames: names,
-	}
-}

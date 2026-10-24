@@ -62,6 +62,7 @@ type config struct {
 	UpdateSamples int
 	SettleTimeout time.Duration
 	Out           string
+	RBACCheck     bool
 }
 
 func parseFlags(args []string) (config, error) {
@@ -83,6 +84,8 @@ func parseFlags(args []string) (config, error) {
 	fs.DurationVar(&cfg.SettleTimeout, "settle-timeout", 30*time.Minute,
 		"how long a step waits for every watch to open before it samples anyway")
 	fs.StringVar(&cfg.Out, "out", "", "summary JSON path (default test/secretbench/results/<UTC time>.json)")
+	fs.BoolVar(&cfg.RBACCheck, "rbac-check", false,
+		"run the RBAC check as a user bound to a resourceNames-scoped Role instead of the sweep; the sweep flags are ignored")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -127,7 +130,7 @@ func parseFlags(args []string) (config, error) {
 	case cfg.SettleTimeout <= 0:
 		return config{}, errors.New("-settle-timeout must be positive")
 	}
-	if cfg.Out == "" {
+	if cfg.Out == "" && !cfg.RBACCheck {
 		cfg.Out = filepath.Join("test", "secretbench", "results",
 			time.Now().UTC().Format("20060102-150405")+".json")
 	}

@@ -23,12 +23,22 @@ limitations under the License.
 // readers' own cost per Secret, which the perf harness's cluster run cannot
 // separate from everything else a gateway or controller holds.
 //
-// The benchmark runs as envtest's cluster admin: it measures cost, not RBAC.
-// The prototypes list Secrets, which the shipped grants do not allow. The
-// admin is in system:masters, which API priority and fairness exempts, so
-// the API server never queues these requests; at the client limits used (at
-// most a few hundred QPS) a service account would not meet its seat limits
-// either, but queueing and RBAC stay with the perf harness's restart phase.
+// The sweep runs as envtest's cluster admin and measures cost. The
+// prototypes list Secrets, which the shipped grants do not allow. The admin
+// is in system:masters, which API priority and fairness exempts, so the API
+// server never queues these requests; at the client limits used (at most a
+// few hundred QPS) a service account would not meet its seat limits either,
+// but queueing stays with the perf harness's restart phase.
+//
+// -rbac-check runs instead of the sweep. It runs the C-gw and lean readers
+// as a user bound to a Role that grants get, list, and watch on named
+// Secrets only, through the API server's RBAC authorizer, and checks that
+// (a) granted names are served from the watch, (b) a LIST or WATCH without
+// a name selector is refused, (c) a name-selected LIST or WATCH on an
+// ungranted name is refused, and (d) once a name leaves the Role the reader
+// stops serving it and answers the refusal within 30 s, with the readers'
+// watch timeout cut to 5 s. It prints a PASS or FAIL line per check and
+// exits non-zero when any check fails.
 //
 // The variants, each a reader with the Watcher's Get(ctx, namespace, name):
 //
@@ -125,6 +135,9 @@ func run(ctx context.Context, cfg config, out io.Writer) (err error) {
 			err = errors.Join(err, fmt.Errorf("stop envtest: %w", stopErr))
 		}
 	}()
+	if cfg.RBACCheck {
+		return rbacCheck(ctx, env, restCfg, out)
+	}
 
 	s := &summary{StartedAt: time.Now().UTC(), Config: cfg}
 	b, err := newBench(ctx, restCfg, cfg, s)
