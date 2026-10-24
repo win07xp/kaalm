@@ -120,9 +120,21 @@ Replace `VERSION` with the installed chart version. Neither mechanism for a moun
 
 ## Memory and dedup persistence
 
-Both runtimes keep one state file, `state.json`, in the memory directory: `$KAALM_MEMORY_DIR` when set, `/var/agent/memory` otherwise. The file holds two disjoint areas, the handler's `Memory` keys under the `user/` prefix and the runtime's dedup window of the last 1024 `messageId`s with their cached responses ([contract item 7](contract.md#7-message-deduplication)). When the directory is not writable, the runtime logs it and continues in memory only.
+Both runtimes keep their state in the memory directory: `$KAALM_MEMORY_DIR` when set, `/var/agent/memory` otherwise. The state holds two disjoint areas, the handler's `Memory` keys under the `user/` prefix and the runtime's dedup window of the last 1024 `messageId`s with their cached responses ([contract item 7](contract.md#7-message-deduplication)). When the directory is not writable, the runtime logs it and continues in memory only.
 
-The PVC backs the file only when it is mounted at that directory. The controller mounts the Agent PVC at `spec.persistence.mountPath`, default `/var/agent/memory`, and injects `$KAALM_MEMORY_DIR` with that same path, so whichever `mountPath` an Agent names is the directory the runtime writes to. An AgentTask Pod gets no `$KAALM_MEMORY_DIR`, and its workspace PVC mounts at `/var/task/workspace` by default, which neither runtime reads, so a task's memory is in-memory unless `spec.persistence.mountPath` names the memory directory.
+The directory holds two files. `state.json` is the snapshot. `state.log` is an append-only log of the writes since the snapshot. Neither is a leftover, so keep both when you copy or inspect the volume.
+
+Each cached reply, `Memory.Set` (`kaalm.memory.put` in Python), and delete is appended to the log and fsynced before the call returns. When the append succeeds, a reply or key the runtime has acknowledged survives a process or node crash. If a write to the volume fails while the runtime runs (a full disk or an I/O error), the runtime logs the error and keeps the write in memory only until a later snapshot succeeds. The call still returns normally, so a handler cannot see the failure. The runtime folds the log into `state.json` when the log outgrows four times the snapshot's size (with a 1 MiB floor) and at a clean shutdown. After a graceful stop, `state.json` alone is complete. After a crash, a tool that reads only `state.json` can be behind `state.log`.
+
+On start, the runtime loads the snapshot and replays the log:
+
+- It drops an incomplete last line, which a crash during an append leaves.
+- It stops at a record it cannot parse and keeps the records before it, and it logs the line number.
+- It discards a log older than the snapshot, because its records predate the snapshot.
+
+Apart from a write that failed as described above, a crash loses no acknowledged write. It can lose the refresh of an id's recency when a duplicate was recalled, because a recall is not logged. The log record format is the same in both runtimes, so a volume written by one is read by the other.
+
+The PVC backs the state only when it is mounted at that directory. The controller mounts the Agent PVC at `spec.persistence.mountPath`, default `/var/agent/memory`, and injects `$KAALM_MEMORY_DIR` with that same path, so whichever `mountPath` an Agent names is the directory the runtime writes to. An AgentTask Pod gets no `$KAALM_MEMORY_DIR`, and its workspace PVC mounts at `/var/task/workspace` by default, which neither runtime reads, so a task's memory is in-memory unless `spec.persistence.mountPath` names the memory directory.
 
 ## The default handler
 

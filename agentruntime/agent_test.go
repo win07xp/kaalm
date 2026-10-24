@@ -282,6 +282,24 @@ func TestServe_DedupSurvivesPodReplacement(t *testing.T) {
 	}
 }
 
+// A clean shutdown folds the log into the snapshot, so state.json alone is
+// complete after a graceful stop.
+func TestAgent_CleanShutdownCompactsState(t *testing.T) {
+	pki := newTestPKI(t)
+	memDir := t.TempDir()
+	_, addr, stop := startAgent(t, pki, agentSANs, memDir, "", nil)
+	gateway := pki.clientFor(t, "gateway", gatewaySANLocal)
+	postMessage(t, gateway, addr, Envelope{MessageID: "m-shutdown", Content: "hi"})
+	stop()
+
+	if got := readLog(t, memDir); got != "" {
+		t.Errorf("log must be empty after a clean shutdown, holds %q", got)
+	}
+	if _, ok := readSnapshot(t, memDir).Dedup["m-shutdown"]; !ok {
+		t.Error("state.json must hold the delivered id after a clean shutdown")
+	}
+}
+
 func TestServe_BadEnvelopeAndHandlerError(t *testing.T) {
 	pki := newTestPKI(t)
 	h := func(context.Context, Envelope) (Response, error) {

@@ -100,6 +100,9 @@ func (a *Agent) serve(ctx context.Context, ln net.Listener, h Handler) error {
 	if h == nil {
 		h = echoHandler
 	}
+	// Runs on both exit paths, after Shutdown has drained in-flight requests,
+	// so state.json alone is complete after a clean stop.
+	defer a.store.close()
 	if err := a.reloader.watch(log.Printf); err != nil {
 		return err
 	}
