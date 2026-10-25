@@ -138,12 +138,12 @@ func (h *harness) figures(ctx context.Context) (scaleFigures, error) {
 		}
 		for _, pod := range pods {
 			fig, err := h.k.podFigures(ctx, "kaalm-system", pod, comp.port, h.cfg.PprofPort)
-			if errors.Is(err, errNoWatchCount) {
+			if errors.Is(err, errNoWatchStreams) {
 				key := "pprof " + pod.Name
 				if h.cfg.PprofPort <= 0 {
 					key = "pprof off"
 				}
-				h.noteOnce(key, "watch count left out: %v", err)
+				h.noteOnce(key, "watch stream count left out: %v", err)
 			} else if err != nil {
 				return out, err
 			}
@@ -559,7 +559,7 @@ func printRestart(r *restartResult) {
 				pod += " (leader)"
 			}
 			fmt.Printf("  %-22s  %-37s  %10.0f  %8.1f  %7.1f  %7s  %8.0f\n",
-				point, pod, p.Goroutines, p.HeapMiB, p.RSSMiB, watchesText(p.Watches), p.APIGets)
+				point, pod, p.Goroutines, p.HeapMiB, p.RSSMiB, watchesText(p), p.APIGets)
 		}
 		a := fig.APIServer
 		cpu := "-"
@@ -575,12 +575,18 @@ func printRestart(r *restartResult) {
 	}
 }
 
-// watchesText is a watch count for the summary, "-" when it was left out.
-func watchesText(n *int) string {
-	if n == nil {
-		return "-"
+// watchesText is a process's watched-Secrets count for the summary, "-"
+// when it was left out, followed by "/" and the profile's watch stream count
+// when that was read.
+func watchesText(p processFigures) string {
+	out := "-"
+	if p.Watches != nil {
+		out = strconv.Itoa(*p.Watches)
 	}
-	return strconv.Itoa(*n)
+	if p.WatchStreams != nil {
+		out += "/" + strconv.Itoa(*p.WatchStreams)
+	}
+	return out
 }
 
 // printRamp prints a ramp block under a label (the standard ramp, or the

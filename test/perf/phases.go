@@ -2144,7 +2144,7 @@ func (h *harness) recordFigures(ctx context.Context, res *restartResult, point s
 	res.Figures[point] = fig
 	for _, p := range append(append([]processFigures(nil), fig.Gateway...), fig.Controller...) {
 		h.logf("  %s %s: %.0f goroutines, heap %.1f MiB, rss %.1f MiB, %s watches, %.0f API GETs",
-			point, p.Pod, p.Goroutines, p.HeapMiB, p.RSSMiB, watchesText(p.Watches), p.APIGets)
+			point, p.Pod, p.Goroutines, p.HeapMiB, p.RSSMiB, watchesText(p), p.APIGets)
 	}
 }
 

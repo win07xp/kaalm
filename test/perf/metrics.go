@@ -689,7 +689,12 @@ type processFigures struct {
 	HeapMiB    float64 `json:"heapMiB"`
 	RSSMiB     float64 `json:"rssMiB"`
 	APIGets    float64 `json:"apiGets"`
-	Watches    *int    `json:"watches,omitempty"`
+	// Watches is the process's kaalm_watched_secrets gauge, nil for an image
+	// that does not expose it.
+	Watches *int `json:"watches,omitempty"`
+	// WatchStreams counts the open watch streams in the goroutine profile,
+	// as a cross-check of Watches; nil unless the pprof listener is on.
+	WatchStreams *int `json:"watchStreams,omitempty"`
 }
 
 // apiserverFigures is the API server process at one point. On k3s the one
@@ -708,17 +713,26 @@ type scaleFigures struct {
 	APIServer  apiserverFigures `json:"apiserver"`
 }
 
+// metricWatchedSecrets is the Secret watcher's gauge of the Secrets a
+// process holds an open informer and watch for.
+const metricWatchedSecrets = "kaalm_watched_secrets"
+
 // processFiguresFrom reads a process's figures from its /metrics families.
 func processFiguresFrom(pod string, families map[string]*dto.MetricFamily) processFigures {
 	snap := &snapshot{metrics: map[string][]sample{}}
 	snap.merge(families)
-	return processFigures{
+	fig := processFigures{
 		Pod:        pod,
 		Goroutines: snap.gauge("go_goroutines", nil),
 		HeapMiB:    round3(snap.gauge("go_memstats_heap_inuse_bytes", nil) / (1 << 20)),
 		RSSMiB:     round3(snap.gauge("process_resident_memory_bytes", nil) / (1 << 20)),
 		APIGets:    snap.counter("rest_client_requests_total", map[string]string{"method": "GET"}),
 	}
+	if _, ok := snap.metrics[metricWatchedSecrets]; ok {
+		n := int(snap.gauge(metricWatchedSecrets, nil))
+		fig.Watches = &n
+	}
+	return fig
 }
 
 // apiserverFiguresFrom reads the API server's figures from a snapshot.
@@ -733,14 +747,15 @@ func apiserverFiguresFrom(s *snapshot) apiserverFigures {
 	return out
 }
 
-// errNoWatchCount marks figures whose watch count is missing because the
-// goroutine profile could not be read; the rest of the figures hold.
-var errNoWatchCount = errors.New("no goroutine profile")
+// errNoWatchStreams marks figures whose watch stream count is missing
+// because the goroutine profile could not be read; the rest of the figures,
+// Watches included, hold.
+var errNoWatchStreams = errors.New("no goroutine profile")
 
 // podFigures scrapes one operator Pod's /metrics and, when pprofPort is set,
 // counts its open watch streams from its goroutine profile. A profile that
-// cannot be read returns the figures without Watches and an error wrapping
-// errNoWatchCount.
+// cannot be read returns the figures without WatchStreams and an error
+// wrapping errNoWatchStreams.
 func (k *cluster) podFigures(ctx context.Context, namespace string, pod corev1.Pod, metricsPort string,
 	pprofPort int) (processFigures, error) {
 	families, err := k.scrapePod(namespace, pod.Name, metricsPort)
@@ -749,14 +764,14 @@ func (k *cluster) podFigures(ctx context.Context, namespace string, pod corev1.P
 	}
 	fig := processFiguresFrom(pod.Name, families)
 	if pprofPort <= 0 {
-		return fig, fmt.Errorf("%w: pprof port off", errNoWatchCount)
+		return fig, fmt.Errorf("%w: pprof port off", errNoWatchStreams)
 	}
 	profile, err := k.goroutineProfile(ctx, namespace, pod.Name, pprofPort)
 	if err != nil {
-		return fig, fmt.Errorf("%w from %s: %v", errNoWatchCount, pod.Name, err)
+		return fig, fmt.Errorf("%w from %s: %v", errNoWatchStreams, pod.Name, err)
 	}
 	n := countGoroutines(profile, watchGoroutine)
-	fig.Watches = &n
+	fig.WatchStreams = &n
 	return fig, nil
 }
 

@@ -258,6 +258,15 @@ func TestLeaseHandoff(t *testing.T) {
 }
 
 func TestProcessFiguresFromFamilies(t *testing.T) {
+	watched := []byte("# TYPE kaalm_watched_secrets gauge\nkaalm_watched_secrets 12\n")
+	fams, err := parseMetrics(watched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := processFiguresFrom("kaalm-gateway-abc", fams).Watches; got == nil || *got != 12 {
+		t.Errorf("watches = %v, want 12 from the kaalm_watched_secrets gauge", got)
+	}
+
 	body := []byte("# TYPE go_goroutines gauge\ngo_goroutines 321\n" +
 		"# TYPE go_memstats_heap_inuse_bytes gauge\ngo_memstats_heap_inuse_bytes 20971520\n" +
 		"# TYPE process_resident_memory_bytes gauge\nprocess_resident_memory_bytes 104857600\n" +
@@ -265,7 +274,7 @@ func TestProcessFiguresFromFamilies(t *testing.T) {
 		`rest_client_requests_total{code="200",host="10.43.0.1:443",method="GET"} 40` + "\n" +
 		`rest_client_requests_total{code="404",host="10.43.0.1:443",method="GET"} 2` + "\n" +
 		`rest_client_requests_total{code="200",host="10.43.0.1:443",method="PATCH"} 7` + "\n")
-	fams, err := parseMetrics(body)
+	fams, err = parseMetrics(body)
 	if err != nil {
 		t.Fatal(err)
 	}
