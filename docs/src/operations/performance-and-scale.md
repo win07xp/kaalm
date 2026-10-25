@@ -133,6 +133,26 @@ Compare `B` with `today-gw` to see what a higher client limit changes, and `toda
 
 Like the shipped Watcher, `A` stops an informer when its list is refused as Forbidden, and it answers that refusal. Once a relist is refused, the reader stops serving the Secret from its cache. This adds no goroutine or buffer, so its figures stay comparable.
 
+### What the Watcher costs per Secret
+
+A run on October 25, 2026 at commit `de04f2c8` measured the shipped Watcher with `-variants today-gw,today-ctrl,lean,A -repeats 3`. It covered 0 to 5,000 Secrets in one namespace and in 20 namespaces, and took 63 minutes. All 144 samples had no read errors, no Secret that failed to settle, no missed update, and no 429 response. The result file is not committed, so these figures have no source in the repository.
+
+The table gives the slope per Secret. A range runs from the lower to the higher of the two namespace layouts.
+
+| Variant | Heap (KiB) | RSS (KiB) | Goroutines | API requests | Cold start (ms) |
+|---|---|---|---|---|---|
+| `today-gw` (Watcher, 100 QPS, burst 200) | 19 to 22 | 60 to 63 | 8 | 1 LIST and 1 WATCH | 9.8 |
+| `today-ctrl` (Watcher, 20 QPS, burst 30) | 22 | 63 to 64 | 8 | 1 LIST and 1 WATCH | 50 |
+| `lean` | 12 to 14 | 25 to 28 | 2 | 1 LIST and 1 WATCH | 9.8 |
+| `A` | 2 to 4 | 3 to 5 | 0 | 1 LIST and 1 WATCH per namespace | about 0 |
+
+- **Requests.** The Watcher issues no GET in the sweep. The API server holds one open Secret watch per Secret for the Watcher and `lean`, and one per namespace for `A`.
+- **Cold start.** The time follows the client limit: 9.8 ms per Secret at 100 QPS, which is 48 s at 5,000 Secrets, and 50 ms per Secret at 20 QPS, which is 249 s at 5,000. The controller's Secret watcher runs at the 100 QPS limit.
+- **Update delivery.** At 5,000 Secrets the median is 3.1 to 3.4 ms for the Watcher, 4.0 ms for `lean`, and 2.9 ms for `A`. The slowest single update at that count is under 8 ms for every variant.
+- **RSS is a range.** One LIST and one WATCH per Secret measured 60 to 102 KiB of RSS per Secret across runs, including an earlier prototype run at 98 to 102 KiB. Heap also differs between runs and between client limits.
+
+Against the three marks in [The variants](#the-variants), `lean` meets the RSS mark (25 to 28 KiB), the goroutine mark (2), and the cold start (9.8 ms, equal to `today-gw`). Its median update, 4.0 ms against 3.1 to 3.4 ms for `today-gw`, is slower.
+
 ### Run the benchmark
 
 ```bash
@@ -142,7 +162,7 @@ make secretwatch-bench SECRETBENCH_FLAGS='-rbac-check'      # the RBAC check, in
 make secretwatch-bench-unit                                 # the benchmark's own tests
 ```
 
-`SECRETBENCH_FLAGS` passes flags to the benchmark. The ones you change are `-counts`, `-namespaces`, `-repeats`, and `-variants`, which takes the variant names above. The full list is in `test/secretbench/config.go`. The full default sweep takes several hours, because the variants at the 20 QPS limit wait on the client rate limiter for their GETs and LISTs. One sweep (`-repeats 1`) takes a little over an hour.
+`SECRETBENCH_FLAGS` passes flags to the benchmark. The ones you change are `-counts`, `-namespaces`, `-repeats`, and `-variants`, which takes the variant names above. The full list is in `test/secretbench/config.go`. The run in [the results](#what-the-watcher-costs-per-secret) took 63 minutes, and about 43 of them were `today-ctrl` cold starts, which wait on the 20 QPS client rate limiter for their LISTs. The full default sweep also runs `B`, which that run did not include, so this page gives no time for it.
 
 Results land in `test/secretbench/results/` as JSON, which is not committed. The file is rewritten after every step, so an interrupted run keeps the steps it finished. Neither target runs in CI or in `make test`: the `secretbench` build tag keeps the package out of their test runs, and only lint reads it. The RBAC check writes no JSON.
 
@@ -159,7 +179,9 @@ The sweep runs as envtest's cluster administrator, so it cannot show whether a r
 
 Checks (b) and the direct part of (c) test the API server, not a reader, so they print once with the reader column `user`. The other lines print once for each reader.
 
-Check (d) has a time bound because an open watch outlives its grant: the authorizer runs when a request starts, so the refusal appears only when the reader next makes a request. The check shortens the watch timeout to 5 s so the watch re-opens every 5 s, and each (d) line prints the time it took. `lean` stops a name on a refused WATCH, so it refuses when the watch re-opens, about 5 s in. `today-gw` sends a refused WATCH to the reflector's relist, so it refuses at the next LIST after a backoff, about 6 s in. A production watch lasts 5 to 10 minutes, so a revoked grant can keep a Secret served for that long before the refusal shows ([the revocation bound](../security/rbac.md#dynamic-per-namespace-grants-channel-credentials)).
+On October 25, 2026 at commit `de04f2c8`, every check passed. `today-gw` served the three granted Secrets with 0 GET, 3 LIST, and 3 WATCH, and its Get of an ungranted Secret was refused after one probe GET.
+
+Check (d) has a time bound because an open watch outlives its grant: the authorizer runs when a request starts, so the refusal appears only when the reader next makes a request. The check shortens the watch timeout to 5 s so the watch re-opens every 5 s, and each (d) line prints the time it took. `lean` stops a name on a refused WATCH, so it refuses when the watch re-opens, about 5 s in (measured 5.0 s). `today-gw` sends a refused WATCH to the reflector's relist, so it refuses at the next LIST after a backoff, about 7 s in (measured 7.0 s). A production watch lasts 5 to 10 minutes, so a revoked grant can keep a Secret served for that long before the refusal shows ([the revocation bound](../security/rbac.md#dynamic-per-namespace-grants-channel-credentials)).
 
 ### What the benchmark leaves out
 
