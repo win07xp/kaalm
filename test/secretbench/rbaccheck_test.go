@@ -36,7 +36,7 @@ func TestRBACCheckPassesForBothReaders(t *testing.T) {
 	if strings.Contains(out, "FAIL") {
 		t.Fatalf("a check failed:\n%s", out)
 	}
-	for _, reader := range []string{"C-gw", "lean"} {
+	for _, reader := range []string{"today-gw", "lean"} {
 		for _, check := range []string{"(a)", "(c)", "(d)"} {
 			if !hasPassLine(out, reader, check) {
 				t.Errorf("no PASS line for %s %s", reader, check)

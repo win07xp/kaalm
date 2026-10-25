@@ -23,10 +23,10 @@ import (
 	"testing"
 )
 
-// The shipped watcher lists with a GET, opens one watch, and confirms with a
-// second GET. This pins the request mix the benchmark reports for today and
+// The shipped watcher lists the Secret by name and watches from that list,
+// with no GET. This pins the request mix the benchmark reports for today and
 // checks the counting transport against the product code.
-func TestTodayReaderRequestsTwoGetsAndOneWatch(t *testing.T) {
+func TestTodayReaderRequestsOneListAndOneWatch(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
 	ns := testNamespace(t)
@@ -41,8 +41,8 @@ func TestTodayReaderRequestsTwoGetsAndOneWatch(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	settle(t, counter, 1)
-	if got := counter.snapshot(); got != (requestCounts{Get: 2, Watch: 1}) {
-		t.Fatalf("requests = %+v, want Get 2, Watch 1", got)
+	if got := counter.snapshot(); got != (requestCounts{List: 1, Watch: 1}) {
+		t.Fatalf("requests = %+v, want List 1, Watch 1", got)
 	}
 	stopAndDrain(t, r, counter)
 }

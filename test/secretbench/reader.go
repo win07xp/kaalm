@@ -34,10 +34,12 @@ import (
 	"github.com/win07xp/kaalm/internal/secretwatch"
 )
 
-// The two client limits today's watcher runs at. cmd/gateway/main.go sets
-// the gateway's (--client-qps 100, --client-burst 200); cmd/manager/main.go
-// sets the controller's (--client-qps 20, --client-burst 30, the
-// controller-runtime defaults).
+// The two client limits the benchmark runs the Watcher at. The gateway's
+// (--client-qps 100, --client-burst 200, cmd/gateway/main.go) is also the
+// controller's Secret watcher's, which cmd/manager/main.go gives a client of
+// its own. The controller's reconcile clients run at --client-qps 20 and
+// --client-burst 30, the controller-runtime defaults; today-ctrl keeps that
+// limit for comparison.
 const (
 	gatewayQPS      = 100
 	gatewayBurst    = 200
@@ -76,10 +78,6 @@ func buildToday(ctx context.Context, _ *rest.Config, client kubernetes.Interface
 	return &todayReader{w: secretwatch.New(ctx, client), cancel: cancel}, nil
 }
 
-func buildC(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
-	return newNameInformerReader(ctx, client, 0), nil
-}
-
 func buildLean(ctx context.Context, rc *rest.Config, client kubernetes.Interface) (secretReader, error) {
 	return newLeanReader(ctx, rc, client, 0)
 }
@@ -91,16 +89,13 @@ func buildA(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (s
 // variants lists every variant in its default run order. B runs at the
 // configured limit; A runs at the controller's limit because its request
 // count does not grow with the Secret count, so the limit cannot shape it.
-// C runs at both limits today runs at, so C against today isolates the
-// design change from the limit. lean runs at the gateway's limit because it
-// is compared with C-gw: same requests, without the informer machinery.
+// lean runs at the gateway's limit because it is compared with today-gw:
+// the same requests, without the informer machinery.
 func variants(cfg config) []variant {
 	return []variant{
 		{Name: "today-gw", QPS: gatewayQPS, Burst: gatewayBurst, Build: buildToday, ExpectedWatches: perSecret},
 		{Name: "today-ctrl", QPS: controllerQPS, Burst: controllerBurst, Build: buildToday, ExpectedWatches: perSecret},
 		{Name: "B", QPS: float32(cfg.BQPS), Burst: cfg.BBurst, Build: buildToday, ExpectedWatches: perSecret},
-		{Name: "C-gw", QPS: gatewayQPS, Burst: gatewayBurst, Build: buildC, ExpectedWatches: perSecret},
-		{Name: "C-ctrl", QPS: controllerQPS, Burst: controllerBurst, Build: buildC, ExpectedWatches: perSecret},
 		{Name: "lean", QPS: gatewayQPS, Burst: gatewayBurst, Build: buildLean, ExpectedWatches: perSecret},
 		{Name: "A", QPS: controllerQPS, Burst: controllerBurst, Build: buildA, ExpectedWatches: perNamespace},
 	}
@@ -127,8 +122,9 @@ func selectVariants(cfg config) []variant {
 	return out
 }
 
-// todayReader is the shipped secretwatch.Watcher with its defaults. Stop
-// cancels the watcher's context, on which its janitor stops every informer.
+// todayReader is the shipped secretwatch.Watcher, with its defaults unless
+// a caller changed them. Stop cancels the watcher's context, on which its
+// janitor stops every informer.
 type todayReader struct {
 	w      *secretwatch.Watcher
 	cancel context.CancelFunc
@@ -140,7 +136,7 @@ func (r *todayReader) Get(ctx context.Context, namespace, name string) (*corev1.
 
 func (r *todayReader) Stop() { r.cancel() }
 
-// informerEntry is one prototype informer and its last list result.
+// informerEntry is one prototype informer (A's) and its last list result.
 type informerEntry struct {
 	informer cache.SharedInformer
 	stop     chan struct{}
@@ -159,7 +155,7 @@ func (e *informerEntry) halt() { e.stopOnce.Do(func() { close(e.stop) }) }
 // logs as the default handler does, then stops the informer when its latest
 // list was refused as Forbidden, so a revoked grant is never served from the
 // store. A refused watch alone is left to the reflector's relist, whose LIST
-// decides. It adds no goroutine and no buffer, so C's figures stay
+// decides. It adds no goroutine and no buffer, so A's figures stay
 // comparable with the sweep's.
 func stopOnForbidden(e *informerEntry) cache.WatchErrorHandlerWithContext {
 	return func(ctx context.Context, r *cache.Reflector, err error) {

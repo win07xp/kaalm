@@ -33,6 +33,8 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+
+	"github.com/win07xp/kaalm/internal/secretwatch"
 )
 
 const (
@@ -78,13 +80,14 @@ func (c *checker) record(reader, check string, pass bool, format string, args ..
 	printChecks(c.out, []checkResult{r})
 }
 
-// rbacCheck runs the C-gw and lean readers as a user bound to a Role that
-// grants get, list, and watch on named Secrets only, through the API
-// server's RBAC authorizer, and checks that (a) granted names are served
-// from the watch, (b) a LIST or WATCH without a name selector is refused,
-// (c) a name-selected LIST or WATCH on an ungranted name is refused, and (d)
-// once a name leaves the Role the reader stops serving it and answers the
-// refusal. It returns an error when any check failed.
+// rbacCheck runs the shipped Watcher (as today-gw) and the lean reader as a
+// user bound to a Role that grants get, list, and watch on named Secrets
+// only, through the API server's RBAC authorizer, and checks that (a)
+// granted names are served from the watch, (b) a LIST or WATCH without a
+// name selector is refused, (c) a name-selected LIST or WATCH on an
+// ungranted name is refused, and (d) once a name leaves the Role the reader
+// stops serving it and answers the refusal. It returns an error when any
+// check failed.
 func rbacCheck(ctx context.Context, env *envtest.Environment, base *rest.Config, out io.Writer) error {
 	adminCfg := rest.CopyConfig(base)
 	adminCfg.QPS, adminCfg.Burst = -1, 0
@@ -110,19 +113,26 @@ func rbacCheck(ctx context.Context, env *envtest.Environment, base *rest.Config,
 
 	c := &checker{out: out}
 	identityChecks(ctx, c, user)
+	// probes is how many GETs a refused read may cost: the Watcher probes a
+	// refused LIST with one GET, to tell a removed grant from a Role that
+	// lacks only list; lean issues none.
 	readers := []struct {
-		name  string
-		build func(context.Context, *rest.Config, kubernetes.Interface) (secretReader, error)
+		name   string
+		probes int64
+		build  func(context.Context, *rest.Config, kubernetes.Interface) (secretReader, error)
 	}{
-		{"C-gw", func(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
-			return newNameInformerReader(ctx, client, checkWatchTimeout), nil
+		{"today-gw", 1, func(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
+			ctx, cancel := context.WithCancel(ctx)
+			w := secretwatch.New(ctx, client)
+			w.WatchTimeout = checkWatchTimeout
+			return &todayReader{w: w, cancel: cancel}, nil
 		}},
-		{"lean", func(ctx context.Context, rc *rest.Config, client kubernetes.Interface) (secretReader, error) {
+		{"lean", 0, func(ctx context.Context, rc *rest.Config, client kubernetes.Interface) (secretReader, error) {
 			return newLeanReader(ctx, rc, client, checkWatchTimeout)
 		}},
 	}
 	for _, rd := range readers {
-		if err := readerChecks(ctx, c, admin, user, userCfg, rd.name, rd.build); err != nil {
+		if err := readerChecks(ctx, c, admin, user, userCfg, rd.name, rd.probes, rd.build); err != nil {
 			return err
 		}
 	}
@@ -233,9 +243,11 @@ func tryWatch(ctx context.Context, secrets corev1client.SecretInterface, opts me
 
 // readerChecks runs (a), the reader part of (c), and (d) for one reader
 // built fresh as the user at the gateway's limit, then restores the grant
-// and drains the reader.
+// and drains the reader. probes is how many GETs the refused read in (c)
+// may cost; a GET past those would be a live read.
 func readerChecks(ctx context.Context, c *checker, admin, user kubernetes.Interface, userCfg *rest.Config,
-	name string, build func(context.Context, *rest.Config, kubernetes.Interface) (secretReader, error)) error {
+	name string, probes int64,
+	build func(context.Context, *rest.Config, kubernetes.Interface) (secretReader, error)) error {
 	rc, counter := countedConfig(userCfg, gatewayQPS, gatewayBurst)
 	client, err := kubernetes.NewForConfig(rc)
 	if err != nil {
@@ -257,7 +269,7 @@ func readerChecks(ctx context.Context, c *checker, admin, user kubernetes.Interf
 
 	_, err = reader.Get(ctx, rbacNamespace, ungrantedNames[0])
 	got := counter.snapshot().Get
-	c.record(name, "(c) Get of an ungranted Secret is refused", apierrors.IsForbidden(err) && got == 0,
+	c.record(name, "(c) Get of an ungranted Secret is refused", apierrors.IsForbidden(err) && got <= probes,
 		"%v; GET %d", errText(err), got)
 
 	if err := checkRevoked(ctx, c, admin, reader, name); err != nil {

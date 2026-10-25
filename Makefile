@@ -460,7 +460,7 @@ bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into b
 # figures mix the watcher with everything else it holds, while here they are
 # the watcher's own cost per Secret. Extra flags (see
 # test/secretbench/config.go), for example
-# SECRETBENCH_FLAGS='-repeats 1 -variants today-ctrl,C-ctrl,A'.
+# SECRETBENCH_FLAGS='-repeats 1 -variants today-gw,lean,A'.
 SECRETBENCH_FLAGS ?=
 
 .PHONY: secretwatch-bench

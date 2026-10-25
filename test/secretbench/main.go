@@ -17,22 +17,23 @@ limitations under the License.
 */
 
 // Command secretbench is a component-level scale benchmark of the Secret
-// watcher (internal/secretwatch) and three prototype readers. It runs against
+// watcher (internal/secretwatch) and two prototype readers. It runs against
 // an envtest control plane, a real kube-apiserver and etcd from the envtest
 // assets, with no cluster and no agent Pods, so its figures are the
 // readers' own cost per Secret, which the perf harness's cluster run cannot
 // separate from everything else a gateway or controller holds.
 //
-// The sweep runs as envtest's cluster admin and measures cost. The
-// prototypes list Secrets, which the shipped grants do not allow. The admin
-// is in system:masters, which API priority and fairness exempts, so the API
+// The sweep runs as envtest's cluster admin and measures cost. A lists
+// Secrets by label, which the shipped grants do not allow. The admin is in
+// system:masters, which API priority and fairness exempts, so the API
 // server never queues these requests; at the client limits used (at most a
 // few hundred QPS) a service account would not meet its seat limits either,
 // but queueing stays with the perf harness's restart phase.
 //
-// -rbac-check runs instead of the sweep. It runs the C-gw and lean readers
-// as a user bound to a Role that grants get, list, and watch on named
-// Secrets only, through the API server's RBAC authorizer, and checks that
+// -rbac-check runs instead of the sweep. It runs the shipped Watcher (as
+// today-gw) and the lean reader as a user bound to a Role that grants get,
+// list, and watch on named Secrets only, the shape of the Roles the
+// controller mints, through the API server's RBAC authorizer, and checks that
 // (a) granted names are served from the watch, (b) a LIST or WATCH without
 // a name selector is refused, (c) a name-selected LIST or WATCH on an
 // ungranted name is refused, and (d) once a name leaves the Role the reader
@@ -42,22 +43,22 @@ limitations under the License.
 //
 // The variants, each a reader with the Watcher's Get(ctx, namespace, name):
 //
-//	today-gw    the shipped Watcher at the gateway's client limit (QPS 100, burst 200)
-//	today-ctrl  the shipped Watcher at the controller's (QPS 20, burst 30)
+//	today-gw    the shipped Watcher at the gateway's client limit (QPS 100,
+//	            burst 200), which the controller's Secret watcher also runs at
+//	today-ctrl  the shipped Watcher at the controller-runtime default limit
+//	            (QPS 20, burst 30), kept for comparison
 //	B           the shipped Watcher at -b-qps and -b-burst
-//	C-gw        one informer per Secret that LISTs by metadata.name and
-//	C-ctrl      WATCHes from the LIST's version, at the two limits above
-//	lean        C's requests (a LIST by name, a WATCH from its version) with no
-//	            client-go informer: one shared cache, one goroutine per Secret,
-//	            at the gateway's limit
+//	lean        the Watcher's requests (a LIST by name, a WATCH from its
+//	            version) with no client-go informer: one shared cache, one
+//	            goroutine per Secret, at the gateway's limit
 //	A           one informer per namespace on the kaalm.io/channel-credential
 //	            label, at the controller's limit
 //
 // lean exists to split today's per-Secret cost between client-go's informer
-// machinery and the watch stream itself. It is held against C-gw to these
+// machinery and the watch stream itself. It is held against today-gw to these
 // marks: about 30 KiB RSS per Secret or less, at most 2 goroutines per
 // Secret (its loop and net/http's per-stream goroutine), and cold start and
-// update delivery no slower than C-gw.
+// update delivery no slower than today-gw.
 //
 // One run steps the Secret count up inside one API server (-counts), once
 // per layout (every Secret in one namespace, or spread over -namespaces),

@@ -45,7 +45,7 @@ import (
 
 const (
 	// The reflector's watch timeout is random in [5, 10) minutes, so lean
-	// re-opens its watches as often as C does.
+	// re-opens its watches as often as the Watcher does.
 	leanMinWatchTimeout = 5 * time.Minute
 	// A stream that ends this soon with no event counts as a failure and
 	// backs off, as the reflector's "very short watch" does.
@@ -57,10 +57,10 @@ const (
 	secretsResource = "secrets"
 )
 
-// leanReader is the lean prototype: C's requests without client-go's
+// leanReader is the lean prototype: the Watcher's requests without client-go's
 // informer machinery. Per Secret it issues one LIST with an exact
 // metadata.name field selector, then one WATCH from that LIST's
-// resourceVersion, as C does, but there is no informer, reflector,
+// resourceVersion, as the Watcher does, but there is no informer, reflector,
 // DeltaFIFO, or processor. Every Secret lives in one shared map under one
 // lock, and each name spends one goroutine of its own, the loop that lists
 // and reads its watch stream.

@@ -62,11 +62,11 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if got := cfg.Counts; len(got) != 6 || got[0] != 0 || got[5] != 5000 {
 		t.Fatalf("counts = %v, want 0..5000", got)
 	}
-	if cfg.Repeats != 3 || cfg.Namespaces != 20 || len(cfg.Variants) != 7 || len(cfg.Layouts) != 2 {
+	if cfg.Repeats != 3 || cfg.Namespaces != 20 || len(cfg.Variants) != 5 || len(cfg.Layouts) != 2 {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if cfg.Variants[5] != "lean" {
-		t.Fatalf("variants = %v, want lean after C-ctrl", cfg.Variants)
+	if cfg.Variants[3] != "lean" {
+		t.Fatalf("variants = %v, want lean after B", cfg.Variants)
 	}
 	if !strings.HasPrefix(cfg.Out, "test/secretbench/results/") {
 		t.Fatalf("out = %q, want it under test/secretbench/results/", cfg.Out)
@@ -106,7 +106,7 @@ func TestParseFlagsRBACCheck(t *testing.T) {
 	if !cfg.RBACCheck || cfg.Out != "" {
 		t.Fatalf("cfg = %+v, want RBACCheck and no summary path", cfg)
 	}
-	if _, err := parseFlags([]string{"-rbac-check", "-variants", "C-gw,lean"}); err != nil {
+	if _, err := parseFlags([]string{"-rbac-check", "-variants", "today-gw,lean"}); err != nil {
 		t.Fatalf("-rbac-check with -variants: %v", err)
 	}
 }
