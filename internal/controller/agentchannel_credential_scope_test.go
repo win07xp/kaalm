@@ -80,7 +80,7 @@ func preScopeObjects(t *testing.T, ch *kaalmv1beta1.AgentChannel) []client.Objec
 		ObjectMeta: metav1.ObjectMeta{Name: channelRoleName(ch.Name), Namespace: "default"},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""}, Resources: []string{"secrets"},
-			ResourceNames: []string{"scope-labeled", "scope-unlabeled"}, Verbs: []string{"get", "watch"},
+			ResourceNames: []string{"scope-labeled", "scope-unlabeled"}, Verbs: []string{"get", "list", "watch"},
 		}},
 	}
 	if err := controllerutil.SetControllerReference(ch, role, testScheme(t)); err != nil {

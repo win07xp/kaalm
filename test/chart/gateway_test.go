@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -220,4 +221,40 @@ func TestGateway_MCPLimitsReachGatewayFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The gateway's Secret watcher lists each Secret by name before it watches,
+// so its Role in the release namespace grants get, list, and watch on
+// Secrets there.
+func TestGateway_RoleGrantsGetListWatchOnSecrets(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	out, err := exec.Command("helm", "template", "kaalm", filepath.Join("..", "..", "charts", "kaalm"),
+		"-n", releaseNamespace, "-s", "templates/rbac.yaml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template: %v\n%s", err, out)
+	}
+	for _, doc := range strings.Split(string(out), "\n---\n") {
+		var role rbacv1.Role
+		if err := yaml.Unmarshal([]byte(doc), &role); err != nil || role.Kind != "Role" ||
+			role.Name != "kaalm-gateway" || role.Namespace != releaseNamespace {
+			continue
+		}
+		for _, rule := range role.Rules {
+			if !slices.Contains(rule.Resources, "secrets") {
+				continue
+			}
+			verbs := slices.Sorted(slices.Values(rule.Verbs))
+			if !slices.Equal(verbs, []string{"get", "list", "watch"}) {
+				t.Errorf("secrets verbs = %v, want get, list, watch", rule.Verbs)
+			}
+			if len(rule.ResourceNames) != 0 {
+				t.Errorf("secrets resourceNames = %v, want none (every Secret in the release namespace)", rule.ResourceNames)
+			}
+			return
+		}
+		t.Fatal("the kaalm-gateway Role has no secrets rule")
+	}
+	t.Fatalf("rendered output has no kaalm-gateway Role in %s\n%s", releaseNamespace, out)
 }

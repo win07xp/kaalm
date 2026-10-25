@@ -168,9 +168,10 @@ func getSecretLive(ctx context.Context, reader client.Reader, key types.Namespac
 }
 
 // ensureControllerSecretAccess keeps a controller-only Role and RoleBinding,
-// both named roleName and owned by owner: get and watch on exactly the named
-// Secrets (watch lets the controller's per-Secret watch sync), bound to the
-// operator's ServiceAccount alone. With no names the pair is removed, so an
+// both named roleName and owned by owner: get, list, and watch on exactly the
+// named Secrets (the controller's per-Secret watcher lists and watches each by
+// its exact name, which resourceNames bounds), bound to the operator's
+// ServiceAccount alone. With no names the pair is removed, so an
 // edit that drops its Secret references leaves no grant behind. A Role or
 // RoleBinding of that name the owner does not control is a ChildConflictError,
 // never updated or deleted. It serves the rule 23 pull-Secret check of Agents
@@ -228,7 +229,7 @@ func ensureControllerSecretAccess(
 		APIGroups:     []string{""},
 		Resources:     []string{"secrets"},
 		ResourceNames: names,
-		Verbs:         []string{"get", "watch"},
+		Verbs:         []string{"get", "list", "watch"},
 	}}
 	if !found {
 		role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: key.Namespace}, Rules: rules}

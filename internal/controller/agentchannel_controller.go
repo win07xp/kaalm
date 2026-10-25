@@ -91,8 +91,8 @@ type AgentChannelReconciler struct {
 	OperatorNamespace string
 	// SecretReader reads Secrets in user namespaces, which the manager's
 	// cache does not hold. In production it is a secretwatch.Reader: one
-	// name-filtered watch per referenced Secret, so repeated reads are cache
-	// hits. nil falls back to the embedded client. SecretChanges reports
+	// name-selected list and watch per referenced Secret, so repeated reads
+	// are cache hits. nil falls back to the embedded client. SecretChanges reports
 	// changes to the Secrets read through it.
 	SecretReader client.Reader
 	// SecretChanges is the watcher behind SecretReader. When set, a change
@@ -251,9 +251,9 @@ func (r *AgentChannelReconciler) scopeCredentialRoles(
 ) (reason, msg string, err error) {
 	// Step 3: the controller-only check Role must exist BEFORE any Secret
 	// read: the operator has no standing Secret read in user namespaces, and
-	// RBAC has no label-scoped grant, so it needs get and watch on every
-	// referenced name to see the rule 45 label. The gateway's Role follows
-	// the reads and lists only the Secrets that opted in.
+	// RBAC has no label-scoped grant, so it needs get, list, and watch on
+	// every referenced name to see the rule 45 label. The gateway's Role
+	// follows the reads and lists only the Secrets that opted in.
 	names := authSecretNames(channel)
 	refs := make([]corev1.LocalObjectReference, 0, len(names))
 	for _, n := range names {
@@ -446,9 +446,10 @@ func channelCheckRoleName(channelName string) string {
 }
 
 // ensureCredentialRole creates or updates the per-channel gateway-facing Role
-// (get, watch, resourceNames-scoped; list deliberately omitted since
-// resourceNames cannot constrain it) and its single RoleBinding to the gateway
-// ServiceAccount, then removes the controller's binding to that Role when the
+// (get, list, watch, resourceNames-scoped: the API server takes the name of a
+// list or watch from its exact metadata.name field selector and refuses one
+// without it, so resourceNames bounds all three) and its single RoleBinding to
+// the gateway ServiceAccount, then removes the controller's binding to that Role when the
 // channel controls it. The Role lists only names, the referenced Secrets that
 // carry the rule 45 label; with none it has no rules at all, never one rule
 // with empty resourceNames, which would grant every Secret.
@@ -461,7 +462,7 @@ func (r *AgentChannelReconciler) ensureCredentialRole(
 			APIGroups:     []string{""},
 			Resources:     []string{"secrets"},
 			ResourceNames: names,
-			Verbs:         []string{"get", "watch"},
+			Verbs:         []string{"get", "list", "watch"},
 		}}
 	}
 	role := &rbacv1.Role{
