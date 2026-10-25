@@ -357,9 +357,10 @@ func main() {
 		logger.Error("registering the watched-Secrets gauge failed", "error", err)
 		os.Exit(1)
 	}
-	// A Secret the gateway may not read yet answers its last refusal for a
-	// second instead of costing a GET per request, and a grant that lands is
-	// used within that second.
+	// A Secret the gateway may not read answers its last refusal for a second
+	// instead of costing a refused LIST and a probe GET per request. A Role
+	// that lacks only list reads live and retries the list once a second, so
+	// a grant that lands is used within that second.
 	store.Secrets.ErrorTTL = time.Second
 
 	go func() {
