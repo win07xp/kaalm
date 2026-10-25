@@ -19,16 +19,13 @@ package secretwatch
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestReaderServesSecretsAndCopies(t *testing.T) {
@@ -89,9 +86,7 @@ func TestReaderReportsForbiddenAsForbidden(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset(secretObj("team-a", "hook", "x"))
-	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("no grant"))
-	})
+	refuse(cs, "list", "get")
 	w := New(ctx, cs)
 	w.SyncTimeout = 50 * time.Millisecond
 
@@ -105,30 +100,17 @@ func TestReaderRepeatedReadsCostNoGet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset(secretObj("team-a", "hook", "x"))
-	var gets atomic.Int32
-	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		gets.Add(1)
-		return false, nil, nil
-	})
+	gets := countVerb(cs, "get")
+	lists := countVerb(cs, "list")
 	r := NewReader(New(ctx, cs))
 	key := types.NamespacedName{Namespace: "team-a", Name: "hook"}
-	if err := r.Get(ctx, key, &corev1.Secret{}); err != nil {
-		t.Fatal(err)
-	}
-	// The informer's read and its confirmation once the watch opens.
-	deadline := time.Now().Add(3 * time.Second)
-	for gets.Load() != 2 {
-		if time.Now().After(deadline) {
-			t.Fatalf("the informer cost %d GETs, want 2", gets.Load())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	for range 10 {
+	for range 11 {
 		if err := r.Get(ctx, key, &corev1.Secret{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := gets.Load() - 2; n != 0 {
-		t.Fatalf("10 reads cost %d GETs, want 0", n)
+	// The informer's one LIST, and no GET.
+	if n, g := lists.Load(), gets.Load(); n != 1 || g != 0 {
+		t.Fatalf("11 reads cost %d LISTs and %d GETs, want 1 and 0", n, g)
 	}
 }

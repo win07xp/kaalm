@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,15 +67,32 @@ func waitUntil(t *testing.T, d time.Duration, fn func() bool) {
 	}
 }
 
+// countVerb counts the fake clientset's Secret requests of one verb.
+func countVerb(cs *fake.Clientset, verb string) *atomic.Int32 {
+	var n atomic.Int32
+	cs.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		n.Add(1)
+		return false, nil, nil
+	})
+	return &n
+}
+
+// refuse answers every Secret request of the given verbs as Forbidden.
+func refuse(cs *fake.Clientset, verbs ...string) {
+	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("no grant"))
+	for _, verb := range verbs {
+		cs.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, forbidden
+		})
+	}
+}
+
 func TestWatcherServesAndFollowsRotation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset(secretObj("kaalm-system", "openai-key", "v1"))
-	var gets atomic.Int32
-	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		gets.Add(1)
-		return false, nil, nil
-	})
+	gets := countVerb(cs, "get")
+	lists := countVerb(cs, "list")
 	watches := watchStarts(cs)
 	w := New(ctx, cs)
 
@@ -85,10 +103,9 @@ func TestWatcherServesAndFollowsRotation(t *testing.T) {
 	if got := string(sec.Data["token"]); got != "v1" {
 		t.Fatalf("token = %q, want v1", got)
 	}
-	// The read and the confirmation once the watch opens.
-	eventually(t, func() bool { return watches() == 1 && gets.Load() == 2 })
+	eventually(t, func() bool { return watches() == 1 })
 	// Rotation: an in-place update reaches the cache through the watch, with
-	// no further GET.
+	// no further request.
 	rotated := secretObj("kaalm-system", "openai-key", "v2")
 	if _, err := cs.CoreV1().Secrets("kaalm-system").Update(ctx, rotated, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
@@ -97,8 +114,11 @@ func TestWatcherServesAndFollowsRotation(t *testing.T) {
 		sec, err := w.Get(ctx, "kaalm-system", "openai-key")
 		return err == nil && string(sec.Data["token"]) == "v2"
 	})
-	if got := gets.Load() - 2; got != 0 {
-		t.Fatalf("rotation cost %d live GETs, want 0", got)
+	if got := gets.Load(); got != 0 {
+		t.Errorf("reads cost %d GETs, want 0", got)
+	}
+	if got := lists.Load(); got != 1 {
+		t.Errorf("reads cost %d LISTs, want 1", got)
 	}
 }
 
@@ -124,41 +144,44 @@ func TestWatcherReturnsTheListErrorWhenSyncFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset()
-	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("no grant"))
-	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, forbidden
-	})
+	refuse(cs, "list", "get")
 	w := New(ctx, cs)
 	w.SyncTimeout = 100 * time.Millisecond
 
 	_, err := w.Get(ctx, "team-a", "hook")
 	if !apierrors.IsForbidden(err) {
-		t.Fatalf("err = %v, want the informer GET's Forbidden", err)
+		t.Fatalf("err = %v, want the informer LIST's Forbidden", err)
 	}
 }
 
-// grantable is a clientset holding team-a/hook whose GETs are refused as
-// Forbidden until grant is called, counting every GET.
+// grantable is a clientset holding team-a/hook whose LISTs and GETs are
+// refused as Forbidden until grant is called, counting every LIST and GET.
 type grantable struct {
 	cs      *fake.Clientset
 	granted atomic.Bool
+	lists   atomic.Int32
 	gets    atomic.Int32
 }
 
 func newGrantable() *grantable {
 	g := &grantable{cs: fake.NewSimpleClientset(secretObj("team-a", "hook", "s3cr3t"))}
 	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("no grant"))
-	g.cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		g.gets.Add(1)
-		if g.granted.Load() {
-			return false, nil, nil
-		}
-		return true, nil, forbidden
-	})
+	for verb, n := range map[string]*atomic.Int32{"list": &g.lists, "get": &g.gets} {
+		g.cs.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			n.Add(1)
+			if g.granted.Load() {
+				return false, nil, nil
+			}
+			return true, nil, forbidden
+		})
+	}
 	return g
 }
 
 func (g *grantable) grant() { g.granted.Store(true) }
+
+// requests is every LIST and GET the clientset has answered.
+func (g *grantable) requests() int32 { return g.lists.Load() + g.gets.Load() }
 
 // A Secret the watcher may not read costs one fast error per read, not a
 // SyncTimeout wait and a live GET per read.
@@ -176,9 +199,10 @@ func TestWatcherAnswersAFailedSyncAtOnce(t *testing.T) {
 			t.Fatalf("read %d: err = %v, want Forbidden", i, err)
 		}
 	}
-	// The first list only: the refused informer stops instead of retrying.
-	if got := g.gets.Load(); got != 1 {
-		t.Errorf("20 reads of a forbidden Secret cost %d GETs, want 1", got)
+	// The first LIST and its probe GET only: the refused informer stops
+	// instead of retrying.
+	if got, probes := g.lists.Load(), g.gets.Load(); got != 1 || probes != 1 {
+		t.Errorf("20 reads of a forbidden Secret cost %d LISTs and %d GETs, want 1 and 1", got, probes)
 	}
 }
 
@@ -204,14 +228,14 @@ func TestWatcherAnswersTheCachedErrorUntilErrorTTL(t *testing.T) {
 	if got := string(sec.Data["token"]); got != "s3cr3t" {
 		t.Fatalf("token = %q, want s3cr3t", got)
 	}
-	before := g.gets.Load()
+	before := g.requests()
 	for range 10 {
 		if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 			t.Fatalf("cached read: %v", err)
 		}
 	}
-	if got := g.gets.Load() - before; got != 0 {
-		t.Errorf("reads after the grant cost %d GETs, want 0 (cache hits)", got)
+	if got := g.requests() - before; got != 0 {
+		t.Errorf("reads after the grant cost %d requests, want 0 (cache hits)", got)
 	}
 }
 
@@ -236,10 +260,10 @@ func TestWatcherZeroErrorTTLRetriesOnTheNextRead(t *testing.T) {
 	}
 }
 
-// An informer whose first GET is refused stops instead of retrying on its
-// own: until ErrorTTL passes, reads answer the refusal and cost no GET, even
-// once a grant lands.
-func TestWatcherStopsAnInformerWhoseFirstGetIsForbidden(t *testing.T) {
+// An informer whose first LIST is refused, with GET refused too, stops
+// instead of retrying on its own: until ErrorTTL passes, reads answer the
+// refusal and cost no request, even once a grant lands.
+func TestWatcherStopsAnInformerWhoseListIsForbidden(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	g := newGrantable()
@@ -257,13 +281,16 @@ func TestWatcherStopsAnInformerWhoseFirstGetIsForbidden(t *testing.T) {
 			t.Fatalf("read %d within ErrorTTL: err = %v, want the cached Forbidden", i, err)
 		}
 	}
-	if got := g.gets.Load(); got != 1 {
-		t.Errorf("a stopped informer and 11 reads cost %d GETs, want 1", got)
+	if got := g.requests(); got != 2 {
+		t.Errorf("a stopped informer and 11 reads cost %d requests, want 2 (one LIST, one probe GET)", got)
 	}
 }
 
 // hookKey is the Secret the revocable and grantable clientsets hold.
 var hookKey = types.NamespacedName{Namespace: "team-a", Name: "hook"}
+
+// hookSelector is the field selector the watcher's requests for hook carry.
+const hookSelector = "metadata.name=hook"
 
 // reflectorWait bounds a wait that spans a reflector backoff: its first
 // retry comes 0.8 to 1.6s after a failure, the next 1.6 to 3.2s later.
@@ -284,24 +311,31 @@ func currentEntry(w *Watcher, key types.NamespacedName) *secretInformer {
 }
 
 // revocable is a clientset holding team-a/hook (token "v", resourceVersion
-// 1, UID hook-1) whose GETs and watches can be made to fail. Every watch it
-// opens is a fake the test drives: endWatch ends the newest one, as an API
-// server does when a watch times out, and latestWatch delivers events
-// through it. After expireOldVersions, a watch from a given resourceVersion
-// ends at once with 410 Expired and is not counted as open.
+// 1, UID hook-1) whose LISTs, GETs, and watches can be made to fail. A LIST
+// answers the namespace's Secrets at collection version listRV ("7"). Every
+// watch it opens is a fake the test drives: endWatch ends the newest one, as
+// an API server does when a watch times out, and latestWatch delivers events
+// through it. After expireOldVersions, a watch from any version but listRV
+// ends at once with 410 Expired and is not counted as open. It records the
+// field selector of every LIST and watch and the version every watch starts
+// from.
 type revocable struct {
 	cs      *fake.Clientset
+	lists   atomic.Int32 // every LIST
+	refused atomic.Int32 // LISTs answered with listErr
 	gets    atomic.Int32 // every GET
-	refused atomic.Int32 // GETs answered with getErr
 	expired atomic.Int32 // watches answered with 410 Expired
 
-	mu           sync.Mutex
-	getErr       error
-	watchErr     error
-	expire       bool
-	deleteOnOpen bool
-	onOpen       func()
-	watches      []*watch.RaceFreeFakeWatcher
+	mu             sync.Mutex
+	listErr        error
+	getErr         error
+	watchErr       error
+	listRV         string
+	expire         bool
+	listSelectors  []string
+	watchSelectors []string
+	watchVersions  []string
+	watches        []*watch.RaceFreeFakeWatcher
 }
 
 // hookUID is the UID of the Secret the revocable clientset holds.
@@ -316,27 +350,50 @@ func hookAt(uid, rv string) *corev1.Secret {
 	return sec
 }
 
+var (
+	secretsGVR = corev1.SchemeGroupVersion.WithResource("secrets")
+	secretGVK  = corev1.SchemeGroupVersion.WithKind("Secret")
+)
+
 func newRevocable() *revocable {
-	r := &revocable{cs: fake.NewSimpleClientset(hookAt(hookUID, "1"))}
+	r := &revocable{cs: fake.NewSimpleClientset(hookAt(hookUID, "1")), listRV: "7"}
+	r.cs.PrependReactor("list", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		r.lists.Add(1)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.listSelectors = append(r.listSelectors, action.(k8stesting.ListAction).GetListRestrictions().Fields.String())
+		if r.listErr != nil {
+			r.refused.Add(1)
+			return true, nil, r.listErr
+		}
+		obj, err := r.cs.Tracker().List(secretsGVR, secretGVK, action.GetNamespace())
+		if err != nil {
+			return true, nil, err
+		}
+		list := obj.(*corev1.SecretList)
+		list.ResourceVersion = r.listRV
+		return true, list, nil
+	})
 	r.cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		r.gets.Add(1)
 		r.mu.Lock()
 		err := r.getErr
 		r.mu.Unlock()
 		if err != nil {
-			r.refused.Add(1)
 			return true, nil, err
 		}
 		return false, nil, nil
 	})
 	r.cs.PrependWatchReactor("secrets", func(action k8stesting.Action) (bool, watch.Interface, error) {
 		r.mu.Lock()
+		defer r.mu.Unlock()
+		restrictions := action.(k8stesting.WatchAction).GetWatchRestrictions()
+		r.watchSelectors = append(r.watchSelectors, restrictions.Fields.String())
+		r.watchVersions = append(r.watchVersions, restrictions.ResourceVersion)
 		if r.watchErr != nil {
-			defer r.mu.Unlock()
 			return true, nil, r.watchErr
 		}
-		if rv := action.(k8stesting.WatchAction).GetWatchRestrictions().ResourceVersion; r.expire && rv != "" {
-			defer r.mu.Unlock()
+		if rv := restrictions.ResourceVersion; r.expire && rv != r.listRV {
 			r.expired.Add(1)
 			fw := watch.NewRaceFreeFake()
 			st := apierrors.NewResourceExpired(fmt.Sprintf("too old resource version: %s (100)", rv)).ErrStatus
@@ -345,72 +402,58 @@ func newRevocable() *revocable {
 		}
 		fw := watch.NewRaceFreeFake()
 		r.watches = append(r.watches, fw)
-		if r.deleteOnOpen {
-			r.deleteOnOpen = false
-			r.removeHook()
-		}
-		onOpen := r.onOpen
-		r.onOpen = nil
-		r.mu.Unlock()
-		if onOpen != nil {
-			onOpen()
-		}
 		return true, fw, nil
 	})
 	return r
 }
 
-// whenOpened runs fn once, outside r.mu, as the next watch opens.
-func (r *revocable) whenOpened(fn func()) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.onOpen = fn
-}
-
-// settled waits across a reflector backoff until the clientset has opened
-// watches watches and answered gets GETs.
-func (r *revocable) settled(t *testing.T, watches int, gets int32) {
+// settled waits across a reflector backoff until the clientset has answered
+// lists LISTs and opened watches watches.
+func (r *revocable) settled(t *testing.T, lists int32, watches int) {
 	t.Helper()
-	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == watches && r.gets.Load() == gets })
+	eventuallyAcrossBackoff(t, func() bool { return r.lists.Load() == lists && r.watchCount() == watches })
 }
 
 // removeHook deletes team-a/hook from the clientset's store without an
-// event, as the API server holds it once a delete has landed before a
-// watch's start version.
+// event.
 func (r *revocable) removeHook() {
-	if err := r.cs.Tracker().Delete(corev1.SchemeGroupVersion.WithResource("secrets"), "team-a", "hook"); err != nil {
+	if err := r.cs.Tracker().Delete(secretsGVR, "team-a", "hook"); err != nil {
 		panic(err)
 	}
 }
 
-// deleteBeforeOpen deletes team-a/hook as the next watch opens, so the
-// informer's GET saw the Secret and the watch's opening replay does not
-// carry it: the delete landed between the two.
-func (r *revocable) deleteBeforeOpen() {
+// fail makes later LISTs answer listErr and later watches watchErr; nil lets
+// them through. GETs are left as they are.
+func (r *revocable) fail(listErr, watchErr error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.deleteOnOpen = true
+	r.listErr, r.watchErr = listErr, watchErr
 }
 
-// fail makes later GETs and watches answer getErr and watchErr; nil lets
-// them through.
-func (r *revocable) fail(getErr, watchErr error) {
+// failGets makes later GETs answer err; nil lets them through.
+func (r *revocable) failGets(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.getErr, r.watchErr = getErr, watchErr
+	r.getErr = err
 }
 
-// revoke refuses later GETs and watches as Forbidden, as the API server does
-// once the Role granting them is gone.
+// revoke refuses later LISTs, GETs, and watches as Forbidden, as the API
+// server does once the Role granting them is gone.
 func (r *revocable) revoke() {
 	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("role deleted"))
 	r.fail(forbidden, forbidden)
+	r.failGets(forbidden)
 }
 
-// expireOldVersions makes later watches from a given resourceVersion end at
-// once with 410 Expired, as the API server answers once its watch cache has
-// dropped that version. A watch from "" (the most recent version) still
-// opens.
+// refuseListOnly refuses later LISTs as Forbidden and leaves GETs and
+// watches allowed, as a Role from before the watcher listed does.
+func (r *revocable) refuseListOnly() {
+	r.fail(apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("get and watch only")), nil)
+}
+
+// expireOldVersions makes later watches from any version but the LIST's
+// end at once with 410 Expired, as the API server answers once its watch
+// cache has dropped that version.
 func (r *revocable) expireOldVersions() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -429,12 +472,90 @@ func (r *revocable) latestWatch() *watch.RaceFreeFakeWatcher {
 	return r.watches[len(r.watches)-1]
 }
 
+// recorded returns the field selectors of every LIST and watch so far and
+// the version every watch started from.
+func (r *revocable) recorded() (lists, watches, versions []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.listSelectors...), append([]string{}, r.watchSelectors...),
+		append([]string{}, r.watchVersions...)
+}
+
 // endWatch ends the newest watch, so the reflector watches or lists again.
 func (r *revocable) endWatch() { r.latestWatch().Stop() }
 
-// A synced informer whose GET is refused (its Role was deleted) stops, and
-// the next read answers Forbidden instead of the cached Secret.
-func TestWatcherStopsAnInformerWhoseGetIsForbidden(t *testing.T) {
+// A read costs one LIST selected to the Secret's name and one watch with the
+// same selector from that LIST's version, and no GET. Later reads are cache
+// hits.
+func TestWatcherReadCostsOneNameSelectedListAndOneWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil || string(sec.Data["token"]) != "v" {
+		t.Fatalf("first read: sec = %v, err = %v, want token v", sec, err)
+	}
+	r.settled(t, 1, 1)
+	for range 10 {
+		if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+			t.Fatalf("cached read: %v", err)
+		}
+	}
+	// Longer than the reflector's first retry, so a late request would show.
+	time.Sleep(time.Second)
+	lists, watches, versions := r.recorded()
+	if len(lists) != 1 || lists[0] != hookSelector {
+		t.Errorf("LIST selectors = %q, want one %q", lists, hookSelector)
+	}
+	if len(watches) != 1 || watches[0] != hookSelector {
+		t.Errorf("watch selectors = %q, want one %q", watches, hookSelector)
+	}
+	if len(versions) != 1 || versions[0] != "7" {
+		t.Errorf("watch versions = %q, want one from the LIST's version 7", versions)
+	}
+	if got := r.gets.Load(); got != 0 {
+		t.Errorf("reads cost %d GETs, want 0", got)
+	}
+}
+
+// A Secret deleted after the LIST arrives on the watch, which starts at the
+// LIST's version: the informer drops it and reports the delete, with no
+// GET.
+func TestWatcherDropsASecretDeletedBetweenListAndWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	w := New(ctx, r.cs)
+	rec := newRecorder()
+	w.Subscribe(rec.notify)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	r.settled(t, 1, 1)
+	if _, _, versions := r.recorded(); len(versions) != 1 || versions[0] != "7" {
+		t.Fatalf("watch versions = %q, want one from the LIST's version 7", versions)
+	}
+	// The API server replays the delete that landed after version 7.
+	r.removeHook()
+	r.latestWatch().Delete(hookAt(hookUID, "8"))
+	eventually(t, func() bool {
+		_, err := w.Get(ctx, "team-a", "hook")
+		return apierrors.IsNotFound(err)
+	})
+	rec.expect(t, hookKey)
+	rec.expectNone(t, 200*time.Millisecond)
+	if got := r.gets.Load(); got != 0 {
+		t.Errorf("GETs = %d, want 0", got)
+	}
+}
+
+// A synced informer whose relist is refused, with GET refused too (its Role
+// was deleted), stops, and the next read answers Forbidden instead of the
+// cached Secret.
+func TestWatcherStopsAnInformerWhoseRelistIsForbidden(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	r := newRevocable()
@@ -443,10 +564,10 @@ func TestWatcherStopsAnInformerWhoseGetIsForbidden(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	// The refusal lands on the relist's GET, not the confirmation.
-	r.settled(t, 1, 2)
+	r.settled(t, 1, 1)
 	entry := currentEntry(w, hookKey)
 	r.revoke()
+	// The watch re-opens into the refusal, and the relist after it decides.
 	r.endWatch()
 	eventuallyAcrossBackoff(t, func() bool { return r.refused.Load() >= 1 })
 	eventuallyAcrossBackoff(t, entry.informer.IsStopped)
@@ -454,6 +575,195 @@ func TestWatcherStopsAnInformerWhoseGetIsForbidden(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
 		t.Fatalf("read after the refusal: err = %v, want Forbidden, not the cached Secret", err)
 	}
+}
+
+// A LIST refused while GET is still allowed is a Role that predates the
+// watcher's list (an upgrade in progress): reads go live through GET until
+// ErrorTTL, then the next read tries the LIST again.
+func TestWatcherReadsLiveWhileListIsForbiddenButGetAllowed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRevocable()
+	r.refuseListOnly()
+	w := New(ctx, r.cs)
+	w.ErrorTTL = time.Hour
+
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil || string(sec.Data["token"]) != "v" {
+		t.Fatalf("first read: sec = %v, err = %v, want the live Secret", sec, err)
+	}
+	entry := currentEntry(w, hookKey)
+	eventuallyAcrossBackoff(t, entry.informer.IsStopped)
+	lists, gets := r.lists.Load(), r.gets.Load()
+	for i := range 10 {
+		sec, err := w.Get(ctx, "team-a", "hook")
+		if err != nil || string(sec.Data["token"]) != "v" {
+			t.Fatalf("read %d: sec = %v, err = %v, want the live Secret", i, sec, err)
+		}
+	}
+	if got := r.gets.Load() - gets; got != 10 {
+		t.Errorf("10 reads cost %d GETs, want 10 live reads", got)
+	}
+	if got := r.lists.Load() - lists; got != 0 {
+		t.Errorf("10 reads within ErrorTTL cost %d LISTs, want 0", got)
+	}
+
+	// Past ErrorTTL the next read tries the LIST again.
+	w.ErrorTTL = 0
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("read after ErrorTTL: %v", err)
+	}
+	if got := r.lists.Load() - lists; got != 1 {
+		t.Errorf("the read after ErrorTTL cost %d LISTs, want 1", got)
+	}
+
+	// Once the Role carries list, a read syncs and later reads are cache
+	// hits.
+	r.fail(nil, nil)
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("read after the grant: %v", err)
+	}
+	r.settled(t, r.lists.Load(), 1)
+	lists, gets = r.lists.Load(), r.gets.Load()
+	for range 10 {
+		if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+			t.Fatalf("cached read: %v", err)
+		}
+	}
+	if r.lists.Load() != lists || r.gets.Load() != gets {
+		t.Errorf("10 cached reads cost %d LISTs and %d GETs, want none",
+			r.lists.Load()-lists, r.gets.Load()-gets)
+	}
+}
+
+// While the LIST is refused, a read answers what the live GET answers: an
+// absent Secret is NotFound and a failing API server is its own error, never
+// the LIST's Forbidden.
+func TestWatcherAnswersTheLiveGetWhileListIsForbidden(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(r *revocable)
+		want  func(error) bool
+	}{
+		{"absent Secret", func(r *revocable) { r.removeHook() }, apierrors.IsNotFound},
+		{"internal error", func(r *revocable) {
+			r.failGets(apierrors.NewInternalError(errors.New("etcd unavailable")))
+		}, apierrors.IsInternalError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r := newRevocable()
+			r.refuseListOnly()
+			tc.setup(r)
+			w := New(ctx, r.cs)
+
+			if _, err := w.Get(ctx, "team-a", "hook"); !tc.want(err) {
+				t.Fatalf("read: err = %v, want the live GET's error", err)
+			}
+		})
+	}
+}
+
+// WatchTimeout replaces the reflector's watch timeout; 0 keeps it.
+func TestWatcherWatchTimeoutSetsTheRequestTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		want    func(int64) bool
+	}{
+		{"set", 5 * time.Second, func(s int64) bool { return s == 5 }},
+		{"default", 0, func(s int64) bool { return s >= 300 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var mu sync.Mutex
+			var timeouts []int64
+			cs := hookedClient{
+				Interface: fake.NewSimpleClientset(secretObj("team-a", "hook", "x")),
+				watch: func(opts metav1.ListOptions) {
+					mu.Lock()
+					defer mu.Unlock()
+					if opts.TimeoutSeconds != nil {
+						timeouts = append(timeouts, *opts.TimeoutSeconds)
+					} else {
+						timeouts = append(timeouts, -1)
+					}
+				},
+			}
+			w := New(ctx, cs)
+			w.WatchTimeout = tc.timeout
+			if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return len(timeouts) == 1
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			if !tc.want(timeouts[0]) {
+				t.Errorf("watch TimeoutSeconds = %d", timeouts[0])
+			}
+		})
+	}
+}
+
+// The gauge counts running informers: one per Secret read, none for a
+// stopped one.
+func TestWatcherReportsWatchedSecretsGauge(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := fake.NewSimpleClientset(secretObj("team-a", "hook", "x"), secretObj("team-a", "other", "y"))
+	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "denied", errors.New("no grant"))
+	for _, verb := range []string{"list", "get"} {
+		cs.PrependReactor(verb, "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if la, ok := action.(k8stesting.ListAction); ok && la.GetListRestrictions().Fields.String() == "metadata.name=denied" {
+				return true, nil, forbidden
+			}
+			if ga, ok := action.(k8stesting.GetAction); ok && ga.GetName() == "denied" {
+				return true, nil, forbidden
+			}
+			return false, nil, nil
+		})
+	}
+	w := New(ctx, cs)
+	gauge := w.Collector()
+	if got := testutil.ToFloat64(gauge); got != 0 {
+		t.Fatalf("gauge before any read = %v, want 0", got)
+	}
+	for _, name := range []string{"hook", "other"} {
+		if _, err := w.Get(ctx, "team-a", name); err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+	}
+	if got := testutil.ToFloat64(gauge); got != 2 {
+		t.Fatalf("gauge after two reads = %v, want 2", got)
+	}
+
+	// One janitor pass by hand: other has idled out.
+	w.mu.Lock()
+	other := types.NamespacedName{Namespace: "team-a", Name: "other"}
+	w.informers[other].halt()
+	w.informers[other].halt()
+	delete(w.informers, other)
+	w.mu.Unlock()
+	if got := testutil.ToFloat64(gauge); got != 1 {
+		t.Fatalf("gauge after an eviction = %v, want 1 (a halt counts once)", got)
+	}
+
+	if _, err := w.Get(ctx, "team-a", "denied"); !apierrors.IsForbidden(err) {
+		t.Fatalf("read denied: err = %v, want Forbidden", err)
+	}
+	denied := currentEntry(w, types.NamespacedName{Namespace: "team-a", Name: "denied"})
+	eventuallyAcrossBackoff(t, denied.informer.IsStopped)
+	if got := testutil.ToFloat64(gauge); got != 1 {
+		t.Fatalf("gauge after a refused read = %v, want 1", got)
+	}
+
+	cancel()
+	eventually(t, func() bool { return testutil.ToFloat64(gauge) == 0 })
 }
 
 // A later read starts a fresh informer once ErrorTTL has passed, and
@@ -470,21 +780,22 @@ func TestWatcherRestartsAForbiddenInformerOnALaterRead(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	eventually(t, func() bool { return r.watchCount() == 1 })
+	r.settled(t, 1, 1)
 	old := currentEntry(w, hookKey)
 	r.revoke()
 	r.endWatch()
 	eventuallyAcrossBackoff(t, old.informer.IsStopped)
 
-	before := r.gets.Load()
+	before := r.lists.Load() + r.gets.Load()
 	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
 		t.Fatalf("read within ErrorTTL: err = %v, want the cached Forbidden", err)
 	}
-	if got := r.gets.Load() - before; got != 0 {
-		t.Errorf("read within ErrorTTL cost %d GETs, want 0", got)
+	if got := r.lists.Load() + r.gets.Load() - before; got != 0 {
+		t.Errorf("read within ErrorTTL cost %d requests, want 0", got)
 	}
 
 	r.fail(nil, nil)
+	r.failGets(nil)
 	time.Sleep(250 * time.Millisecond)
 	sec, err := w.Get(ctx, "team-a", "hook")
 	if err != nil {
@@ -509,7 +820,7 @@ func TestWatcherRestartsAForbiddenInformerOnALaterRead(t *testing.T) {
 	rec.expectNone(t, 200*time.Millisecond)
 }
 
-// Errors other than a refused GET leave the informer running: a synced one
+// Errors other than a refused LIST leave the informer running: a synced one
 // keeps serving its cache and resumes once the error clears.
 func TestWatcherKeepsServingThroughTransientErrors(t *testing.T) {
 	for _, tc := range []struct {
@@ -517,7 +828,7 @@ func TestWatcherKeepsServingThroughTransientErrors(t *testing.T) {
 		err  error
 	}{
 		{"internal error", apierrors.NewInternalError(errors.New("etcd unavailable"))},
-		{"server timeout", apierrors.NewServerTimeout(corev1.Resource("secrets"), "get", 1)},
+		{"server timeout", apierrors.NewServerTimeout(corev1.Resource("secrets"), "list", 1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -528,12 +839,11 @@ func TestWatcherKeepsServingThroughTransientErrors(t *testing.T) {
 			if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 				t.Fatalf("first read: %v", err)
 			}
-			// The errors land on relists, not the confirmation.
-			r.settled(t, 1, 2)
+			r.settled(t, 1, 1)
 			entry := currentEntry(w, hookKey)
 			r.fail(tc.err, tc.err)
 			r.endWatch()
-			// A second failed GET means the informer retried after the first.
+			// A second failed LIST means the informer retried after the first.
 			eventuallyAcrossBackoff(t, func() bool { return r.refused.Load() >= 2 })
 			if entry.informer.IsStopped() {
 				t.Fatal("a transient error stopped the informer")
@@ -551,12 +861,14 @@ func TestWatcherKeepsServingThroughTransientErrors(t *testing.T) {
 			if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 				t.Fatalf("read after the error cleared: %v", err)
 			}
+			if got := r.gets.Load(); got != 0 {
+				t.Errorf("GETs = %d, want 0", got)
+			}
 		})
 	}
 }
 
-// A Secret deleted while its informer runs is a valid empty state, not a
-// reason to stop.
+// A Secret gone at a relist is a valid empty state, not a reason to stop.
 func TestWatcherKeepsRunningOnANotFoundSecret(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -566,14 +878,17 @@ func TestWatcherKeepsRunningOnANotFoundSecret(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	eventually(t, func() bool { return r.watchCount() == 1 })
+	r.settled(t, 1, 1)
 	entry := currentEntry(w, hookKey)
-	r.fail(apierrors.NewNotFound(corev1.Resource("secrets"), "hook"), nil)
+	// A bookmark moves the reflector past the LIST's version, the re-watch
+	// from there expires, and the relist finds the Secret gone.
+	r.latestWatch().Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "50"}})
+	r.expireOldVersions()
+	r.removeHook()
 	r.endWatch()
-	// The relist's GET answers NotFound, then the informer watches again.
-	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 2 })
+	r.settled(t, 2, 2)
 	if entry.informer.IsStopped() {
-		t.Fatal("a NotFound GET stopped the informer")
+		t.Fatal("an empty relist stopped the informer")
 	}
 	// The relist queues the deletion and opens the next watch at once; the
 	// informer drops the Secret from its store a moment later, on its own
@@ -582,10 +897,13 @@ func TestWatcherKeepsRunningOnANotFoundSecret(t *testing.T) {
 		_, err := w.Get(ctx, "team-a", "hook")
 		return apierrors.IsNotFound(err)
 	})
+	if got := r.gets.Load(); got != 0 {
+		t.Errorf("GETs = %d, want 0", got)
+	}
 }
 
-// Only a refused GET stops an informer. A refused watch alone (a get-only
-// grant) leaves the informer relisting and serving its cache.
+// Only a refused LIST stops an informer. A refused watch alone leaves the
+// informer relisting and serving its cache.
 func TestWatcherKeepsRunningWhenOnlyTheWatchIsForbidden(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -595,68 +913,18 @@ func TestWatcherKeepsRunningWhenOnlyTheWatchIsForbidden(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	r.settled(t, 1, 2)
+	r.settled(t, 1, 1)
 	entry := currentEntry(w, hookKey)
-	r.fail(nil, apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("get only")))
+	r.fail(nil, apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("no watch")))
 	r.endWatch()
-	// The initial GET and its confirmation, a relist, and a relist after a
-	// refused watch.
-	eventuallyAcrossBackoff(t, func() bool { return r.gets.Load() >= 4 })
+	// The first LIST and two relists after refused watches.
+	eventuallyAcrossBackoff(t, func() bool { return r.lists.Load() >= 3 })
 	if entry.informer.IsStopped() {
 		t.Fatal("a refused watch stopped the informer")
 	}
 	sec, err := w.Get(ctx, "team-a", "hook")
 	if err != nil || string(sec.Data["token"]) != "v" {
 		t.Fatalf("read: sec = %v, err = %v, want the Secret", sec, err)
-	}
-}
-
-// A Secret whose own resourceVersion the API server no longer holds still
-// gets an open watch that delivers later changes, at the cost of one watch
-// and two GETs: the read and its confirmation once the watch opens.
-func TestWatcherOpensAWatchWhenTheSecretVersionHasExpired(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	r.expireOldVersions()
-	w := New(ctx, r.cs)
-	rec := newRecorder()
-	w.Subscribe(rec.notify)
-
-	sec, err := w.Get(ctx, "team-a", "hook")
-	if err != nil || string(sec.Data["token"]) != "v" {
-		t.Fatalf("first read: sec = %v, err = %v, want token v", sec, err)
-	}
-	r.settled(t, 1, 2)
-
-	// The API server opens a watch from the most recent version by
-	// replaying the Secret's current state.
-	replay := secretObj("team-a", "hook", "v")
-	replay.ResourceVersion = "1"
-	r.latestWatch().Add(replay)
-	// Longer than the reflector's first retry, so a relist loop would show.
-	rec.expectNone(t, 2*time.Second)
-	if got := r.gets.Load(); got != 2 {
-		t.Errorf("GETs = %d, want 2", got)
-	}
-	if got := r.watchCount(); got != 1 {
-		t.Errorf("open watches = %d, want 1", got)
-	}
-	if r.latestWatch().IsStopped() {
-		t.Fatal("the watch closed")
-	}
-
-	changed := secretObj("team-a", "hook", "v2")
-	changed.ResourceVersion = "2"
-	r.latestWatch().Modify(changed)
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 200*time.Millisecond)
-	eventually(t, func() bool {
-		sec, err := w.Get(ctx, "team-a", "hook")
-		return err == nil && string(sec.Data["token"]) == "v2"
-	})
-	if got := r.gets.Load(); got != 2 {
-		t.Errorf("GETs after the change = %d, want 2", got)
 	}
 }
 
@@ -673,280 +941,71 @@ func TestWatcherRecoversWhenItsWatchExpires(t *testing.T) {
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	eventually(t, func() bool { return r.watchCount() == 1 })
+	r.settled(t, 1, 1)
 	// A bookmark moves the reflector to version 50; the next watch resumes
 	// from there, and the API server has dropped it by then.
 	r.latestWatch().Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "50"}})
 	r.expireOldVersions()
 	r.endWatch()
-	// Each watch from the most recent version follows a GET and is
-	// confirmed by another.
-	r.settled(t, 2, 4)
+	r.settled(t, 2, 2)
 	if r.expired.Load() < 1 {
 		t.Fatal("no watch expired, so the test did not exercise the relist")
 	}
-
-	gets := r.gets.Load()
-	replay := secretObj("team-a", "hook", "v")
-	replay.ResourceVersion = "1"
-	r.latestWatch().Add(replay)
+	// The relist brings back the unchanged Secret, which is no change.
+	// Longer than the reflector's first retry, so a relist loop would show.
 	rec.expectNone(t, 2*time.Second)
-	if got := r.gets.Load(); got != gets {
-		t.Errorf("GETs on the open watch = %d, want %d", got, gets)
+	if got := r.lists.Load(); got != 2 {
+		t.Errorf("LISTs = %d, want 2", got)
 	}
 	if got := r.watchCount(); got != 2 {
 		t.Errorf("open watches = %d, want 2", got)
 	}
 
 	changed := secretObj("team-a", "hook", "v2")
-	changed.ResourceVersion = "2"
+	changed.ResourceVersion = "51"
 	r.latestWatch().Modify(changed)
 	rec.expect(t, hookKey)
 	rec.expectNone(t, 200*time.Millisecond)
 }
 
-// expectGone waits until reads of team-a/hook answer NotFound.
-func expectGone(t *testing.T, w *Watcher) {
-	t.Helper()
-	eventually(t, func() bool {
-		_, err := w.Get(context.Background(), "team-a", "hook")
-		return apierrors.IsNotFound(err)
-	})
-}
-
-// A Secret deleted after the informer's GET but before its watch's start
-// version is in neither the GET nor the watch's opening replay. The informer
-// still drops it and reports the delete once.
-func TestWatcherDropsASecretDeletedBeforeItsWatchOpens(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	r.deleteBeforeOpen()
-	w := New(ctx, r.cs)
-	rec := newRecorder()
-	w.Subscribe(rec.notify)
-
-	// The informer's GET saw the Secret; the delete may already have reached
-	// the store by the time the read looks.
-	if _, err := w.Get(ctx, "team-a", "hook"); err != nil && !apierrors.IsNotFound(err) {
-		t.Fatalf("first read: %v", err)
-	}
-	expectGone(t, w)
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 500*time.Millisecond)
-	if got := r.watchCount(); got != 1 {
-		t.Errorf("open watches = %d, want 1", got)
-	}
-	if r.latestWatch().IsStopped() {
-		t.Error("the watch closed")
-	}
-	if got := r.gets.Load(); got != 2 {
-		t.Errorf("GETs = %d, want 2 (the read and the confirmation)", got)
-	}
-}
-
-// A watch that closes before anything but an add has moved its version opens
-// again at the most recent version, which is the same gap.
-func TestWatcherDropsASecretDeletedBeforeItsReWatch(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	r.removeHook()
-	w := New(ctx, r.cs)
-	rec := newRecorder()
-	w.Subscribe(rec.notify)
-
-	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsNotFound(err) {
-		t.Fatalf("first read: err = %v, want NotFound", err)
-	}
-	eventually(t, func() bool { return r.watchCount() == 1 })
-	opened := time.Now()
-	created := hookAt(hookUID, "2")
-	if err := r.cs.Tracker().Add(created); err != nil {
-		t.Fatal(err)
-	}
-	r.latestWatch().Add(created)
-	rec.expect(t, hookKey)
-	eventually(t, func() bool {
-		_, err := w.Get(ctx, "team-a", "hook")
-		return err == nil
-	})
-	if got := r.gets.Load(); got != 1 {
-		t.Errorf("GETs before the re-watch = %d, want 1 (an absent Secret needs no confirmation)", got)
-	}
-
-	r.deleteBeforeOpen()
-	time.Sleep(time.Until(opened.Add(time.Second)))
-	r.endWatch()
-	expectGone(t, w)
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 500*time.Millisecond)
-	if got := r.watchCount(); got != 2 {
-		t.Errorf("open watches = %d, want 2", got)
-	}
-	if got := r.gets.Load(); got != 2 {
-		t.Errorf("GETs = %d, want 2 (the read and the re-watch's confirmation)", got)
-	}
-}
-
-// The watch a relist opens has the same gap after the relist's GET.
-func TestWatcherDropsASecretDeletedBeforeItsRelistWatch(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	w := New(ctx, r.cs)
-	rec := newRecorder()
-	w.Subscribe(rec.notify)
-
-	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
-		t.Fatalf("first read: %v", err)
-	}
-	eventually(t, func() bool { return r.watchCount() == 1 })
-	r.latestWatch().Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "50"}})
-	r.expireOldVersions()
-	r.deleteBeforeOpen()
-	r.endWatch()
-	eventuallyAcrossBackoff(t, func() bool { return r.watchCount() == 2 })
-	if r.expired.Load() < 1 {
-		t.Fatal("no watch expired, so the test did not exercise the relist")
-	}
-	expectGone(t, w)
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 500*time.Millisecond)
-
-	// A Secret created again under the same name is a new object.
-	recreated := hookAt("hook-2", "3")
-	r.latestWatch().Add(recreated)
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 200*time.Millisecond)
-	eventually(t, func() bool {
-		sec, err := w.Get(ctx, "team-a", "hook")
-		return err == nil && sec.UID == "hook-2"
-	})
-}
-
-// When the delete lands after the watch's start version, the watch also
-// carries the replay and the real delete. Subscribers still hear of it once.
-func TestWatcherReportsOneDeleteWhenTheWatchAlsoCarriesIt(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	r.deleteBeforeOpen()
-	w := New(ctx, r.cs)
-	rec := newRecorder()
-	w.Subscribe(rec.notify)
-
-	if _, err := w.Get(ctx, "team-a", "hook"); err != nil && !apierrors.IsNotFound(err) {
-		t.Fatalf("first read: %v", err)
-	}
-	r.settled(t, 1, 2)
-	r.latestWatch().Add(hookAt(hookUID, "1"))
-	r.latestWatch().Delete(hookAt(hookUID, "2"))
-	expectGone(t, w)
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 500*time.Millisecond)
-	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsNotFound(err) {
-		t.Fatalf("read after the delete: err = %v, want NotFound", err)
-	}
-
-	r.latestWatch().Add(hookAt("hook-2", "3"))
-	rec.expect(t, hookKey)
-	rec.expectNone(t, 200*time.Millisecond)
-	eventually(t, func() bool {
-		sec, err := w.Get(ctx, "team-a", "hook")
-		return err == nil && sec.UID == "hook-2"
-	})
-}
-
-// A confirmation that fails for any reason but NotFound changes nothing: the
-// informer keeps its Secret and its watch, and never records the failure.
-func TestWatcherIgnoresAConfirmingGetThatFails(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	r.whenOpened(func() { r.fail(apierrors.NewInternalError(errors.New("etcd unavailable")), nil) })
-	w := New(ctx, r.cs)
-	rec := newRecorder()
-	w.Subscribe(rec.notify)
-
-	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
-		t.Fatalf("first read: %v", err)
-	}
-	r.settled(t, 1, 2)
-	if got := r.refused.Load(); got != 1 {
-		t.Fatalf("refused GETs = %d, want 1 (the confirmation)", got)
-	}
-	r.fail(nil, nil)
-	sec, err := w.Get(ctx, "team-a", "hook")
-	if err != nil || string(sec.Data["token"]) != "v" {
-		t.Fatalf("read: sec = %v, err = %v, want token v", sec, err)
-	}
-	rec.expectNone(t, 500*time.Millisecond)
-	entry := currentEntry(w, hookKey)
-	if entry.failure.Load() != nil {
-		t.Error("the confirmation recorded a failure")
-	}
-	if entry.informer.IsStopped() {
-		t.Error("the informer stopped")
-	}
-	if got := r.watchCount(); got != 1 || r.latestWatch().IsStopped() {
-		t.Errorf("open watches = %d, want the first still open", got)
-	}
-}
-
-// A watch resumed from a known version delivers every later event, so it
-// needs no confirmation.
-func TestWatcherResumesFromAKnownVersionWithoutAGet(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := newRevocable()
-	w := New(ctx, r.cs)
-
-	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
-		t.Fatalf("first read: %v", err)
-	}
-	r.settled(t, 1, 2)
-	r.latestWatch().Action(watch.Bookmark, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "50"}})
-	r.endWatch()
-	r.settled(t, 2, 2)
-	// Longer than the reflector's first retry, so a late GET would show.
-	time.Sleep(time.Second)
-	if got := r.gets.Load(); got != 2 {
-		t.Errorf("GETs = %d, want 2", got)
-	}
-}
-
-// hangingClient blocks the first Secret GET until release is closed, so the
-// informer's list neither succeeds nor fails.
-type hangingClient struct {
+// hookedClient calls list before each Secret LIST and watch before each
+// Secret watch, when set.
+type hookedClient struct {
 	kubernetes.Interface
-	first   *atomic.Bool
-	release chan struct{}
+	list  func(ctx context.Context)
+	watch func(opts metav1.ListOptions)
 }
 
-func (c hangingClient) CoreV1() typedcorev1.CoreV1Interface {
-	return hangingCore{CoreV1Interface: c.Interface.CoreV1(), c: c}
+func (c hookedClient) CoreV1() typedcorev1.CoreV1Interface {
+	return hookedCore{CoreV1Interface: c.Interface.CoreV1(), c: c}
 }
 
-type hangingCore struct {
+type hookedCore struct {
 	typedcorev1.CoreV1Interface
-	c hangingClient
+	c hookedClient
 }
 
-func (h hangingCore) Secrets(namespace string) typedcorev1.SecretInterface {
-	return hangingSecrets{SecretInterface: h.CoreV1Interface.Secrets(namespace), c: h.c}
+func (h hookedCore) Secrets(namespace string) typedcorev1.SecretInterface {
+	return hookedSecrets{SecretInterface: h.CoreV1Interface.Secrets(namespace), c: h.c}
 }
 
-type hangingSecrets struct {
+type hookedSecrets struct {
 	typedcorev1.SecretInterface
-	c hangingClient
+	c hookedClient
 }
 
-func (h hangingSecrets) Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Secret, error) {
-	if h.c.first.CompareAndSwap(false, true) {
-		<-h.c.release
+func (h hookedSecrets) List(ctx context.Context, opts metav1.ListOptions) (*corev1.SecretList, error) {
+	if h.c.list != nil {
+		h.c.list(ctx)
 	}
-	return h.SecretInterface.Get(ctx, name, opts)
+	return h.SecretInterface.List(ctx, opts)
+}
+
+func (h hookedSecrets) Watch(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
+	if h.c.watch != nil {
+		h.c.watch(opts)
+	}
+	return h.SecretInterface.Watch(ctx, opts)
 }
 
 func TestWatcherFallsBackToLiveReadWhenTheListHangs(t *testing.T) {
@@ -954,10 +1013,14 @@ func TestWatcherFallsBackToLiveReadWhenTheListHangs(t *testing.T) {
 	defer cancel()
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	cs := hangingClient{
+	var first atomic.Bool
+	cs := hookedClient{
 		Interface: fake.NewSimpleClientset(secretObj("team-a", "hook", "s3cr3t")),
-		first:     &atomic.Bool{},
-		release:   release,
+		list: func(context.Context) {
+			if first.CompareAndSwap(false, true) {
+				<-release
+			}
+		},
 	}
 	w := New(ctx, cs)
 	w.SyncTimeout = 50 * time.Millisecond
