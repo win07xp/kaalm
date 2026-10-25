@@ -353,6 +353,10 @@ func main() {
 		stop()
 	}()
 	store.Secrets = secretwatch.New(runCtx, clientset)
+	if err := metrics.Registry.Register(store.Secrets.Collector()); err != nil {
+		logger.Error("registering the watched-Secrets gauge failed", "error", err)
+		os.Exit(1)
+	}
 	// A Secret the gateway may not read yet answers its last refusal for a
 	// second instead of costing a GET per request, and a grant that lands is
 	// used within that second.
@@ -699,13 +703,13 @@ func clusterOptions(scheme *runtime.Scheme, operatorNamespace string) func(*clus
 	return func(o *cluster.Options) {
 		o.Scheme = scheme
 		// Secrets are never read through the shared informer cache. The
-		// gateway holds only get/watch on Secrets in kaalm-system plus
-		// dynamic resourceNames-scoped grants on individual channel
-		// Secrets (no cluster-wide list), so a cached Secret informer would
-		// issue a forbidden cluster-scoped LIST and the read would hang
-		// waiting for a sync that never lands. Secret reads go through
-		// secretwatch.Watcher instead: one GET-backed, name-filtered watch
-		// per referenced Secret. See
+		// gateway holds get, list, and watch on Secrets in kaalm-system plus
+		// dynamic resourceNames-scoped grants on individual channel Secrets
+		// (no cluster-wide list), so a cached Secret informer would issue a
+		// forbidden cluster-scoped LIST and the read would hang waiting for
+		// a sync that never lands. Secret reads go through
+		// secretwatch.Watcher instead: one name-selected list and watch per
+		// referenced Secret, which a resourceNames-scoped grant allows. See
 		// docs/src/security/rbac.md#namespaced-grants-in-kaalm-system.
 		o.Client.Cache = &client.CacheOptions{
 			DisableFor: []client.Object{&corev1.Secret{}},

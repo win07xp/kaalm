@@ -88,10 +88,11 @@ func TestLiveSecretReader_FallsBack(t *testing.T) {
 	}
 }
 
-// countSecretGets counts the GETs the clientset answers for Secrets.
-func countSecretGets(cs *kubefake.Clientset) *atomic.Int32 {
+// countSecretRequests counts the requests of one verb the clientset answers
+// for Secrets.
+func countSecretRequests(cs *kubefake.Clientset, verb string) *atomic.Int32 {
 	var n atomic.Int32
-	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+	cs.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		n.Add(1)
 		return false, nil, nil
 	})
@@ -100,8 +101,7 @@ func countSecretGets(cs *kubefake.Clientset) *atomic.Int32 {
 
 // The channel reconciler re-validates every channel every minute. Through the
 // watcher those passes are cache hits: the inbound and callback Secrets each
-// cost two GETs (the read and its confirmation once the watch opens), however
-// many passes run.
+// cost one name-selected LIST and no GET, however many passes run.
 func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -116,7 +116,8 @@ func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 		}
 	}
 	cs := kubefake.NewSimpleClientset(secret("in"), secret("cb"))
-	gets := countSecretGets(cs)
+	gets := countSecretRequests(cs, "get")
+	lists := countSecretRequests(cs, "list")
 	r := &AgentChannelReconciler{
 		Client:       fake.NewClientBuilder().Build(),
 		SecretReader: secretwatch.NewReader(secretwatch.New(ctx, cs)),
@@ -143,16 +144,9 @@ func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 		}
 	}
 	validate()
-	deadline := time.Now().Add(3 * time.Second)
-	for gets.Load() != 4 {
-		if time.Now().After(deadline) {
-			t.Fatalf("the two Secrets cost %d GETs, want 4", gets.Load())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	validate()
-	if n := gets.Load(); n != 4 {
-		t.Fatalf("40 validation passes cost %d Secret GETs, want 4", n)
+	if n, g := lists.Load(), gets.Load(); n != 2 || g != 0 {
+		t.Fatalf("40 validation passes cost %d Secret LISTs and %d GETs, want 2 and 0", n, g)
 	}
 }
 
@@ -179,8 +173,9 @@ func TestValidateSecrets_MissingSecretThroughTheWatcher(t *testing.T) {
 }
 
 // A Role created a moment ago answers Forbidden until the authorizer sees it.
-// Through the watcher that is still a Forbidden, so getSecretLive retries it
-// and the read succeeds once the grant lands.
+// Through the watcher that is still a Forbidden (its LIST and the GET that
+// probes it are both refused), so getSecretLive retries it and the read
+// succeeds once the grant lands.
 func TestGetSecretLive_RetriesForbiddenThroughTheWatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -188,17 +183,22 @@ func TestGetSecretLive_RetriesForbiddenThroughTheWatcher(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "team-a"},
 	})
 	var calls atomic.Int32
-	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		if calls.Add(1) <= 2 {
-			return true, nil, apierrors.NewForbidden(corev1.Resource("secrets"), "creds", errors.New("not yet"))
-		}
-		return false, nil, nil
-	})
+	for _, verb := range []string{"list", "get"} {
+		cs.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			if calls.Add(1) <= 2 {
+				return true, nil, apierrors.NewForbidden(corev1.Resource("secrets"), "creds", errors.New("not yet"))
+			}
+			return false, nil, nil
+		})
+	}
 	w := secretwatch.New(ctx, cs)
 	w.SyncTimeout = 50 * time.Millisecond
 	key := types.NamespacedName{Namespace: "team-a", Name: "creds"}
 	if err := getSecretLive(ctx, secretwatch.NewReader(w), key, &corev1.Secret{}); err != nil {
 		t.Fatalf("read after the grant lands = %v, want nil", err)
+	}
+	if n := calls.Load(); n <= 2 {
+		t.Fatalf("requests = %d, want the refused LIST and GET and then a retry", n)
 	}
 }
 
@@ -377,7 +377,7 @@ func TestEnsureControllerSecretAccess_RejectedWrite(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: "default"},
 			Rules: []rbacv1.PolicyRule{{
 				APIGroups: []string{""}, Resources: []string{"secrets"},
-				ResourceNames: []string{"old"}, Verbs: []string{"get", "watch"},
+				ResourceNames: []string{"old"}, Verbs: []string{"get", "list", "watch"},
 			}},
 		}
 		rb := &rbacv1.RoleBinding{
