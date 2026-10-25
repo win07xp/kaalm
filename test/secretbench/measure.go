@@ -36,7 +36,7 @@ import (
 
 const (
 	// settleHold is how long requests must stay quiet after every watch
-	// has opened, so the last confirming GETs land in the counts.
+	// has opened, so the last requests in flight land in the counts.
 	settleHold = time.Second
 	// quietBound caps that wait: reflectors re-open their watches every 5
 	// to 10 minutes, so at thousands of Secrets the requests never go fully
