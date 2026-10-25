@@ -7,7 +7,7 @@ Three Grafana dashboards ship with the repository as JSON in
 |---|---|---|
 | `kaalm-namespace.json` | One tenant namespace: agents, tasks, and channels by phase, spend and budget utilization per provider, LLM and channel traffic, wakes, tool calls, async delivery | `datasource`, `namespace` |
 | `kaalm-provider.json` | One ModelProvider: request rate, error ratio, latency by model, tokens, fallbacks, budget utilization and spend by namespace, policy actions, responses without usage | `datasource`, `provider` |
-| `kaalm-cluster.json` | The whole cluster: scrape targets, controller leader and reconcile health, fleet totals, hibernations and wakes, LLM and tool traffic, spend by provider | `datasource`, `job` |
+| `kaalm-cluster.json` | The whole cluster: scrape targets, controller leader and reconcile health, watched Secrets per process, fleet totals, hibernations and wakes, LLM and tool traffic, spend by provider | `datasource`, `job` |
 
 Each file imports unchanged. The data source is a `datasource` template
 variable, so the same file works through the Grafana UI and through file
@@ -102,6 +102,10 @@ same series:
   `kaalm_llm_requests_total` by outcome but never observed as latency, so
   the percentiles describe real upstream round trips. The per-namespace
   rate-limit panel is the `rate_limited` outcome of that counter.
+- `kaalm_watched_secrets` is the number of Secrets each controller or
+  gateway process holds a watch for. Each replica reports its own figure, so
+  read it per process, as the shipped panel does, and do not sum it
+  ([Aggregated catalog](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/observability.md#aggregated-catalog)).
 
 Every Kaalm metric a panel queries is in the documented metric catalog. The
 only series outside the catalog are on the cluster dashboard's control-plane
