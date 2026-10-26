@@ -306,6 +306,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if certHeld {
 		res = withCertWaitRetry(res)
 	}
+	// The pass read the Agent's pull and env Secrets through the watcher,
+	// whose informers stop an hour after their last read. A pass within that
+	// hour keeps them alive, so a Secret change still re-runs the Agent at once.
+	if readsSecrets(eff) {
+		res = withSecretKeepAlive(res, secretKeepAliveDraw())
+	}
 
 	// Step 11: write status only when the pass changed it.
 	if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
@@ -627,7 +633,9 @@ func (r *AgentReconciler) evaluateActivity(
 // those blocked results carry a requeue interval. A change to a pull or env
 // Secret re-enqueues the Agent at once through SecretChanges; the Secret
 // results carry the same requeue as the fallback for a change no watch
-// reported. Class spec changes are watched, so the class checks carry none.
+// reported. A pass that clears the checks keeps those watches alive through
+// the keep-alive requeue at the end of Reconcile (withSecretKeepAlive). Class
+// spec changes are watched, so the class checks carry none.
 func (r *AgentReconciler) podCreationBlocked(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
