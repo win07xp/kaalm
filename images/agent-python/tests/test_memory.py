@@ -6,6 +6,7 @@ contract item 7 requires to survive hibernation, and the user/ prefix wall."""
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 
@@ -94,6 +95,33 @@ def test_non_json_value_rejected_before_touching_state(tmp_path):
     with pytest.raises(TypeError):
         s.put("bad", object())
     assert s.get("bad") is None
+
+
+def test_put_rejects_nan_and_infinity(tmp_path):
+    # The Go runtime reads the same files with encoding/json, which has no
+    # NaN or Infinity tokens, so put accepts strict JSON only.
+    s = Store(str(tmp_path / "mem"))
+    for value in (float("nan"), float("inf"), float("-inf"), {"a": [float("nan")]}):
+        with pytest.raises(TypeError):
+            s.put("user/x", value)
+        assert s.get("user/x") is None
+    log_path = tmp_path / "mem" / "state.log"
+    assert not log_path.exists() or log_path.read_bytes() == b""
+
+
+def test_existing_nan_values_still_load(tmp_path):
+    # Files a Python runtime wrote before put checked for NaN keep loading.
+    d = tmp_path / "mem"
+    write_state(
+        d,
+        '{"kv":{"user/a":NaN},"dedup":{},"dedupOrder":[]}',
+        '{"op":"set","key":"user/b","value":Infinity}\n',
+    )
+    s = Store(str(d))
+    assert math.isnan(s.get("user/a"))
+    assert s.get("user/b") == math.inf
+    s.put("user/c", 1)
+    s.close()
 
 
 def test_dedup_recall_miss_and_roundtrip(tmp_path):
