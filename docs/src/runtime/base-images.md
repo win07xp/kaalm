@@ -134,6 +134,12 @@ On start, the runtime loads the snapshot and replays the log:
 
 Apart from a write that failed as described above, a crash loses no acknowledged write. It can lose the refresh of an id's recency when a duplicate was recalled, because a recall is not logged. The log record format is the same in both runtimes, so a volume written by one is read by the other.
 
+That holds because both runtimes write strict JSON. Go's JSON parser has no `NaN`, `Infinity`, or `-Infinity` tokens, so a value holding one would make the Go runtime stop reading the volume. `Memory.Set` in Go returns an error for such a value, and `kaalm.memory.put` raises `TypeError`. Neither stores anything.
+
+The Python runtime applies the same check to each handler reply before it caches or sends it, because the reply goes to the log and to the gateway. A reply that holds `NaN`, `Infinity`, or `-Infinity`, or an object JSON cannot serialize, makes the runtime answer `500` ([contract item 4](contract.md#4-message-endpoint)), and the gateway redelivers on its schedule. The agent log shows the `TypeError`, which names the `messageId`: look there when deliveries fail.
+
+A volume that already holds such a value under a key keeps loading in the Python runtime. A Go runtime on that volume stops replaying `state.log` at the record and logs its line number, or starts empty when `state.json` holds the value. To clear it, overwrite or delete the key from the handler, then stop the Pod gracefully so the log folds into `state.json`.
+
 The PVC backs the state only when it is mounted at that directory. The controller mounts the Agent PVC at `spec.persistence.mountPath`, default `/var/agent/memory`, and injects `$KAALM_MEMORY_DIR` with that same path, so whichever `mountPath` an Agent names is the directory the runtime writes to. An AgentTask Pod gets no `$KAALM_MEMORY_DIR`, and its workspace PVC mounts at `/var/task/workspace` by default, which neither runtime reads, so a task's memory is in-memory unless `spec.persistence.mountPath` names the memory directory.
 
 ## The default handler
