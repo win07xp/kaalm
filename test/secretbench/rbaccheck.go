@@ -33,8 +33,6 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
-
-	"github.com/win07xp/kaalm/internal/secretwatch"
 )
 
 const (
@@ -42,7 +40,7 @@ const (
 	// rbacUser is a client-certificate user with no group but
 	// system:authenticated, so only its Role grants it anything.
 	rbacUser = "secretbench-reader"
-	// checkWatchTimeout shortens the readers' watches. An open watch
+	// checkWatchTimeout shortens the Watcher's watches. An open watch
 	// outlives its grant, because the authorizer runs when a request
 	// starts, so a revoked grant shows at the next LIST or WATCH.
 	checkWatchTimeout = 5 * time.Second
@@ -54,6 +52,15 @@ const (
 	revokePoll      = 500 * time.Millisecond
 	grantWait       = 10 * time.Second
 	checkUpdateWait = 5 * time.Second
+	// probeGets is how many GETs a refused read may cost: the Watcher probes
+	// a refused LIST with one GET, to tell a removed grant from a Role that
+	// lacks only list, which the Watcher serves with live GETs. A GET past it
+	// would be a live read.
+	probeGets = 1
+	// watcherName and userName label the results: the Watcher's checks, and
+	// what the API server answers the user directly.
+	watcherName = "watcher"
+	userName    = "user"
 )
 
 var (
@@ -61,8 +68,8 @@ var (
 	ungrantedNames = []string{"ungranted-0", "ungranted-1"}
 )
 
-// checkResult is one check's outcome for one reader, or for the user when
-// the check does not depend on a reader.
+// checkResult is one check's outcome for the Watcher, or for the user when
+// the check does not depend on the Watcher.
 type checkResult struct {
 	Reader, Check, Detail string
 	Pass                  bool
@@ -80,14 +87,13 @@ func (c *checker) record(reader, check string, pass bool, format string, args ..
 	printChecks(c.out, []checkResult{r})
 }
 
-// rbacCheck runs the shipped Watcher (as today-gw) and the lean reader as a
-// user bound to a Role that grants get, list, and watch on named Secrets
-// only, through the API server's RBAC authorizer, and checks that (a)
-// granted names are served from the watch, (b) a LIST or WATCH without a
-// name selector is refused, (c) a name-selected LIST or WATCH on an
-// ungranted name is refused, and (d) once a name leaves the Role the reader
-// stops serving it and answers the refusal. It returns an error when any
-// check failed.
+// rbacCheck runs the Watcher as a user bound to a Role that grants get,
+// list, and watch on named Secrets only, through the API server's RBAC
+// authorizer, and checks that (a) granted names are served from the watch,
+// (b) a LIST or WATCH without a name selector is refused, (c) a
+// name-selected LIST or WATCH on an ungranted name is refused, and (d) once
+// a name leaves the Role the Watcher stops serving it and answers the
+// refusal. It returns an error when any check failed.
 func rbacCheck(ctx context.Context, env *envtest.Environment, base *rest.Config, out io.Writer) error {
 	adminCfg := rest.CopyConfig(base)
 	adminCfg.QPS, adminCfg.Burst = -1, 0
@@ -113,28 +119,8 @@ func rbacCheck(ctx context.Context, env *envtest.Environment, base *rest.Config,
 
 	c := &checker{out: out}
 	identityChecks(ctx, c, user)
-	// probes is how many GETs a refused read may cost: the Watcher probes a
-	// refused LIST with one GET, to tell a removed grant from a Role that
-	// lacks only list; lean issues none.
-	readers := []struct {
-		name   string
-		probes int64
-		build  func(context.Context, *rest.Config, kubernetes.Interface) (secretReader, error)
-	}{
-		{"today-gw", 1, func(ctx context.Context, _ *rest.Config, client kubernetes.Interface) (secretReader, error) {
-			ctx, cancel := context.WithCancel(ctx)
-			w := secretwatch.New(ctx, client)
-			w.WatchTimeout = checkWatchTimeout
-			return &todayReader{w: w, cancel: cancel}, nil
-		}},
-		{"lean", 0, func(ctx context.Context, rc *rest.Config, client kubernetes.Interface) (secretReader, error) {
-			return newLeanReader(ctx, rc, client, checkWatchTimeout)
-		}},
-	}
-	for _, rd := range readers {
-		if err := readerChecks(ctx, c, admin, user, userCfg, rd.name, rd.probes, rd.build); err != nil {
-			return err
-		}
+	if err := watcherChecks(ctx, c, admin, user, userCfg); err != nil {
+		return err
 	}
 	return summarize(c.results)
 }
@@ -217,19 +203,21 @@ func waitGranted(ctx context.Context, user kubernetes.Interface, name string) er
 }
 
 // identityChecks are (b) and the direct part of (c): what the API server
-// answers the user, whatever the reader.
+// answers the user directly.
 func identityChecks(ctx context.Context, c *checker, user kubernetes.Interface) {
 	secrets := user.CoreV1().Secrets(rbacNamespace)
 	byName := fields.OneTermEqualSelector("metadata.name", ungrantedNames[0]).String()
 
 	_, err := secrets.List(ctx, metav1.ListOptions{})
-	c.record("user", "(b) LIST without a name selector is refused", apierrors.IsForbidden(err), "%v", errText(err))
+	c.record(userName, "(b) LIST without a name selector is refused", apierrors.IsForbidden(err), "%v", errText(err))
 	err = tryWatch(ctx, secrets, metav1.ListOptions{})
-	c.record("user", "(b) WATCH without a name selector is refused", apierrors.IsForbidden(err), "%v", errText(err))
+	c.record(userName, "(b) WATCH without a name selector is refused", apierrors.IsForbidden(err), "%v", errText(err))
 	_, err = secrets.List(ctx, metav1.ListOptions{FieldSelector: byName})
-	c.record("user", "(c) LIST by name of an ungranted Secret is refused", apierrors.IsForbidden(err), "%v", errText(err))
+	c.record(userName, "(c) LIST by name of an ungranted Secret is refused", apierrors.IsForbidden(err),
+		"%v", errText(err))
 	err = tryWatch(ctx, secrets, metav1.ListOptions{FieldSelector: byName})
-	c.record("user", "(c) WATCH by name of an ungranted Secret is refused", apierrors.IsForbidden(err), "%v", errText(err))
+	c.record(userName, "(c) WATCH by name of an ungranted Secret is refused", apierrors.IsForbidden(err),
+		"%v", errText(err))
 }
 
 // tryWatch opens a watch and closes it at once; the error is the refusal.
@@ -241,22 +229,17 @@ func tryWatch(ctx context.Context, secrets corev1client.SecretInterface, opts me
 	return err
 }
 
-// readerChecks runs (a), the reader part of (c), and (d) for one reader
+// watcherChecks runs (a), the Watcher's part of (c), and (d) on a Watcher
 // built fresh as the user at the gateway's limit, then restores the grant
-// and drains the reader. probes is how many GETs the refused read in (c)
-// may cost; a GET past those would be a live read.
-func readerChecks(ctx context.Context, c *checker, admin, user kubernetes.Interface, userCfg *rest.Config,
-	name string, probes int64,
-	build func(context.Context, *rest.Config, kubernetes.Interface) (secretReader, error)) error {
+// and drains the Watcher.
+func watcherChecks(ctx context.Context, c *checker, admin, user kubernetes.Interface, userCfg *rest.Config) error {
 	rc, counter := countedConfig(userCfg, gatewayQPS, gatewayBurst)
 	client, err := kubernetes.NewForConfig(rc)
 	if err != nil {
-		return fmt.Errorf("%s client: %w", name, err)
+		return fmt.Errorf("watcher client: %w", err)
 	}
-	reader, err := build(ctx, rc, client)
-	if err != nil {
-		return fmt.Errorf("%s reader: %w", name, err)
-	}
+	reader := newWatcherReader(ctx, client)
+	reader.w.WatchTimeout = checkWatchTimeout
 	defer func() {
 		reader.Stop()
 		waitFor(ctx, time.Now().Add(grantWait), 100*time.Millisecond, func() bool {
@@ -265,14 +248,14 @@ func readerChecks(ctx context.Context, c *checker, admin, user kubernetes.Interf
 		counter.CloseIdleConnections()
 	}()
 
-	checkServed(ctx, c, admin, reader, counter, name)
+	checkServed(ctx, c, admin, reader, counter)
 
 	_, err = reader.Get(ctx, rbacNamespace, ungrantedNames[0])
 	got := counter.snapshot().Get
-	c.record(name, "(c) Get of an ungranted Secret is refused", apierrors.IsForbidden(err) && got <= probes,
+	c.record(watcherName, "(c) Get of an ungranted Secret is refused", apierrors.IsForbidden(err) && got <= probeGets,
 		"%v; GET %d", errText(err), got)
 
-	if err := checkRevoked(ctx, c, admin, reader, name); err != nil {
+	if err := checkRevoked(ctx, c, admin, reader); err != nil {
 		return err
 	}
 	if err := setGrant(ctx, admin, grantedNames); err != nil {
@@ -283,24 +266,24 @@ func readerChecks(ctx context.Context, c *checker, admin, user kubernetes.Interf
 
 // checkServed is (a): every granted name is served, an update arrives over
 // the watch, and no read fell back to a live GET.
-func checkServed(ctx context.Context, c *checker, admin kubernetes.Interface, reader secretReader,
-	counter *countingTransport, name string) {
+func checkServed(ctx context.Context, c *checker, admin kubernetes.Interface, reader *watcherReader,
+	counter *countingTransport) {
 	for _, n := range grantedNames {
 		want, err := admin.CoreV1().Secrets(rbacNamespace).Get(ctx, n, metav1.GetOptions{})
 		if err != nil {
-			c.record(name, "(a) granted Secrets are served from the watch", false, "admin GET %s: %v", n, err)
+			c.record(watcherName, "(a) granted Secrets are served from the watch", false, "admin GET %s: %v", n, err)
 			return
 		}
 		got, err := reader.Get(ctx, rbacNamespace, n)
 		if err != nil || got.ResourceVersion != want.ResourceVersion {
-			c.record(name, "(a) granted Secrets are served from the watch", false, "Get %s: %v", n, errText(err))
+			c.record(watcherName, "(a) granted Secrets are served from the watch", false, "Get %s: %v", n, errText(err))
 			return
 		}
 	}
 	start := time.Now()
 	rv, err := updateSecret(ctx, admin, rbacNamespace, grantedNames[1])
 	if err != nil {
-		c.record(name, "(a) granted Secrets are served from the watch", false, "update: %v", err)
+		c.record(watcherName, "(a) granted Secrets are served from the watch", false, "update: %v", err)
 		return
 	}
 	seen := waitFor(ctx, start.Add(checkUpdateWait), 10*time.Millisecond, func() bool {
@@ -309,14 +292,14 @@ func checkServed(ctx context.Context, c *checker, admin kubernetes.Interface, re
 	})
 	counts := counter.snapshot()
 	pass := seen && counts.Get == 0 && counts.List == int64(len(grantedNames))
-	c.record(name, "(a) granted Secrets are served from the watch", pass,
+	c.record(watcherName, "(a) granted Secrets are served from the watch", pass,
 		"%d served; update seen %t in %s; GET %d, LIST %d, WATCH %d",
 		len(grantedNames), seen, time.Since(start).Round(time.Millisecond), counts.Get, counts.List, counts.Watch)
 }
 
-// checkRevoked is (d): the Role drops granted-0, and the reader must answer
+// checkRevoked is (d): the Role drops granted-0, and the Watcher must answer
 // Forbidden for it within revokeBound while it still serves granted-1.
-func checkRevoked(ctx context.Context, c *checker, admin kubernetes.Interface, reader secretReader, name string) error {
+func checkRevoked(ctx context.Context, c *checker, admin kubernetes.Interface, reader *watcherReader) error {
 	if err := setGrant(ctx, admin, grantedNames[1:]); err != nil {
 		return err
 	}
@@ -332,7 +315,7 @@ func checkRevoked(ctx context.Context, c *checker, admin kubernetes.Interface, r
 	if !refused {
 		detail = fmt.Sprintf("still served after %s (last: %v)", revokeBound, errText(last))
 	}
-	c.record(name, "(d) a revoked Secret stops being served", refused && stillErr == nil, "%s", detail)
+	c.record(watcherName, "(d) a revoked Secret stops being served", refused && stillErr == nil, "%s", detail)
 	return nil
 }
 
@@ -343,7 +326,7 @@ func printChecks(out io.Writer, results []checkResult) {
 		if !r.Pass {
 			verdict = "FAIL"
 		}
-		_, _ = fmt.Fprintf(out, "rbac-check  %-5s  %s: %s  %s\n", r.Reader, r.Check, verdict, r.Detail)
+		_, _ = fmt.Fprintf(out, "rbac-check  %-7s  %s: %s  %s\n", r.Reader, r.Check, verdict, r.Detail)
 	}
 }
 

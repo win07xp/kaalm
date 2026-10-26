@@ -155,7 +155,7 @@ func secretWatches(metrics []byte) (float64, bool, error) {
 	}
 	var sum float64
 	for _, m := range mf.Metric {
-		if label(m, "verb") == "WATCH" && label(m, "resource") == "secrets" {
+		if label(m, "verb") == "WATCH" && label(m, "resource") == secretsResource {
 			sum += m.GetGauge().GetValue()
 		}
 	}

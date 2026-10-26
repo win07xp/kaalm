@@ -62,22 +62,25 @@ func TestLeastSquaresNeedsTwoDistinctCounts(t *testing.T) {
 	}
 }
 
-func TestFitAllGroupsByVariantAndLayout(t *testing.T) {
+func TestFitAllGroupsByLayout(t *testing.T) {
 	var samples []sample
 	for _, n := range []int{0, 100, 200} {
 		samples = append(samples,
-			sample{Variant: "A", Layout: "one", Secrets: n, Requests: requestCounts{List: 1, Watch: 1}},
-			sample{Variant: "today-gw", Layout: "one", Secrets: n, Requests: requestCounts{Get: int64(2 * n), Watch: int64(n)}},
+			sample{Layout: layoutOne, Secrets: n, Requests: requestCounts{List: int64(n), Watch: int64(n)}},
+			sample{Layout: layoutSpread, Secrets: n, Requests: requestCounts{List: int64(2 * n), Watch: 1}},
 		)
 	}
 	fits := fitAll(samples)
-	if got := fits["today-gw/one"]["GET"].Slope; !near(got, 2) {
-		t.Fatalf("today-gw GET slope = %v, want 2", got)
+	if got := fits[layoutOne]["LIST"].Slope; !near(got, 1) {
+		t.Fatalf("one LIST slope = %v, want 1", got)
 	}
-	if got := fits["A/one"]["WATCH"].Slope; !near(got, 0) {
-		t.Fatalf("A WATCH slope = %v, want 0", got)
+	if got := fits[layoutSpread]["LIST"].Slope; !near(got, 2) {
+		t.Fatalf("spread LIST slope = %v, want 2", got)
 	}
-	if _, ok := fits["A/one"]["rss"]; ok {
+	if got := fits[layoutSpread]["WATCH"].Slope; !near(got, 0) {
+		t.Fatalf("spread WATCH slope = %v, want 0", got)
+	}
+	if _, ok := fits[layoutOne]["rss"]; ok {
 		t.Fatal("rss fitted although no sample recorded it")
 	}
 }

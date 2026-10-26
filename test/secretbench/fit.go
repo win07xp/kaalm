@@ -93,16 +93,13 @@ func figures() []figure {
 	}
 }
 
-// seriesKey groups samples by variant and layout.
-func seriesKey(s sample) string { return s.Variant + "/" + s.Layout }
-
-// fitAll fits every figure against the Secret count for each variant and
-// layout, pooling every repeat.
+// fitAll fits every figure against the Secret count for each layout,
+// pooling every repeat. The result is keyed by layout, then figure.
 func fitAll(samples []sample) map[string]map[string]fit {
 	type points struct{ xs, ys []float64 }
 	series := map[string]map[string]*points{}
 	for _, s := range samples {
-		key := seriesKey(s)
+		key := s.Layout
 		if series[key] == nil {
 			series[key] = map[string]*points{}
 		}

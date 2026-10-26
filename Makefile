@@ -460,11 +460,11 @@ bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into b
 # figures mix the watcher with everything else it holds, while here they are
 # the watcher's own cost per Secret. Extra flags (see
 # test/secretbench/config.go), for example
-# SECRETBENCH_FLAGS='-repeats 1 -variants today-gw,lean,A'.
+# SECRETBENCH_FLAGS='-repeats 1 -qps 20 -burst 30'.
 SECRETBENCH_FLAGS ?=
 
 .PHONY: secretwatch-bench
-secretwatch-bench: setup-envtest ## Scale benchmark of the Secret watcher and its prototypes against envtest (no cluster); results land in test/secretbench/results/.
+secretwatch-bench: setup-envtest ## Scale benchmark of the Secret watcher against envtest (no cluster); results land in test/secretbench/results/.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
 		go run -tags secretbench ./test/secretbench $(SECRETBENCH_FLAGS)
 

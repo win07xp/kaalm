@@ -23,20 +23,17 @@ import (
 	"testing"
 )
 
-// The shipped watcher lists the Secret by name and watches from that list,
-// with no GET. This pins the request mix the benchmark reports for today and
-// checks the counting transport against the product code.
-func TestTodayReaderRequestsOneListAndOneWatch(t *testing.T) {
+// The Watcher lists the Secret by name and watches from that list, with no
+// GET. This pins the request mix the benchmark reports and checks the
+// counting transport against the product code.
+func TestWatcherReaderRequestsOneListAndOneWatch(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
 	ns := testNamespace(t)
 	client, counter := countedClient(t)
-	r, err := buildToday(ctx, nil, client)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := newWatcherReader(ctx, client)
 
-	createSecret(t, ns, "one", false)
+	createSecret(t, ns, "one")
 	if _, err := r.Get(ctx, ns, "one"); err != nil {
 		t.Fatalf("Get: %v", err)
 	}

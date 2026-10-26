@@ -49,17 +49,6 @@ func namespaceFor(i int, layout string, namespaces int) string {
 	return fmt.Sprintf(spreadNamespaceFormat, i%namespaces)
 }
 
-// namespacesUsed is how many namespaces count Secrets occupy.
-func namespacesUsed(count int, layout string, namespaces int) int {
-	if count == 0 {
-		return 0
-	}
-	if layout == layoutOne {
-		return 1
-	}
-	return min(count, namespaces)
-}
-
 // layoutNamespaces lists every namespace a layout can use.
 func layoutNamespaces(layout string, namespaces int) []string {
 	if layout == layoutOne {

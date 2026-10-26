@@ -31,7 +31,7 @@ var heldForRSS []byte
 
 // A GC frees heap spans but keeps their pages until the background scavenger
 // returns them, so an RSS read right after a GC still holds what the previous
-// variant dropped. releaseMemory must hand those pages back first.
+// step dropped. releaseMemory must hand those pages back first.
 func TestReleaseMemoryReturnsFreedPagesToTheOS(t *testing.T) {
 	const size = 256 << 20
 	heldForRSS = make([]byte, size)
@@ -54,12 +54,12 @@ func TestReleaseMemoryReturnsFreedPagesToTheOS(t *testing.T) {
 	}
 }
 
-func TestMeasureVariantSamplesOneStep(t *testing.T) {
+func TestMeasureSamplesOneStep(t *testing.T) {
 	requireEnvtest(t)
 	ctx := context.Background()
 	ns := testNamespace(t)
 	for _, name := range []string{"s0", "s1", "s2", "s3", "s4"} {
-		createSecret(t, ns, name, true)
+		createSecret(t, ns, name)
 	}
 	names := secretKeysIn(ns, "s0", "s1", "s2", "s3", "s4")
 
@@ -74,24 +74,18 @@ func TestMeasureVariantSamplesOneStep(t *testing.T) {
 		return errA == nil && errB == nil && a == b
 	})
 	pids, _ := findControlPlane()
-	cfg := config{Readers: 4, UpdateSamples: 2, SettleTimeout: 30 * time.Second}
+	cfg := config{Readers: 4, QPS: gatewayQPS, Burst: gatewayBurst, UpdateSamples: 2, SettleTimeout: 30 * time.Second}
 	b := &bench{base: restCfg, admin: adminClient, pids: pids, baselineWatches: baseline, cfg: cfg}
 
-	var a variant
-	for _, v := range variants(config{BQPS: 1, BBurst: 1}) {
-		if v.Name == "A" {
-			a = v
-		}
-	}
-	s, err := b.measure(ctx, a, layoutOne, 1, names, 1)
+	s, err := b.measure(ctx, layoutOne, 1, names)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Secrets != 5 || s.ServedSec <= 0 || !s.Settled || s.ReadErrors != 0 {
 		t.Fatalf("sample = %+v, want 5 Secrets served and settled without errors", s)
 	}
-	if s.Requests.List != 1 || s.Requests.Watch != 1 || s.Requests.Get != 0 {
-		t.Fatalf("requests = %+v, want List 1, Watch 1, Get 0", s.Requests)
+	if s.Requests.List != 5 || s.Requests.Watch != 5 || s.Requests.Get != 0 {
+		t.Fatalf("requests = %+v, want List 5, Watch 5, Get 0", s.Requests)
 	}
 	if s.RequestsDuringUpdates != (requestCounts{}) {
 		t.Fatalf("requests during updates = %+v, want none", s.RequestsDuringUpdates)
@@ -99,8 +93,8 @@ func TestMeasureVariantSamplesOneStep(t *testing.T) {
 	if s.UpdateMissed != 0 || s.UpdateP50Ms <= 0 {
 		t.Fatalf("updates: missed %d, p50 %v ms; want none missed and a positive p50", s.UpdateMissed, s.UpdateP50Ms)
 	}
-	if s.APIServerSecretWatches != 1 {
-		t.Fatalf("API server Secret watches = %v, want 1", s.APIServerSecretWatches)
+	if s.APIServerSecretWatches != 5 {
+		t.Fatalf("API server Secret watches = %v, want 5", s.APIServerSecretWatches)
 	}
 	if s.HeapInuseBytes <= 0 || s.Goroutines <= 0 {
 		t.Fatalf("heap %d, goroutines %d; want both positive", s.HeapInuseBytes, s.Goroutines)

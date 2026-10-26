@@ -28,15 +28,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/testenv"
 )
 
@@ -47,7 +44,6 @@ var (
 	restCfg     *rest.Config
 	adminClient kubernetes.Interface
 	nsCounter   atomic.Int64
-	userCounter atomic.Int64
 )
 
 func TestMain(m *testing.M) {
@@ -102,28 +98,22 @@ func testNamespace(t *testing.T) string {
 	return name
 }
 
-// createSecret creates a Secret, labeled as a channel credential when
-// labeled is true.
-func createSecret(t *testing.T, namespace, name string, labeled bool) *corev1.Secret {
+// createSecret creates a Secret as the benchmark's own are created.
+func createSecret(t *testing.T, namespace, name string) *corev1.Secret {
 	t.Helper()
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
-		Data:       map[string][]byte{"token": newToken()},
-	}
-	if labeled {
-		sec.Labels = map[string]string{kaalmv1beta1.LabelChannelCredential: "true"}
-	}
-	out, err := adminClient.CoreV1().Secrets(namespace).Create(context.Background(), sec, metav1.CreateOptions{})
+	out, err := adminClient.CoreV1().Secrets(namespace).Create(context.Background(),
+		benchSecret(namespace, name), metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("create Secret: %v", err)
 	}
 	return out
 }
 
-// countedClient builds a client through a counting transport.
+// countedClient builds a client through a counting transport at the
+// gateway's limit.
 func countedClient(t *testing.T) (kubernetes.Interface, *countingTransport) {
 	t.Helper()
-	cfg, counter := countedConfig(restCfg, 100, 200)
+	cfg, counter := countedConfig(restCfg, gatewayQPS, gatewayBurst)
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		t.Fatalf("client: %v", err)
@@ -144,7 +134,7 @@ func eventually(t *testing.T, timeout time.Duration, what string, cond func() bo
 }
 
 // stopAndDrain stops a reader and waits until its watches have closed.
-func stopAndDrain(t *testing.T, r secretReader, counter *countingTransport) {
+func stopAndDrain(t *testing.T, r *watcherReader, counter *countingTransport) {
 	t.Helper()
 	r.Stop()
 	eventually(t, 10*time.Second, "watches to close after Stop", func() bool {
@@ -177,70 +167,4 @@ func secretKeysIn(namespace string, names ...string) []types.NamespacedName {
 		out[i] = types.NamespacedName{Namespace: namespace, Name: n}
 	}
 	return out
-}
-
-// grantedUser creates a user bound to a Role in namespace that grants get,
-// list, and watch on the named Secrets only, and waits until the grant
-// reaches the authorizer. It returns the user's config and a function that
-// rewrites the Role's resourceNames, which must stay non-empty: an empty
-// list would grant every Secret.
-func grantedUser(t *testing.T, namespace string, granted ...string) (*rest.Config, func(granted ...string)) {
-	t.Helper()
-	ctx := context.Background()
-	user := fmt.Sprintf("bench-user-%d", userCounter.Add(1))
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: user},
-		Rules:      []rbacv1.PolicyRule{secretRule(granted)},
-	}
-	if _, err := adminClient.RbacV1().Roles(namespace).Create(ctx, role, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create Role: %v", err)
-	}
-	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: user},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: user},
-		Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: user}},
-	}
-	if _, err := adminClient.RbacV1().RoleBindings(namespace).Create(ctx, binding, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create RoleBinding: %v", err)
-	}
-	authed, err := testEnv.AddUser(envtest.User{Name: user}, restCfg)
-	if err != nil {
-		t.Fatalf("add user: %v", err)
-	}
-	cfg := authed.Config()
-	direct, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		t.Fatalf("user client: %v", err)
-	}
-	eventually(t, 10*time.Second, "the grant to reach the authorizer", func() bool {
-		_, err := direct.CoreV1().Secrets(namespace).Get(ctx, granted[0], metav1.GetOptions{})
-		return !apierrors.IsForbidden(err)
-	})
-	rewrite := func(granted ...string) {
-		t.Helper()
-		if len(granted) == 0 {
-			t.Fatal("grantedUser: an empty resourceNames list grants every Secret")
-		}
-		current, err := adminClient.RbacV1().Roles(namespace).Get(ctx, user, metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("get Role: %v", err)
-		}
-		current.Rules = []rbacv1.PolicyRule{secretRule(granted)}
-		if _, err := adminClient.RbacV1().Roles(namespace).Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			t.Fatalf("update Role: %v", err)
-		}
-	}
-	return cfg, rewrite
-}
-
-// countedClientFor builds a client for cfg through a counting transport at
-// the gateway's limit.
-func countedClientFor(t *testing.T, cfg *rest.Config) (*rest.Config, kubernetes.Interface, *countingTransport) {
-	t.Helper()
-	rc, counter := countedConfig(cfg, gatewayQPS, gatewayBurst)
-	client, err := kubernetes.NewForConfig(rc)
-	if err != nil {
-		t.Fatalf("client: %v", err)
-	}
-	return rc, client, counter
 }

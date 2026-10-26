@@ -25,7 +25,7 @@ import (
 	"testing"
 )
 
-func TestRBACCheckPassesForBothReaders(t *testing.T) {
+func TestRBACCheckPasses(t *testing.T) {
 	requireEnvtest(t)
 	var buf bytes.Buffer
 	if err := rbacCheck(context.Background(), testEnv, restCfg, &buf); err != nil {
@@ -36,14 +36,12 @@ func TestRBACCheckPassesForBothReaders(t *testing.T) {
 	if strings.Contains(out, "FAIL") {
 		t.Fatalf("a check failed:\n%s", out)
 	}
-	for _, reader := range []string{"today-gw", "lean"} {
-		for _, check := range []string{"(a)", "(c)", "(d)"} {
-			if !hasPassLine(out, reader, check) {
-				t.Errorf("no PASS line for %s %s", reader, check)
-			}
+	for _, check := range []string{"(a)", "(c)", "(d)"} {
+		if !hasPassLine(out, watcherName, check) {
+			t.Errorf("no PASS line for the Watcher's %s", check)
 		}
 	}
-	if !hasPassLine(out, "user", "(b)") || !hasPassLine(out, "user", "(c)") {
+	if !hasPassLine(out, userName, "(b)") || !hasPassLine(out, userName, "(c)") {
 		t.Errorf("no PASS lines for the user's (b) and (c)")
 	}
 }
@@ -67,8 +65,8 @@ func TestSummarizeFailsOnAnyFailedCheck(t *testing.T) {
 		t.Fatalf("one failed: %v, want an error naming 1 of 2", err)
 	}
 	var buf bytes.Buffer
-	printChecks(&buf, []checkResult{{Reader: "lean", Check: "(d) x", Pass: false, Detail: "d"}})
-	if got := buf.String(); !strings.Contains(got, "lean   (d) x: FAIL  d") {
+	printChecks(&buf, []checkResult{{Reader: userName, Check: "(d) x", Pass: false, Detail: "d"}})
+	if got := buf.String(); !strings.Contains(got, "user     (d) x: FAIL  d") {
 		t.Fatalf("line = %q", got)
 	}
 }

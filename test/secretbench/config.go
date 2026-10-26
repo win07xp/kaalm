@@ -23,7 +23,6 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,11 +41,6 @@ const (
 
 	layoutOne    = "one"
 	layoutSpread = "spread"
-
-	// syncTimeout is how long a prototype's read waits for its informer
-	// before reading live, the same as secretwatch.Watcher's default
-	// SyncTimeout, so "served" means the same thing for every variant.
-	syncTimeout = 2 * time.Second
 )
 
 // config is one benchmark run's settings.
@@ -55,10 +49,9 @@ type config struct {
 	Namespaces    int
 	Layouts       []string
 	Repeats       int
-	Variants      []string
 	Readers       int
-	BQPS          float64
-	BBurst        int
+	QPS           float64
+	Burst         int
 	UpdateSamples int
 	SettleTimeout time.Duration
 	Out           string
@@ -67,7 +60,7 @@ type config struct {
 
 func parseFlags(args []string) (config, error) {
 	var cfg config
-	var counts, layouts, variantNames string
+	var counts, layouts string
 	fs := flag.NewFlagSet("secretbench", flag.ContinueOnError)
 	fs.StringVar(&counts, "counts", "0,250,500,1000,2000,5000",
 		"Secret counts to step through, ascending; the Secret set grows in place between steps")
@@ -75,11 +68,11 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&layouts, "layouts", layoutOne+","+layoutSpread,
 		"layouts to run: one (every Secret in one namespace) and spread (over -namespaces namespaces)")
 	fs.IntVar(&cfg.Repeats, "repeats", 3, "full sweeps to run; the slope fit pools them")
-	fs.StringVar(&variantNames, "variants", strings.Join(variantNamesAll(), ","),
-		"variants to run at each step, in this order")
 	fs.IntVar(&cfg.Readers, "readers", 32, "concurrent reads during a cold start")
-	fs.Float64Var(&cfg.BQPS, "b-qps", 500, "client QPS of variant B")
-	fs.IntVar(&cfg.BBurst, "b-burst", 1000, "client burst of variant B")
+	fs.Float64Var(&cfg.QPS, "qps", gatewayQPS,
+		"the Watcher's client QPS (default: the gateway's and the controller's Secret watcher's)")
+	fs.IntVar(&cfg.Burst, "burst", gatewayBurst,
+		"the Watcher's client burst (default: the gateway's and the controller's Secret watcher's)")
 	fs.IntVar(&cfg.UpdateSamples, "update-samples", 10, "Secrets updated one at a time per step to time update delivery")
 	fs.DurationVar(&cfg.SettleTimeout, "settle-timeout", 30*time.Minute,
 		"how long a step waits for every watch to open before it samples anyway")
@@ -106,16 +99,6 @@ func parseFlags(args []string) (config, error) {
 	if len(cfg.Layouts) == 0 {
 		return config{}, errors.New("-layouts: at least one layout is required")
 	}
-	cfg.Variants = splitList(variantNames)
-	if len(cfg.Variants) == 0 {
-		return config{}, errors.New("-variants: at least one variant is required")
-	}
-	known := variantNamesAll()
-	for _, v := range cfg.Variants {
-		if !slices.Contains(known, v) {
-			return config{}, fmt.Errorf("-variants: unknown variant %q (known: %s)", v, strings.Join(known, ", "))
-		}
-	}
 	switch {
 	case cfg.Repeats < 1:
 		return config{}, errors.New("-repeats must be at least 1")
@@ -125,8 +108,10 @@ func parseFlags(args []string) (config, error) {
 		return config{}, errors.New("-readers must be at least 1")
 	case cfg.UpdateSamples < 0:
 		return config{}, errors.New("-update-samples must not be negative")
-	case cfg.BQPS <= 0 || cfg.BBurst < 1:
-		return config{}, errors.New("-b-qps must be positive and -b-burst at least 1")
+	case cfg.QPS <= 0:
+		return config{}, errors.New("-qps must be positive")
+	case cfg.Burst < 1:
+		return config{}, errors.New("-burst must be at least 1")
 	case cfg.SettleTimeout <= 0:
 		return config{}, errors.New("-settle-timeout must be positive")
 	}

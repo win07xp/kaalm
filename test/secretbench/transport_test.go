@@ -23,9 +23,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 func TestClassifyVerbs(t *testing.T) {
@@ -132,26 +129,5 @@ func TestWatchTargetIgnoresVersion(t *testing.T) {
 	}
 	if watchTarget(a.URL) == watchTarget(c.URL) {
 		t.Fatal("watches on different Secrets share a target")
-	}
-}
-
-// A lean reader builds two clients from one counted config, one for its
-// watch streams. Both must count through the same counter and keep the base
-// transport the first client built.
-func TestCountedConfigKeepsOneBaseTransportAcrossClients(t *testing.T) {
-	base := &rest.Config{Host: "https://127.0.0.1:1"}
-	cfg, counter := countedConfig(base, 100, 200)
-	if _, err := kubernetes.NewForConfig(cfg); err != nil {
-		t.Fatal(err)
-	}
-	first := counter.base
-	if first == nil {
-		t.Fatal("first client did not set the counter's base transport")
-	}
-	if _, err := kubernetes.NewForConfig(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if counter.base != first {
-		t.Fatal("second client replaced the counter's base transport")
 	}
 }

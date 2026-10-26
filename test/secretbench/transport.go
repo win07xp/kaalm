@@ -30,6 +30,10 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// secretsResource is the Secret resource's name in URLs, metrics, and RBAC
+// rules.
+const secretsResource = "secrets"
+
 // verb is how the benchmark counts a request.
 type verb int
 
@@ -69,7 +73,7 @@ func classify(req *http.Request) verb {
 	}
 	parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
 	for i, p := range parts {
-		if p != "secrets" {
+		if p != secretsResource {
 			continue
 		}
 		switch len(parts) - i {
@@ -86,8 +90,8 @@ func classify(req *http.Request) verb {
 // limiter, so it sees what reaches the API server. It also tracks the
 // non-watch requests in flight, the watches open now, and the distinct
 // watches ever opened (by path and selectors), which tells when every
-// Secret's or namespace's watch has opened at least once even while the
-// reflectors re-open them.
+// Secret's watch has opened at least once even while the reflectors re-open
+// them.
 type countingTransport struct {
 	base http.RoundTripper
 
@@ -134,8 +138,8 @@ func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	return resp, nil
 }
 
-// CloseIdleConnections drops the variant's idle connections after Stop, so
-// their goroutines do not count against the next variant.
+// CloseIdleConnections drops the reader's idle connections after Stop, so
+// their goroutines do not count against the next step.
 func (t *countingTransport) CloseIdleConnections() { utilnet.CloseIdleConnectionsFor(t.base) }
 
 // WrappedRoundTripper lets client-go unwrap the transport.
@@ -192,23 +196,18 @@ func (b *watchBody) Close() error {
 
 // countedConfig copies base with the given client limit and a counting
 // transport. The Proxy func (no proxy) makes the config uncacheable for
-// client-go's transport cache, so each variant gets its own connections
-// rather than sharing the admin client's.
+// client-go's transport cache, so each step's Watcher gets its own
+// connections rather than sharing the admin client's.
 func countedConfig(base *rest.Config, qps float32, burst int) (*rest.Config, *countingTransport) {
 	cfg := rest.CopyConfig(base)
 	cfg.QPS = qps
 	cfg.Burst = burst
 	cfg.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	// A client builds its transport once, when it is created, and the
-	// wrapper sets the counter's base then. The config is uncacheable, so a
-	// second client built from it would build a new base and overwrite the
-	// first; the counter keeps the first, so every client from this config
-	// counts through one counter and one set of connections.
+	// wrapper sets the counter's base then; build one client per config.
 	counter := newCountingTransport(nil)
 	cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper {
-		if counter.base == nil {
-			counter.base = rt
-		}
+		counter.base = rt
 		return counter
 	})
 	return cfg, counter

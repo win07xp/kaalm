@@ -35,25 +35,6 @@ func TestNamespaceForLayouts(t *testing.T) {
 	}
 }
 
-func TestNamespacesUsedCapsAtCount(t *testing.T) {
-	cases := []struct {
-		count, namespaces int
-		layout            string
-		want              int
-	}{
-		{0, 20, layoutSpread, 0},
-		{5, 20, layoutSpread, 5},
-		{250, 20, layoutSpread, 20},
-		{0, 20, layoutOne, 0},
-		{250, 20, layoutOne, 1},
-	}
-	for _, c := range cases {
-		if got := namespacesUsed(c.count, c.layout, c.namespaces); got != c.want {
-			t.Errorf("namespacesUsed(%d, %s, %d) = %d, want %d", c.count, c.layout, c.namespaces, got, c.want)
-		}
-	}
-}
-
 func TestParseFlagsDefaults(t *testing.T) {
 	cfg, err := parseFlags(nil)
 	if err != nil {
@@ -62,11 +43,12 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if got := cfg.Counts; len(got) != 6 || got[0] != 0 || got[5] != 5000 {
 		t.Fatalf("counts = %v, want 0..5000", got)
 	}
-	if cfg.Repeats != 3 || cfg.Namespaces != 20 || len(cfg.Variants) != 5 || len(cfg.Layouts) != 2 {
+	if cfg.Repeats != 3 || cfg.Namespaces != 20 || len(cfg.Layouts) != 2 {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if cfg.Variants[3] != "lean" {
-		t.Fatalf("variants = %v, want lean after B", cfg.Variants)
+	if cfg.QPS != gatewayQPS || cfg.Burst != gatewayBurst {
+		t.Fatalf("client limit = QPS %v, burst %d; want the gateway's %d and %d",
+			cfg.QPS, cfg.Burst, gatewayQPS, gatewayBurst)
 	}
 	if !strings.HasPrefix(cfg.Out, "test/secretbench/results/") {
 		t.Fatalf("out = %q, want it under test/secretbench/results/", cfg.Out)
@@ -81,20 +63,24 @@ func TestParseFlagsRejectsUnorderedCounts(t *testing.T) {
 	}
 }
 
-func TestParseFlagsRejectsUnknownVariant(t *testing.T) {
-	if _, err := parseFlags([]string{"-variants", "today-gw,D"}); err == nil {
-		t.Fatal("unknown variant accepted")
-	}
+func TestParseFlagsRejectsUnknownLayout(t *testing.T) {
 	if _, err := parseFlags([]string{"-layouts", "many"}); err == nil {
 		t.Fatal("unknown layout accepted")
 	}
-	cfg, err := parseFlags([]string{"-variants", "A,today-ctrl"})
+}
+
+func TestParseFlagsClientLimit(t *testing.T) {
+	cfg, err := parseFlags([]string{"-qps", "20", "-burst", "30"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := selectVariants(cfg)
-	if len(got) != 2 || got[0].Name != "A" || got[1].Name != "today-ctrl" {
-		t.Fatalf("selectVariants = %v, want A then today-ctrl", got)
+	if cfg.QPS != 20 || cfg.Burst != 30 {
+		t.Fatalf("client limit = QPS %v, burst %d; want 20 and 30", cfg.QPS, cfg.Burst)
+	}
+	for _, args := range [][]string{{"-qps", "0"}, {"-qps", "-5"}, {"-burst", "0"}, {"-burst", "-1"}} {
+		if _, err := parseFlags(args); err == nil {
+			t.Errorf("%v accepted", args)
+		}
 	}
 }
 
@@ -105,8 +91,5 @@ func TestParseFlagsRBACCheck(t *testing.T) {
 	}
 	if !cfg.RBACCheck || cfg.Out != "" {
 		t.Fatalf("cfg = %+v, want RBACCheck and no summary path", cfg)
-	}
-	if _, err := parseFlags([]string{"-rbac-check", "-variants", "today-gw,lean"}); err != nil {
-		t.Fatalf("-rbac-check with -variants: %v", err)
 	}
 }

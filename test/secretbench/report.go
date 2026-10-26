@@ -24,20 +24,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
 )
 
 // summary is one run's output: its settings, every sample, and the slope
-// fits over them.
+// fits over them, keyed by layout.
 type summary struct {
 	StartedAt  time.Time `json:"startedAt"`
 	FinishedAt time.Time `json:"finishedAt,omitzero"`
 	Config     config    `json:"config"`
 	Kubernetes string    `json:"kubernetes"`
 	// BaselineSecretWatches is the API server's open Secret watches before
-	// any reader ran; sampled watch counts subtract it.
+	// any Watcher ran, envtest's own; sampled watch counts subtract it.
 	BaselineSecretWatches float64                   `json:"baselineSecretWatches"`
 	Samples               []sample                  `json:"samples"`
 	Fits                  map[string]map[string]fit `json:"fits"`
@@ -62,13 +63,13 @@ func (s *summary) write(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// printTable prints, for each layout, one row per variant with the slope per
+// printTable prints two tables with one row per layout: the slope per
 // Secret of every figure, then the mean of every figure at the largest
 // Secret count.
 func printTable(w io.Writer, s *summary) {
 	fits := fitAll(s.Samples)
 	figs := figures()
-	header := []string{"variant"}
+	header := []string{"layout"}
 	for _, f := range figs {
 		h := f.Name
 		if f.Unit != "" {
@@ -80,67 +81,57 @@ func printTable(w io.Writer, s *summary) {
 	for _, smp := range s.Samples {
 		largest = max(largest, smp.Secrets)
 	}
+	var layouts []string
 	for _, layout := range s.Config.Layouts {
-		variants := variantsIn(s.Samples, layout)
-		if len(variants) == 0 {
-			continue
-		}
-		_, _ = fmt.Fprintf(w, "\nlayout %s: slope per Secret (least squares over every count and repeat)\n", layout)
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
-		_, _ = fmt.Fprintln(tw, strings.Join(header, "\t")+"\t")
-		for _, v := range variants {
-			row := []string{v}
-			for _, f := range figs {
-				ft, ok := fits[v+"/"+layout][f.Name]
-				if !ok {
-					row = append(row, "-")
-					continue
-				}
-				row = append(row, fmt.Sprintf("%.4g", ft.Slope))
-			}
-			_, _ = fmt.Fprintln(tw, strings.Join(row, "\t")+"\t")
-		}
-		_ = tw.Flush()
-
-		_, _ = fmt.Fprintf(w, "\nlayout %s: mean at %d Secrets\n", layout, largest)
-		tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
-		_, _ = fmt.Fprintln(tw, strings.Join(header, "\t")+"\t")
-		for _, v := range variants {
-			row := []string{v}
-			for _, f := range figs {
-				var sum float64
-				var n int
-				for _, smp := range s.Samples {
-					if smp.Variant != v || smp.Layout != layout || smp.Secrets != largest {
-						continue
-					}
-					if val, ok := f.Value(smp); ok {
-						sum += val
-						n++
-					}
-				}
-				if n == 0 {
-					row = append(row, "-")
-					continue
-				}
-				row = append(row, fmt.Sprintf("%.4g", sum/float64(n)))
-			}
-			_, _ = fmt.Fprintln(tw, strings.Join(row, "\t")+"\t")
-		}
-		_ = tw.Flush()
-	}
-}
-
-// variantsIn lists the variants that have samples in layout, in first-seen
-// order.
-func variantsIn(samples []sample, layout string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, s := range samples {
-		if s.Layout == layout && !seen[s.Variant] {
-			seen[s.Variant] = true
-			out = append(out, s.Variant)
+		if slices.ContainsFunc(s.Samples, func(smp sample) bool { return smp.Layout == layout }) {
+			layouts = append(layouts, layout)
 		}
 	}
-	return out
+	if len(layouts) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintf(w, "\nslope per Secret (least squares over every count and repeat)\n")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
+	_, _ = fmt.Fprintln(tw, strings.Join(header, "\t")+"\t")
+	for _, layout := range layouts {
+		row := []string{layout}
+		for _, f := range figs {
+			ft, ok := fits[layout][f.Name]
+			if !ok {
+				row = append(row, "-")
+				continue
+			}
+			row = append(row, fmt.Sprintf("%.4g", ft.Slope))
+		}
+		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t")+"\t")
+	}
+	_ = tw.Flush()
+
+	_, _ = fmt.Fprintf(w, "\nmean at %d Secrets\n", largest)
+	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
+	_, _ = fmt.Fprintln(tw, strings.Join(header, "\t")+"\t")
+	for _, layout := range layouts {
+		row := []string{layout}
+		for _, f := range figs {
+			var sum float64
+			var n int
+			for _, smp := range s.Samples {
+				if smp.Layout != layout || smp.Secrets != largest {
+					continue
+				}
+				if val, ok := f.Value(smp); ok {
+					sum += val
+					n++
+				}
+			}
+			if n == 0 {
+				row = append(row, "-")
+				continue
+			}
+			row = append(row, fmt.Sprintf("%.4g", sum/float64(n)))
+		}
+		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t")+"\t")
+	}
+	_ = tw.Flush()
 }

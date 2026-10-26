@@ -36,25 +36,25 @@ import (
 
 const (
 	// settleHold is how long requests must stay quiet after every watch
-	// has opened, so the last requests in flight land in the counts.
+	// has opened before the step samples, so the last requests in flight
+	// land in the counts.
 	settleHold = time.Second
 	// quietBound caps that wait: reflectors re-open their watches every 5
 	// to 10 minutes, so at thousands of Secrets the requests never go fully
 	// quiet.
 	quietBound    = 30 * time.Second
 	updateTimeout = 30 * time.Second
-	// updatePoll is how often a read checks for an update; every variant
+	// updatePoll is how often a read checks for an update; the Watcher
 	// serves it from its cache, so a tight poll costs no requests.
 	updatePoll   = 500 * time.Microsecond
 	drainTimeout = 60 * time.Second
-	// drainSlack is how many goroutines above the pre-variant count still
+	// drainSlack is how many goroutines above the pre-step count still
 	// count as drained: client-go and the HTTP/2 transport keep a few.
 	drainSlack = 8
 )
 
-// sample is one variant's figures at one Secret count.
+// sample is the Watcher's figures at one Secret count.
 type sample struct {
-	Variant string `json:"variant"`
 	Layout  string `json:"layout"`
 	Secrets int    `json:"secrets"`
 	Repeat  int    `json:"repeat"`
@@ -97,23 +97,19 @@ type bench struct {
 	cfg             config
 }
 
-// measure runs one variant from a cold reader over names, samples it, and
+// measure starts a cold Watcher, reads every name once, samples it, and
 // stops it, waiting for its goroutines and watches to drain so nothing
-// leaks into the next variant.
-func (b *bench) measure(ctx context.Context, v variant, layout string, repeat int,
-	names []types.NamespacedName, nsUsed int) (sample, error) {
-	s := sample{Variant: v.Name, Layout: layout, Secrets: len(names), Repeat: repeat}
+// leaks into the next step.
+func (b *bench) measure(ctx context.Context, layout string, repeat int, names []types.NamespacedName) (sample, error) {
+	s := sample{Layout: layout, Secrets: len(names), Repeat: repeat}
 	s.GoroutinesBefore = runtime.NumGoroutine()
 
-	rc, counter := countedConfig(b.base, v.QPS, v.Burst)
+	rc, counter := countedConfig(b.base, float32(b.cfg.QPS), b.cfg.Burst)
 	client, err := kubernetes.NewForConfig(rc)
 	if err != nil {
-		return s, fmt.Errorf("client for %s: %w", v.Name, err)
+		return s, fmt.Errorf("watcher client: %w", err)
 	}
-	reader, err := v.Build(ctx, rc, client)
-	if err != nil {
-		return s, fmt.Errorf("reader for %s: %w", v.Name, err)
-	}
+	reader := newWatcherReader(ctx, client)
 	stopped := false
 	defer func() {
 		if !stopped {
@@ -129,7 +125,10 @@ func (b *bench) measure(ctx context.Context, v variant, layout string, repeat in
 		s.note("%d cold reads failed; first: %v", errs, firstErr)
 	}
 
-	expected := v.ExpectedWatches(len(names), nsUsed)
+	// The Watcher opens one watch per Secret. Its reflectors re-open their
+	// watches every 5 to 10 minutes, so the step counts a watch once it has
+	// opened at least once rather than the watches open right now.
+	expected := len(names)
 	s.Settled = waitFor(ctx, start.Add(b.cfg.SettleTimeout), 100*time.Millisecond, func() bool {
 		return counter.distinctWatches() >= expected
 	})
@@ -165,8 +164,8 @@ func (b *bench) measure(ctx context.Context, v variant, layout string, repeat in
 
 // coldStart reads every name once with workers concurrent readers and
 // returns how many reads failed and the first failure. A failed read is not
-// retried, so a variant that cannot serve shows it rather than hanging.
-func coldStart(ctx context.Context, reader secretReader, names []types.NamespacedName, workers int) (int, error) {
+// retried, so a reader that cannot serve shows it rather than hanging.
+func coldStart(ctx context.Context, reader *watcherReader, names []types.NamespacedName, workers int) (int, error) {
 	var next, failed atomic.Int64
 	var firstErr error
 	var once sync.Once
@@ -226,15 +225,18 @@ func waitQuiet(ctx context.Context, counter *countingTransport) bool {
 
 // releaseMemory collects garbage and returns the freed pages to the OS. A
 // GC alone keeps freed pages until the background scavenger gives them back
-// over seconds to minutes, so the RSS of a variant sampled right after
-// another would still hold the previous variant's informers.
+// over seconds to minutes, so the RSS sampled at one step would still hold
+// the previous step's informers.
 func releaseMemory() {
 	runtime.GC()
 	debug.FreeOSMemory()
 }
 
 // sampleState records memory, goroutines, requests, and the control plane's
-// side after a forced GC that returns freed pages to the OS.
+// side after a forced GC that returns freed pages to the OS. The API
+// server's open Secret watches subtract envtest's own, read before any
+// Watcher ran. kube-apiserver and etcd keep memory from earlier steps, so
+// their RSS reads as a trend over the sweep, not a cost per step.
 func (b *bench) sampleState(ctx context.Context, s *sample, counter *countingTransport) {
 	releaseMemory()
 	var ms runtime.MemStats
@@ -264,9 +266,9 @@ func (b *bench) sampleState(ctx context.Context, s *sample, counter *countingTra
 
 // timeUpdates updates UpdateSamples Secrets, spaced evenly over names, one
 // at a time through the admin client, and times each from the write's start
-// until the reader returns the new resourceVersion. The figure includes the
-// update's round trip, the same for every variant.
-func (b *bench) timeUpdates(ctx context.Context, s *sample, reader secretReader, names []types.NamespacedName) {
+// until the reader returns the new resourceVersion, so the figure includes
+// the write's own round trip.
+func (b *bench) timeUpdates(ctx context.Context, s *sample, reader *watcherReader, names []types.NamespacedName) {
 	n := min(b.cfg.UpdateSamples, len(names))
 	if n == 0 {
 		return
