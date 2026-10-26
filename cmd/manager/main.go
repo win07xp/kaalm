@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
@@ -58,6 +59,13 @@ import (
 	"github.com/win07xp/kaalm/internal/secretwatch"
 	"github.com/win07xp/kaalm/internal/storagemigration"
 	// +kubebuilder:scaffold:imports
+)
+
+// The Secret watcher's client limits, the same as the gateway's
+// --client-qps and --client-burst defaults.
+const (
+	secretWatcherQPS   = 100
+	secretWatcherBurst = 200
 )
 
 var (
@@ -274,17 +282,24 @@ func main() {
 	// watcher's informers stop when the manager does.
 	ctx := ctrl.SetupSignalHandler()
 	// Secrets in user namespaces (rule 23 pull Secrets, rule 48 env
-	// Secrets, channel credentials) are served from one GET-backed,
-	// name-filtered watch per referenced Secret. The controller holds get
-	// and watch on each through a resourceNames-scoped Role and never
-	// list, so a namespace informer is out of reach; a live read per
-	// validation pass throttled the client at a few hundred channels. The
-	// clientset uses the manager's rest config, so --client-qps and
-	// --client-burst apply to it, in a token bucket of its own. The
-	// watcher also tells the Agent, AgentTask, and AgentChannel
-	// reconcilers when a Secret they read changes, so the workload or
-	// channel re-runs at once.
-	clientset, err := kubernetes.NewForConfig(restCfg)
+	// Secrets, channel credentials) are served from one name-selected list
+	// and watch per referenced Secret. The controller holds get, list, and
+	// watch on each through a resourceNames-scoped Role, which allows a list
+	// only with the Secret's exact name, so a namespace informer is out of
+	// reach; a live read per validation pass throttled the client at a few
+	// hundred channels. The watcher also tells the Agent, AgentTask, and
+	// AgentChannel reconcilers when a Secret they read changes, so the
+	// workload or channel re-runs at once.
+	//
+	// A cold start or failover issues one LIST per referenced Secret through
+	// the watcher's client limiter (client-go does not throttle WATCH), so
+	// the watcher runs on a client of its own at the gateway's limits
+	// instead of queueing behind --client-qps and --client-burst, which the
+	// manager's own clients keep.
+	watcherCfg := rest.CopyConfig(restCfg)
+	watcherCfg.QPS = secretWatcherQPS
+	watcherCfg.Burst = secretWatcherBurst
+	clientset, err := kubernetes.NewForConfig(watcherCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to build the Secret watcher's clientset")
 		os.Exit(1)
@@ -293,6 +308,10 @@ func main() {
 	// while a new Role reaches the authorizer, so every read must reach the
 	// API server.
 	secretWatcher := secretwatch.New(ctx, clientset)
+	if err := ctrlmetrics.Registry.Register(secretWatcher.Collector()); err != nil {
+		setupLog.Error(err, "unable to register the watched-Secrets gauge")
+		os.Exit(1)
+	}
 	secretSource := secretwatch.NewReader(secretWatcher)
 
 	if err := controller.SetupIndexers(context.Background(), mgr); err != nil {

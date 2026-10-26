@@ -98,6 +98,12 @@ var _ = Describe("Metric catalog on the wire", Ordered, func() {
 		}
 		Expect(strings.Join(pages, "")).To(ContainSubstring(`kaalm_llm_request_duration_seconds_bucket{`),
 			"no gateway replica observed a forwarded LLM request")
+		// The replica that forwarded the request read the provider's
+		// credential Secret through its Secret watcher. A refused list stops
+		// the informer and drops it from the gauge, so a count above zero
+		// shows the chart's Role allows the name-selected list and watch.
+		Expect(strings.Join(pages, "\n")).To(MatchRegexp(`(?m)^kaalm_watched_secrets [1-9]`),
+			"no gateway replica holds an open watch on a Secret it read")
 	})
 })
 

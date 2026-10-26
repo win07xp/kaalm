@@ -17,13 +17,13 @@ rectangle "**Role** kaalm-controller-credentials in kaalm-system" as nscred #lin
   rectangle "Secrets in kaalm-system: get, list, watch" as syssec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-channel-{name}-check in the AgentChannel's namespace" as nsuser #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "Every Secret the channel names: get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "Every Secret the channel names: get, list, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-agent-{name}-pullsecrets or\nkaalm-task-{name}-pullsecrets in the workload's namespace" as nspull #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "Pull Secrets named by the class: get, watch" as pullsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "Pull Secrets named by the class: get, list, watch" as pullsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-agent-{name}-envsecrets or\nkaalm-task-{name}-envsecrets in the workload's namespace" as nsenv #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "Secrets the env names: get, watch" as envsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "Secrets the env names: get, list, watch" as envsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 OPSA -[#0D47A1,bold]-> leases : RoleBinding
 OPSA -[#0D47A1,bold]-> syssec : RoleBinding

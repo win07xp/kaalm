@@ -53,6 +53,7 @@ The table lists the Kaalm-specific metrics of the controller and the gateway; th
 | Controller | `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
 | Controller | `kaalm_hibernations_total` | counter | `namespace` |
 | Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` (`channel` or `annotation`) |
+| Controller and gateway | `kaalm_watched_secrets` | gauge | none |
 | LLM Gateway | `kaalm_llm_requests_total` | counter | `provider`, `model`, `namespace`, `status` |
 | LLM Gateway | `kaalm_llm_request_duration_seconds` | histogram | `provider`, `model` |
 | LLM Gateway | `kaalm_llm_tokens_total` | counter | `provider`, `model`, `namespace`, `direction` |
@@ -74,6 +75,8 @@ The table lists the Kaalm-specific metrics of the controller and the gateway; th
 | User Gateway | `kaalm_channel_callback_duration_seconds` | histogram | `namespace` |
 | User Gateway | `kaalm_channel_response_too_large_total` | counter | `namespace`, `mode` |
 | User Gateway | `kaalm_channel_async_patch_failed_total` | counter | `namespace` |
+
+`kaalm_watched_secrets` is the number of Secrets a process holds an open informer and watch for through its Secret watcher ([What each watched Secret costs](performance-and-scale.md#what-each-watched-secret-costs) gives the cost of each). Read it per process, because memory is per process: a sum across replicas counts a Secret once for each replica that holds it. A gateway replica counts the Secrets it has read itself, until an hour passes with no read. A controller standby reports 0, because only the leader's reconcilers read Secrets. A Secret whose list was refused, that fell back to `get`, or that the process stopped is not counted, so a value above zero shows that the name-selected list passed RBAC ([RBAC and authentication](../security/rbac.md#dynamic-per-namespace-grants-channel-credentials)).
 
 ### Cardinality
 
@@ -150,7 +153,7 @@ Three Grafana dashboards ship as JSON in `config/grafana/`, one per topology lev
 |---|---|---|---|
 | `kaalm-namespace.json` | One tenant namespace | `datasource`, `namespace` | Agent, AgentTask, and AgentChannel counts by phase and condition; canonical spend and budget utilization per provider; budget policy actions; LLM request, rate-limited, and token rates; channel message rate and p95 duration; wake count and p95 duration; tool calls; async callbacks, oversized responses, patch failures |
 | `kaalm-provider.json` | One ModelProvider | `datasource`, `provider` | Request rate, error ratio, latency p50 and p95 by model, token rates, fallback events by target and reason, budget utilization and canonical spend by namespace, spend rate, budget policy and hard-enforcement boundary events, provider-side tool use |
-| `kaalm-cluster.json` | The whole cluster | `datasource`, `job` | Scrape targets up, controller leader, reconcile errors, duration, and queue depth; fleet totals by phase; hibernations and wakes; wake duration; channel messages; LLM and tool-broker traffic and latency; fallbacks; canonical spend by provider; async delivery state |
+| `kaalm-cluster.json` | The whole cluster | `datasource`, `job` | Scrape targets up, controller leader, reconcile errors, duration, and queue depth; watched Secrets per process; fleet totals by phase; hibernations and wakes; wake duration; channel messages; LLM and tool-broker traffic and latency; fallbacks; canonical spend by provider; async delivery state |
 
 Conventions the panels follow:
 

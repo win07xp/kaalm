@@ -20,7 +20,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -83,7 +85,7 @@ func TestManyProvidersAndClasses(t *testing.T) {
 // which the refactor over fleets must leave as they were.
 func TestHoldArgsForOneNamespace(t *testing.T) {
 	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
-	got := holdLoadgenArgs(f, 400, 6.6667, 3*time.Minute)
+	got := holdLoadgenArgs(f, 400, 1, 6.6667, 3*time.Minute)
 	want := []string{
 		"-mode", "channels", "-path-prefix", "/channels/perf/ramp-", "-count", "400",
 		"-pad", "4", "-rate", "6.6667", "-duration", "3m0s",
@@ -171,7 +173,7 @@ func TestToolsClassAndAgentCoverBothProviders(t *testing.T) {
 // fleet's arguments, posts to the namespace the ramp put each agent in.
 func TestSpreadHoldMatchesPlacement(t *testing.T) {
 	f := fleet{phase: phaseNamespaces, prefix: "spread-", namespaces: spreadNamespaces("perf", 20)}
-	args := holdLoadgenArgs(f, 400, 1, time.Minute)
+	args := holdLoadgenArgs(f, 400, 1, 1, time.Minute)
 	var prefix string
 	var nss []string
 	for i := 0; i+1 < len(args); i++ {
@@ -255,5 +257,199 @@ func TestKillingTimesForPods(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("killingTimes = %q, want %q", got, want)
+	}
+}
+
+func TestHoldArgsWithChannelsPerAgent(t *testing.T) {
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	got := holdLoadgenArgs(f, 400, 2, 6.6667, 3*time.Minute)
+	want := []string{
+		"-mode", "channels", "-path-prefix", "/channels/perf/ramp-", "-count", "800",
+		"-pad", "4", "-rate", "6.6667", "-duration", "3m0s", "-per-agent", "2",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hold args = %v, want %v", got, want)
+	}
+}
+
+func TestReadyRunStopsAtTheFirstGap(t *testing.T) {
+	f := fleet{prefix: "ramp-"}
+	ts := []agentTiming{
+		{Name: "ramp-0000", ReadyNow: true}, {Name: "ramp-0001", ReadyNow: true},
+		{Name: "ramp-0002"}, {Name: "ramp-0003", ReadyNow: true},
+	}
+	if got := readyRun(ts, f); got != 2 {
+		t.Errorf("readyRun = %d, want 2", got)
+	}
+}
+
+// The restart block's JSON keys are what the performance page documents.
+func TestRestartResultJSONKeys(t *testing.T) {
+	watches, secretWatches := 7, 15.0
+	res := restartResult{
+		Agents: 400, Channels: 800, ChannelSecrets: 1000, ControllerWarmupSec: 42,
+		ControllerWarmupWatches: []watchSample{{AtSec: 2, SecretWatches: 10}},
+		SweepBefore:             []sweepTarget{{Target: "kaalm-gateway-a", Channels: 800, Served: 800}},
+		SweepAfter:              []sweepTarget{{Target: "kaalm-gateway-b", Channels: 800, Served: 799, Unserved: 1}},
+		Failover:                &failoverResult{Killed: "ctl-a", NewLeader: "ctl-b", Lease: leaseReleased, WarmupSec: 30},
+		Figures: map[string]scaleFigures{pointBefore: {
+			Gateway:    []processFigures{{Pod: "kaalm-gateway-a", Watches: &watches}},
+			Controller: []processFigures{{Pod: "ctl-a", Leader: true}},
+			APIServer:  apiserverFigures{RSSMiB: 900, CPUSeconds: 12, SecretWatches: &secretWatches},
+		}},
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"agents", "controllerRolloutSec", "controllerFirstReconcileSec", "gatewayRolloutSec", "gatewayClient",
+		"gatewayFailed", "channels", "channelSecrets", "controllerWarmupSec", "controllerWarmupWatches",
+		"sweepBefore", "sweepAfter", "failover", "figures",
+	} {
+		if _, ok := top[key]; !ok {
+			t.Errorf("restart JSON has no %q key: %s", key, raw)
+		}
+	}
+	for _, want := range []string{
+		`"served":800`, `"unserved":1`, `"servedSec"`, `"acceptMs"`, `"killed":"ctl-a"`, `"newLeader":"ctl-b"`,
+		`"lease":"released"`,
+		`"firstReconcileSec"`, `"warmupSec":30`, `"recoveredSec"`, `"before":{`, `"gateway":[`, `"controller":[`,
+		`"watches":7`, `"leader":true`, `"heapMiB"`, `"rssMiB"`, `"apiGets"`, `"goroutines"`,
+		`"apiserver":{"rssMiB":900,"cpuSeconds":12,"secretWatches":15}`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("restart JSON lacks %s: %s", want, raw)
+		}
+	}
+	skipped, err := json.Marshal(restartResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(skipped), `"failover":null`) {
+		t.Errorf("a skipped failover should read null: %s", skipped)
+	}
+	printRestart(&res) // the summary table must not trip over any field
+}
+
+func TestChannelsWarm(t *testing.T) {
+	snap := func(reconciles, depth, active float64) *snapshot {
+		body := fmt.Sprintf("# TYPE controller_runtime_reconcile_total counter\n"+
+			"controller_runtime_reconcile_total{controller=\"agentchannel\",result=\"success\"} %v\n"+
+			"controller_runtime_reconcile_total{controller=\"agent\",result=\"success\"} 9999\n"+
+			"# TYPE workqueue_depth gauge\nworkqueue_depth{controller=\"agentchannel\",name=\"agentchannel\"} %v\n"+
+			"# TYPE controller_runtime_active_workers gauge\n"+
+			"controller_runtime_active_workers{controller=\"agentchannel\"} %v\n", reconciles, depth, active)
+		fams, err := parseMetrics([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &snapshot{metrics: map[string][]sample{}}
+		s.merge(fams)
+		return s
+	}
+	cases := []struct {
+		name                      string
+		reconciles, depth, active float64
+		want                      bool
+	}{
+		{"every channel reconciled, queue empty", 400, 0, 0, true},
+		{"fewer reconciles than channels", 399, 0, 0, false},
+		{"queue not empty", 500, 3, 0, false},
+		{"a worker still busy", 500, 0, 1, false},
+	}
+	for _, c := range cases {
+		if got := channelsWarm(snap(c.reconciles, c.depth, c.active), 400); got != c.want {
+			t.Errorf("%s: channelsWarm = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// The restart sweep posts where the fleet serves each channel.
+func TestSweepGatewayArgsMatchFleetChannels(t *testing.T) {
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	args := sweepGatewayArgs(f, []string{"10.42.0.7", "10.42.1.9"}, 3, 2)
+	flags := map[string]string{}
+	for i := 0; i+1 < len(args); i += 2 {
+		flags[args[i]] = args[i+1]
+	}
+	if flags["-mode"] != modeSweep || flags["-count"] != "6" || flags["-per-agent"] != "2" {
+		t.Errorf("sweep args %v", args)
+	}
+	if flags["-targets"] != "https://10.42.0.7:8080,https://10.42.1.9:8080" ||
+		flags["-server-name"] != "kaalm-gateway.kaalm-system.svc" {
+		t.Errorf("targets %q, server name %q", flags["-targets"], flags["-server-name"])
+	}
+	c := loadgenConfig{pathPrefix: flags["-path-prefix"], pad: 4, perAgent: 2}
+	cfg := config{ChannelsPerAgent: 2}
+	for j := 0; j < 6; j++ {
+		ch := f.channels(j/2, cfg, "https://cb")[j%2].(*kaalmv1beta1.AgentChannel)
+		if got := channelJobURL(c, "", j); got != ch.Spec.Webhook.Path {
+			t.Errorf("job %d: sweep posts to %s, fleet serves %s", j, got, ch.Spec.Webhook.Path)
+		}
+	}
+}
+
+// The failover's first-reconcile time and warm-up start do not wait for the
+// Lease follower: a slow handoff still leaves both near the kill.
+func TestFailoverWaitsDoNotWaitOnTheLeaseHandoff(t *testing.T) {
+	const handoffDelay = 500 * time.Millisecond
+	start := time.Now()
+	handoff := make(chan handoffResult, 1)
+	go func() {
+		time.Sleep(handoffDelay)
+		handoff <- handoffResult{outcome: leaseReleased}
+	}()
+	var warmupAt time.Duration
+	res := &failoverResult{}
+	leaseErr, err := timeFailoverWaits(start, res,
+		func() error { return nil },
+		func() (float64, []watchSample) {
+			warmupAt = time.Since(start)
+			return 1, nil
+		},
+		handoff)
+	if err != nil || leaseErr != nil {
+		t.Fatalf("timeFailoverWaits: err %v, lease err %v", err, leaseErr)
+	}
+	if limit := handoffDelay.Seconds() / 2; res.FirstReconcileSec >= limit {
+		t.Errorf("firstReconcileSec = %.3f, want under %.3f: it waited on the Lease handoff", res.FirstReconcileSec, limit)
+	}
+	if warmupAt >= handoffDelay/2 {
+		t.Errorf("warm-up started at %v, want under %v: it waited on the Lease handoff", warmupAt, handoffDelay/2)
+	}
+	if res.Lease != leaseReleased || res.WarmupSec != 1 {
+		t.Errorf("result = %+v, want lease %q and warmupSec 1", res, leaseReleased)
+	}
+}
+
+// A failed first reconcile is the failover's error; a failed Lease read is
+// returned apart and leaves the timings and an empty outcome.
+func TestFailoverWaitsErrors(t *testing.T) {
+	handoff := make(chan handoffResult, 1)
+	handoff <- handoffResult{}
+	if _, err := timeFailoverWaits(time.Now(), &failoverResult{},
+		func() error { return errors.New("no reconcile") },
+		func() (float64, []watchSample) { t.Error("warm-up ran after a failed first reconcile"); return 0, nil },
+		handoff); err == nil {
+		t.Error("timeFailoverWaits succeeded; want the first-reconcile error")
+	}
+
+	handoff = make(chan handoffResult, 1)
+	handoff <- handoffResult{outcome: leaseExpired, err: errors.New("lease read failed")}
+	res := &failoverResult{}
+	leaseErr, err := timeFailoverWaits(time.Now(), res,
+		func() error { return nil },
+		func() (float64, []watchSample) { return 2, nil },
+		handoff)
+	if err != nil || leaseErr == nil {
+		t.Fatalf("err %v, lease err %v; want only a lease error", err, leaseErr)
+	}
+	if res.Lease != "" || res.WarmupSec != 2 {
+		t.Errorf("result = %+v, want no lease outcome and warmupSec 2", res)
 	}
 }

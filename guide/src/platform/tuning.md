@@ -29,9 +29,12 @@ defaults to `20` and `30`; the gateway and the console default to `100` and
 `200`, because they read from the API on the request path. Raise the
 controller's limit together with `controller.maxConcurrentReconciles`, since
 more workers make more requests; the extra workers only queue behind the
-limiter otherwise. Raise the console's limit when people whose access is
-granted per namespace wait on its namespace list on a cluster with hundreds of
-namespaces, because each namespace costs one access review the first time.
+limiter otherwise. Raising it does not speed up the controller's Secret loads at
+start-up, which run on a client of their own
+([Configuration reference](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#configuration-reference)).
+Raise the console's limit when people whose access is granted per namespace
+wait on its namespace list on a cluster with hundreds of namespaces, because
+each namespace costs one access review the first time.
 
 ```bash
 --set controller.client.qps=50

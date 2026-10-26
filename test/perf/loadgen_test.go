@@ -25,11 +25,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestToolCallBody(t *testing.T) {
@@ -404,5 +407,97 @@ func TestFixedConcurrencyOpensOneCallerPerWorker(t *testing.T) {
 	}
 	if res.Statuses["200"] == 0 {
 		t.Errorf("no calls recorded: %+v", res)
+	}
+}
+
+func TestChannelLoadMapsJobIndexToAgentAndSlot(t *testing.T) {
+	c := loadgenConfig{pathPrefix: "/channels/perf/ramp-", pad: 4, perAgent: 2}
+	f := fleet{phase: phaseRamp, prefix: "ramp-", namespaces: []string{"perf"}}
+	cfg := config{ChannelsPerAgent: 2}
+	for j, want := range []string{"ramp-0000", "ramp-0000-c1", "ramp-0001", "ramp-0001-c1"} {
+		ch := f.channels(j/2, cfg, "https://cb")[j%2].(*kaalmv1beta1.AgentChannel)
+		if ch.Name != want {
+			t.Fatalf("fleet channel %d is %s, want %s", j, ch.Name, want)
+		}
+		if got := channelJobURL(c, "", j); got != ch.Spec.Webhook.Path {
+			t.Errorf("job %d: loadgen posts to %s, fleet serves %s at %s", j, got, ch.Name, ch.Spec.Webhook.Path)
+		}
+	}
+	one := loadgenConfig{pathPrefix: "/channels/perf/ramp-", pad: 4, perAgent: 1}
+	if got := channelJobURL(one, "https://gw", 7); got != channelURL("https://gw", one.pathPrefix, nil, 4, 7) {
+		t.Errorf("one channel per agent: %s, want channelURL's mapping", got)
+	}
+}
+
+// sweepServer answers channel 0 with 401 twice and then 202, channel 1 with
+// 202 at once, and channel 2 with 500 always.
+func sweepServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	seen := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer hook-token" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		mu.Lock()
+		seen[r.URL.Path]++
+		n := seen[r.URL.Path]
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/channels/perf/ramp-0000":
+			if n <= 2 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		case "/channels/perf/ramp-0001":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSweepServesEveryChannelAfterRetries(t *testing.T) {
+	bearer := t.TempDir() + "/token"
+	if err := os.WriteFile(bearer, []byte("hook-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, b := sweepServer(t), sweepServer(t)
+	c := loadgenConfig{
+		pathPrefix: "/channels/perf/ramp-", pad: 4, count: 3, perAgent: 1,
+		bearerFile: bearer, targets: []string{a.URL, b.URL}, sweepTimeout: 3 * time.Second,
+	}
+	res, err := sweepLoad(&http.Client{Timeout: 5 * time.Second}, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Mode != modeSweep || len(res.Sweep) != 2 {
+		t.Fatalf("mode %s with %d targets, want sweep with 2", res.Mode, len(res.Sweep))
+	}
+	total := 0
+	for i, st := range res.Sweep {
+		if st.Target != c.targets[i] {
+			t.Errorf("target %d is %s, want %s", i, st.Target, c.targets[i])
+		}
+		if st.Channels != 3 || st.Served != 2 || st.Unserved != 1 {
+			t.Errorf("%s: %d channels, %d served, %d unserved; want 3, 2, 1", st.Target, st.Channels, st.Served, st.Unserved)
+		}
+		if st.AcceptMs.Count != 2 || st.ServedSec <= 0 {
+			t.Errorf("%s: %d acceptance samples, servedSec %.3f", st.Target, st.AcceptMs.Count, st.ServedSec)
+		}
+		if st.Statuses["401"] != 2 || st.Statuses["202"] != 2 || st.Statuses["500"] < 1 {
+			t.Errorf("%s: statuses %v", st.Target, st.Statuses)
+		}
+		if st.Requests != st.Statuses["401"]+st.Statuses["202"]+st.Statuses["500"] {
+			t.Errorf("%s: %d requests, statuses %v", st.Target, st.Requests, st.Statuses)
+		}
+		total += st.Requests
+	}
+	if res.Requests != total || res.Statuses["202"] != 4 {
+		t.Errorf("summary: %d requests (targets %d), statuses %v", res.Requests, total, res.Statuses)
 	}
 }

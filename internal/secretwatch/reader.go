@@ -32,7 +32,7 @@ var errListUnsupported = errors.New("secretwatch: List is not supported")
 // controller-runtime reader can take it. Get serves *corev1.Secret only and
 // passes the watcher's errors through unchanged: an absent Secret is an
 // apierrors NotFound (from the synced cache or the live fallback) and a
-// forbidden read is the informer GET's apierrors Forbidden.
+// forbidden read is the informer list's apierrors Forbidden.
 type Reader struct {
 	Watcher *Watcher
 }
@@ -57,7 +57,8 @@ func (r Reader) Get(ctx context.Context, key client.ObjectKey, obj client.Object
 	return nil
 }
 
-// List always fails: a list needs a list grant the callers do not hold.
+// List always fails: the watcher serves named reads only, and the callers'
+// grants allow a list only with an exact metadata.name selector.
 func (Reader) List(context.Context, client.ObjectList, ...client.ListOption) error {
 	return errListUnsupported
 }

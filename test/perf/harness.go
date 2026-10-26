@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,6 +45,8 @@ type harness struct {
 	cfg config
 	k   *cluster
 	sum *summary
+	// noted holds the keys noteOnce has already noted.
+	noted map[string]bool
 }
 
 type summary struct {
@@ -97,6 +100,67 @@ func (h *harness) note(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	h.sum.Notes = append(h.sum.Notes, msg)
 	h.logf("note: %s", msg)
+}
+
+// noteOnce notes a message the first time key is seen, so a condition that
+// holds at every sample point is noted once.
+func (h *harness) noteOnce(key, format string, args ...any) {
+	if h.noted == nil {
+		h.noted = map[string]bool{}
+	}
+	if h.noted[key] {
+		return
+	}
+	h.noted[key] = true
+	h.note(format, args...)
+}
+
+// componentController is the controller's app.kubernetes.io/component label.
+const componentController = "controller"
+
+// figures reads every gateway and controller process and the API server at
+// one point. A process whose goroutine profile cannot be read keeps its
+// other figures and loses its watch count, with one note per Pod; a missing
+// Secret watch gauge is noted once.
+func (h *harness) figures(ctx context.Context) (scaleFigures, error) {
+	out := scaleFigures{At: time.Now()}
+	leader, err := h.k.controllerLeader(ctx)
+	if err != nil {
+		h.noteOnce("leader", "reading the controller leader Lease: %v", err)
+	}
+	for _, comp := range []struct {
+		name, port string
+		into       *[]processFigures
+	}{{"gateway", "9090", &out.Gateway}, {componentController, "8080", &out.Controller}} {
+		pods, err := h.k.componentPods(ctx, "kaalm-system", comp.name)
+		if err != nil {
+			return out, err
+		}
+		for _, pod := range pods {
+			fig, err := h.k.podFigures(ctx, "kaalm-system", pod, comp.port, h.cfg.PprofPort)
+			if errors.Is(err, errNoWatchStreams) {
+				key := "pprof " + pod.Name
+				if h.cfg.PprofPort <= 0 {
+					key = "pprof off"
+				}
+				h.noteOnce(key, "watch stream count left out: %v", err)
+			} else if err != nil {
+				return out, err
+			}
+			fig.Leader = comp.name == componentController && pod.Name == leader
+			*comp.into = append(*comp.into, fig)
+		}
+	}
+	api, err := h.k.scrapeAPIServer(ctx)
+	if err != nil {
+		return out, err
+	}
+	out.APIServer = apiserverFiguresFrom(api)
+	if out.APIServer.SecretWatches == nil {
+		h.noteOnce("secret watches", "the API server exposes no %s gauge: Secret watch counts left out",
+			metricSecretWatches)
+	}
+	return out, nil
 }
 
 func runHarness(args []string) error {
@@ -351,12 +415,7 @@ func (h *harness) printTable() {
 	if t := s.Teardown; t != nil {
 		fmt.Printf("\nteardown: %d agents gone in %.0fs\n", t.Agents, t.Seconds)
 	}
-	if r := s.Restart; r != nil {
-		fmt.Printf("\nrestart: %d agents up; controller rolled in %.0fs, first reconcile at %.0fs; "+
-			"gateway rolled in %.0fs with %d of %d requests failed\n",
-			r.Agents, r.ControllerRolloutSec, r.ControllerFirstReconcileSec,
-			r.GatewayRolloutSec, r.GatewayFailed, r.GatewayClient.Requests)
-	}
+	printRestart(s.Restart)
 	if c := s.Churn; c != nil && c.Idle != nil {
 		a := c.Idle
 		fmt.Printf("\nidle audit (%.0fs, %d hibernated agents, after %.0fs for channels to settle): "+
@@ -450,6 +509,84 @@ func (h *harness) printTable() {
 	for _, n := range s.Notes {
 		fmt.Println("note:", n)
 	}
+}
+
+// printRestart prints the restart block: the rollouts, the sweeps per
+// gateway replica, the controller warm-up and failover, and the figures at
+// each point.
+func printRestart(r *restartResult) {
+	if r == nil {
+		return
+	}
+	requests := 0
+	if r.GatewayClient != nil {
+		requests = r.GatewayClient.Requests
+	}
+	fmt.Printf("\nrestart: %d agents up; controller rolled in %.0fs, first reconcile at %.0fs; "+
+		"gateway rolled in %.0fs with %d of %d requests failed\n",
+		r.Agents, r.ControllerRolloutSec, r.ControllerFirstReconcileSec,
+		r.GatewayRolloutSec, r.GatewayFailed, requests)
+	fmt.Printf("  %d channels referencing %d Secrets; controller warm over every channel at %.0fs\n",
+		r.Channels, r.ChannelSecrets, r.ControllerWarmupSec)
+	for _, sw := range []struct {
+		label   string
+		targets []sweepTarget
+	}{{"sweep before (warm)", r.SweepBefore}, {"sweep after (cold)", r.SweepAfter}} {
+		for _, t := range sw.targets {
+			fmt.Printf("  %-20s %-36s %4d/%-4d served in %6.1fs", sw.label, t.Target, t.Served, t.Channels, t.ServedSec)
+			fmt.Printf("  accept p50/p95/max %6.0f/%6.0f/%6.0f ms  statuses %v\n",
+				t.AcceptMs.P50, t.AcceptMs.P95, t.AcceptMs.Max, t.Statuses)
+		}
+	}
+	if f := r.Failover; f != nil {
+		fmt.Printf("  failover: killed %s, Lease %s, %s leads; first reconcile %.0fs, warm %.0fs, Deployment Ready %.0fs\n",
+			f.Killed, f.Lease, f.NewLeader, f.FirstReconcileSec, f.WarmupSec, f.RecoveredSec)
+	}
+	if len(r.Figures) == 0 {
+		return
+	}
+	fmt.Printf("  %-22s  %-37s  %10s  %8s  %7s  %7s  %8s\n",
+		"point", "pod", "goroutines", "heap MiB", "rss MiB", "watches", "API GETs")
+	prevCPU := -1.0
+	for _, point := range figurePoints {
+		fig, ok := r.Figures[point]
+		if !ok {
+			continue
+		}
+		for _, p := range append(append([]processFigures(nil), fig.Gateway...), fig.Controller...) {
+			pod := p.Pod
+			if p.Leader {
+				pod += " (leader)"
+			}
+			fmt.Printf("  %-22s  %-37s  %10.0f  %8.1f  %7.1f  %7s  %8.0f\n",
+				point, pod, p.Goroutines, p.HeapMiB, p.RSSMiB, watchesText(p), p.APIGets)
+		}
+		a := fig.APIServer
+		cpu := "-"
+		if prevCPU >= 0 {
+			cpu = fmt.Sprintf("+%.1fs", a.CPUSeconds-prevCPU)
+		}
+		prevCPU = a.CPUSeconds
+		watches := "-"
+		if a.SecretWatches != nil {
+			watches = fmt.Sprintf("%.0f", *a.SecretWatches)
+		}
+		fmt.Printf("  %-22s  %-37s  rss %.1f MiB, CPU %s, Secret watches %s\n", point, "apiserver", a.RSSMiB, cpu, watches)
+	}
+}
+
+// watchesText is a process's watched-Secrets count for the summary, "-"
+// when it was left out, followed by "/" and the profile's watch stream count
+// when that was read.
+func watchesText(p processFigures) string {
+	out := "-"
+	if p.Watches != nil {
+		out = strconv.Itoa(*p.Watches)
+	}
+	if p.WatchStreams != nil {
+		out += "/" + strconv.Itoa(*p.WatchStreams)
+	}
+	return out
 }
 
 // printRamp prints a ramp block under a label (the standard ramp, or the

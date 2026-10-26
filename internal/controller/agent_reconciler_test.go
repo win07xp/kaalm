@@ -448,7 +448,7 @@ func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
 		}
 		want := []rbacv1.PolicyRule{{
 			APIGroups: []string{""}, Resources: []string{"secrets"},
-			ResourceNames: []string{"aa-creds", "zz-creds"}, Verbs: []string{"get", "watch"},
+			ResourceNames: []string{"aa-creds", "zz-creds"}, Verbs: []string{"get", "list", "watch"},
 		}}
 		if !equality.Semantic.DeepEqual(role.Rules, want) {
 			return fmt.Errorf("role rules = %+v", role.Rules)
@@ -1594,7 +1594,7 @@ func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
 		}
 		want := []rbacv1.PolicyRule{{
 			APIGroups: []string{""}, Resources: []string{"secrets"},
-			ResourceNames: []string{"aa-env", "zz-env"}, Verbs: []string{"get", "watch"},
+			ResourceNames: []string{"aa-env", "zz-env"}, Verbs: []string{"get", "list", "watch"},
 		}}
 		if !equality.Semantic.DeepEqual(role.Rules, want) {
 			return fmt.Errorf("role rules = %+v", role.Rules)

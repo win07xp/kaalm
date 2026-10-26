@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -170,7 +171,8 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 
 	expectChannelReady(t, "ch-ok", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 
-	// The scoped Role exists with exactly the auth Secret, get+watch only.
+	// The scoped Role exists with exactly the auth Secret: get, list, and
+	// watch, which resourceNames bounds to that name.
 	var role rbacv1.Role
 	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds"}, &role); err != nil {
@@ -180,10 +182,8 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 	if len(rule.ResourceNames) != 1 || rule.ResourceNames[0] != "ch-ok-secret" {
 		t.Errorf("Role not scoped to the auth Secret: %v", rule.ResourceNames)
 	}
-	for _, v := range rule.Verbs {
-		if v == "list" || v == "create" || v == "delete" {
-			t.Errorf("Role must grant get/watch only, found %q", v)
-		}
+	if !slices.Equal(rule.Verbs, []string{"get", "list", "watch"}) {
+		t.Errorf("Role verbs = %v, want get, list, watch", rule.Verbs)
 	}
 	var rb rbacv1.RoleBinding
 	if err := testAPIReader.Get(ctxT(),

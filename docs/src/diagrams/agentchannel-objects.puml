@@ -28,8 +28,8 @@ rectangle "kaalm-system" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
 
 chan -[#4A148C,bold]-> check : owns
 chan -[#4A148C,bold]-> creds : owns
-check -[#0D47A1]-> sec : get, watch\nevery named Secret
-creds -[#0D47A1]-> sec : get, watch\nlabeled Secrets only
+check -[#0D47A1]-> sec : get, list, watch\nevery named Secret
+creds -[#0D47A1]-> sec : get, list, watch\nlabeled Secrets only
 chan -[#9E9E9E,dashed]-> agent : reads
 chan -[#9E9E9E,dashed]-> sib : reads
 chan -[#9E9E9E,dashed]-> gw : polls health

@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,8 +45,12 @@ const (
 	phaseLabel         = "perf.kaalm.io/phase"
 	hookSecretName     = "perf-hook"          // the channels' inbound bearer (testdata/infra.yaml)
 	callbackSecretName = "perf-callback-hmac" // the callback signing key (testdata/infra.yaml)
-	activeClassName    = "perf-active"
-	churnClassName     = "perf-churn"
+	callbackSecretKey  = "key"
+	// channelCredentialLabel opts a Secret in for the gateway's channel
+	// credential reads (rule 45).
+	channelCredentialLabel = "kaalm.io/channel-credential"
+	activeClassName        = "perf-active"
+	churnClassName         = "perf-churn"
 	// loadgenAgentName is the Agent whose identity the mTLS gateway legs
 	// borrow: the controller issues its certificate (SAN
 	// {name}.{ns}.svc.cluster.local) and the loadgen Job presents it, so
@@ -159,16 +164,24 @@ func agentObj(ns, name, class, image, phase string, persistent bool) *kaalmv1bet
 // channelObj is an async webhook channel whose replies push to the in-cluster
 // mock's /callback receiver. Polling would leave one response ConfigMap per
 // message in the operator namespace for an hour; at load that would turn the
-// run into an apiserver stress test the design never claimed to pass.
+// run into an apiserver stress test the design never claimed to pass. It
+// carries the agent's name and the two shared infra Secrets.
 func channelObj(ns, agent, phase, callbackURL string) *kaalmv1beta1.AgentChannel {
+	return channelObjRefs(ns, agent, agent, phase, callbackURL, hookSecretName, callbackSecretName)
+}
+
+// channelObjRefs is channelObj under its own name, served at
+// /channels/<ns>/<name>, with its bearer read from hookSecret and its
+// callback signing key from hmacSecret.
+func channelObjRefs(ns, name, agent, phase, callbackURL, hookSecret, hmacSecret string) *kaalmv1beta1.AgentChannel {
 	cb := callbackURL
 	return &kaalmv1beta1.AgentChannel{
-		ObjectMeta: metav1.ObjectMeta{Name: agent, Namespace: ns, Labels: map[string]string{phaseLabel: phase}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{phaseLabel: phase}},
 		Spec: kaalmv1beta1.AgentChannelSpec{
 			AgentRef: kaalmv1beta1.LocalObjectReference{Name: agent},
 			Type:     channelTypeWebhook,
 			Webhook: &kaalmv1beta1.AgentChannelWebhook{
-				Path:         "/channels/" + ns + "/" + agent,
+				Path:         "/channels/" + ns + "/" + name,
 				ResponseMode: "async",
 				CallbackURL:  &cb,
 				CallbackAuth: &kaalmv1beta1.ChannelAuth{
@@ -176,17 +189,158 @@ func channelObj(ns, agent, phase, callbackURL string) *kaalmv1beta1.AgentChannel
 					HMAC: &kaalmv1beta1.ChannelHMAC{
 						Header:    "X-Kaalm-Signature",
 						Algorithm: "sha256",
-						SecretRef: kaalmv1beta1.SecretKeyReference{Name: callbackSecretName, Key: "key"},
+						SecretRef: kaalmv1beta1.SecretKeyReference{Name: hmacSecret, Key: callbackSecretKey},
 					},
 				},
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      "bearer",
-					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: hookSecretName, Key: hookSecretKey},
+					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: hookSecret, Key: hookSecretKey},
 				},
 				MaxPendingAsyncResponses: 1000,
 			},
 		},
 	}
+}
+
+// channelName is slot's channel of agent: the agent's own name for slot 0.
+func channelName(agent string, slot int) string { return agent + channelSuffix(slot) }
+
+// secretPairNames names the k-th per-channel Secret pair.
+func secretPairNames(k int) (hook, hmac string) {
+	return fmt.Sprintf("%s%04d", hookSecretPrefix, k), fmt.Sprintf("%s%04d", callbackSecretPrefix, k)
+}
+
+// channelSecretObjs is n Secret pairs in ns, each a copy of the infra pair's
+// type and data, so the loadgen's mounted perf-hook bearer authenticates
+// every channel. Each carries the channel-credential label the gateway
+// requires (rule 45) and the phase label, so the phase's teardown removes
+// them. An HMAC callback key needs no callback-hosts annotation.
+func channelSecretObjs(ns, phase string, n int, hook, hmac *corev1.Secret) []client.Object {
+	out := make([]client.Object, 0, 2*n)
+	labels := func() map[string]string {
+		return map[string]string{channelCredentialLabel: "true", phaseLabel: phase}
+	}
+	for k := 0; k < n; k++ {
+		hookName, hmacName := secretPairNames(k)
+		for _, pair := range []struct {
+			name string
+			src  *corev1.Secret
+		}{{hookName, hook}, {hmacName, hmac}} {
+			out = append(out, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: pair.name, Namespace: ns, Labels: labels()},
+				Type:       pair.src.Type,
+				Data:       pair.src.Data,
+			})
+		}
+	}
+	return out
+}
+
+// channels is agent i's channels: cfg.ChannelsPerAgent of them, slot s
+// named channelName(agent, s). Fleet-wide channel j = i*K+s references
+// Secret pair j mod cfg.ChannelSecrets, or the shared infra pair when that
+// is 0.
+func (f fleet) channels(i int, cfg config, callbackURL string) []client.Object {
+	perAgent := max(cfg.ChannelsPerAgent, 1)
+	agent, ns := f.name(i), f.namespaceOf(i)
+	out := make([]client.Object, 0, perAgent)
+	for s := 0; s < perAgent; s++ {
+		hook, hmac := hookSecretName, callbackSecretName
+		if cfg.ChannelSecrets > 0 {
+			hook, hmac = secretPairNames((i*perAgent + s) % cfg.ChannelSecrets)
+		}
+		out = append(out, channelObjRefs(ns, channelName(agent, s), agent, f.phase, callbackURL, hook, hmac))
+	}
+	return out
+}
+
+// index parses an agent name back to its fleet index.
+func (f fleet) index(name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, f.prefix)
+	if !ok || len(rest) != 4 {
+		return 0, false
+	}
+	i, err := strconv.Atoi(rest)
+	if err != nil || i < 0 {
+		return 0, false
+	}
+	return i, true
+}
+
+// distinctChannelSecrets is how many distinct Secrets the channels' bearer
+// and callback HMAC refs name, each Secret counted once per namespace.
+func distinctChannelSecrets(chs []kaalmv1beta1.AgentChannel) int {
+	seen := map[string]bool{}
+	for _, ch := range chs {
+		wh := ch.Spec.Webhook
+		if wh == nil {
+			continue
+		}
+		if ref := wh.Auth.SecretRef; ref != nil {
+			seen[ch.Namespace+"/"+ref.Name] = true
+		}
+		if cb := wh.CallbackAuth; cb != nil && cb.HMAC != nil {
+			seen[ch.Namespace+"/"+cb.HMAC.SecretRef.Name] = true
+		}
+	}
+	return len(seen)
+}
+
+// sweepSlots is the channels per agent a sweep of the first count agents
+// posts to: the slots 0..k-1 that every one of those agents has among chs.
+// skipped is how many of those agents' listed channels lie past k.
+func sweepSlots(f fleet, chs []kaalmv1beta1.AgentChannel, count int) (k, skipped int) {
+	if count <= 0 {
+		return 0, 0
+	}
+	slots := make([]map[int]bool, count)
+	listed := 0
+	for _, ch := range chs {
+		i, ok := f.index(ch.Spec.AgentRef.Name)
+		if !ok || i >= count || ch.Namespace != f.namespaceOf(i) {
+			continue
+		}
+		slot, ok := channelSlot(ch.Spec.AgentRef.Name, ch.Name)
+		if !ok {
+			continue
+		}
+		if slots[i] == nil {
+			slots[i] = map[int]bool{}
+		}
+		slots[i][slot] = true
+		listed++
+	}
+	k = -1
+	for _, have := range slots {
+		n := 0
+		for have[n] {
+			n++
+		}
+		if k < 0 || n < k {
+			k = n
+		}
+	}
+	return k, listed - k*count
+}
+
+// channelSlot parses a channel name back to its slot of agent.
+func channelSlot(agent, name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, agent)
+	if !ok {
+		return 0, false
+	}
+	if rest == "" {
+		return 0, true
+	}
+	digits, ok := strings.CutPrefix(rest, channelSlotSuffix)
+	if !ok {
+		return 0, false
+	}
+	slot, err := strconv.Atoi(digits)
+	if err != nil || slot < 1 || channelSuffix(slot) != rest {
+		return 0, false
+	}
+	return slot, true
 }
 
 func taskObj(ns, name, class, image string) *kaalmv1beta1.AgentTask {
@@ -431,17 +585,23 @@ func (k *cluster) channelsSettled(ctx context.Context, ns, phase string) (int, i
 }
 
 // deleteAgents removes the named agents (name to namespace) and their
-// channels and waits until their pods are gone. The ramp uses it to trim a
-// wave that hit the environment's ceiling, so the fleet that stays is the
-// clean maximal set.
-func (k *cluster) deleteAgents(ctx context.Context, names map[string]string, timeout time.Duration) error {
+// perAgent channels each, and waits until their pods are gone. The ramp uses
+// it to trim a wave that hit the environment's ceiling, so the fleet that
+// stays is the clean maximal set.
+func (k *cluster) deleteAgents(
+	ctx context.Context, names map[string]string, perAgent int, timeout time.Duration,
+) error {
 	nss := map[string]bool{}
 	for name, ns := range names {
 		nss[ns] = true
-		for _, obj := range []client.Object{
-			&kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}},
-			&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}},
-		} {
+		objs := make([]client.Object, 0, perAgent+1)
+		for s := 0; s < max(perAgent, 1); s++ {
+			objs = append(objs, &kaalmv1beta1.AgentChannel{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: channelName(name, s)},
+			})
+		}
+		objs = append(objs, &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}})
+		for _, obj := range objs {
 			err := k.c.Delete(ctx, obj, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			if err != nil && !apierrors.IsNotFound(err) {
 				return err
@@ -483,8 +643,8 @@ func (k *cluster) deleteAgents(ctx context.Context, names map[string]string, tim
 }
 
 // deletePhase removes everything a phase created in the given namespaces,
-// channels before agents so nothing dangles, and returns how long until the
-// workload pods were gone.
+// channels before agents so nothing dangles and the channels' Secrets last,
+// and returns how long until the workload pods were gone.
 func (k *cluster) deletePhase(
 	ctx context.Context, namespaces []string, phase, podPrefix string, timeout time.Duration,
 ) (time.Duration, error) {
@@ -495,7 +655,9 @@ func (k *cluster) deletePhase(
 			client.MatchingLabels{phaseLabel: phase},
 			client.PropagationPolicy(metav1.DeletePropagationBackground),
 		}
-		for _, obj := range []client.Object{&kaalmv1beta1.AgentChannel{}, &kaalmv1beta1.AgentTask{}, &kaalmv1beta1.Agent{}} {
+		for _, obj := range []client.Object{
+			&kaalmv1beta1.AgentChannel{}, &kaalmv1beta1.AgentTask{}, &kaalmv1beta1.Agent{}, &corev1.Secret{},
+		} {
 			if err := k.c.DeleteAllOf(ctx, obj, sel...); err != nil && !apierrors.IsNotFound(err) {
 				return 0, err
 			}

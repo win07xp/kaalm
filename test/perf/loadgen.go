@@ -56,6 +56,23 @@ type loadResult struct {
 	TTFBMs    *stats   `json:"ttfbMs,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
 	WarmupSec float64  `json:"warmupSec"`
+	// Sweep is sweep mode's per-target result.
+	Sweep []sweepTarget `json:"sweep,omitempty"`
+}
+
+// sweepTarget is one target's sweep: every channel posted until accepted.
+// AcceptMs is each served channel's time from the sweep's first request to
+// its acceptance; ServedSec is that time for the last channel served.
+type sweepTarget struct {
+	Target    string         `json:"target"`
+	Channels  int            `json:"channels"`
+	Served    int            `json:"served"`
+	Unserved  int            `json:"unserved"`
+	Requests  int            `json:"requests"`
+	ServedSec float64        `json:"servedSec"`
+	AcceptMs  stats          `json:"acceptMs"`
+	Statuses  map[string]int `json:"statuses"`
+	Errors    []string       `json:"errors,omitempty"`
 }
 
 // Request body formats the gateway mode speaks.
@@ -92,6 +109,15 @@ type loadgenConfig struct {
 	namespaces  []string
 	// legacySession makes tools mode speak the legacy session era.
 	legacySession bool
+	// targets are the base URLs sweep mode posts every channel to, each on
+	// its own; empty means base.
+	targets []string
+	// serverName is the TLS server name when a target is an IP.
+	serverName string
+	// perAgent is the channels per agent: job index j is agent j/perAgent,
+	// slot j%perAgent.
+	perAgent     int
+	sweepTimeout time.Duration
 }
 
 func runLoadgen(args []string) error {
@@ -99,7 +125,8 @@ func runLoadgen(args []string) error {
 	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
 	fs.StringVar(&c.mode, "mode", modeGateway,
 		"gateway (LLM proxy at fixed concurrency), tools (MCP tools/call through the broker at fixed concurrency), "+
-			"or channels (webhook messages at a fixed rate)")
+			"channels (webhook messages at a fixed rate), or sweep (every channel once, retried until accepted, "+
+			"against each target)")
 	fs.StringVar(&c.url, "url", gatewayBase+"/v1/chat/completions",
 		"gateway mode: LLM endpoint")
 	fs.StringVar(&c.model, "model", providerFast+"/mock-model", "gateway mode: qualified provider/model")
@@ -120,7 +147,7 @@ func runLoadgen(args []string) error {
 	var namespaces string
 	fs.StringVar(&namespaces, "namespaces", "",
 		"channels mode: comma-separated namespaces; channel i's {ns} is namespace i modulo the list length")
-	fs.IntVar(&c.count, "count", 1, "channels mode: number of channels under the prefix")
+	fs.IntVar(&c.count, "count", 1, "channels and sweep modes: number of channels under the prefix")
 	fs.IntVar(&c.pad, "pad", 4, "channels mode: zero-padding width of the index")
 	fs.Float64Var(&c.rate, "rate", 1, "channels mode: messages per second across all channels, round-robin")
 	fs.DurationVar(&c.warmup, "warmup", 90*time.Second, "how long to retry until the first success before measuring")
@@ -136,11 +163,26 @@ func runLoadgen(args []string) error {
 	fs.BoolVar(&c.legacySession, "legacy-session", false,
 		"tools mode: speak the legacy session era: each caller sends initialize and notifications/initialized once, "+
 			"before measuring, then every tools/call carries the session id the broker returned")
+	var targets string
+	fs.StringVar(&targets, strings.TrimPrefix(flagTargets, "-"), "",
+		"sweep mode: comma-separated base URLs, each swept on its own (empty means -base)")
+	fs.StringVar(&c.serverName, strings.TrimPrefix(flagServerName, "-"), "",
+		"TLS server name to verify when a target is an IP (a gateway Pod)")
+	fs.IntVar(&c.perAgent, strings.TrimPrefix(flagPerAgent, "-"), 1,
+		"channels and sweep modes: channels per agent; slot s>0 appends -c<s> to the agent's path")
+	fs.DurationVar(&c.sweepTimeout, "sweep-timeout", 5*time.Minute,
+		"sweep mode: how long after the sweep starts a channel may take to be accepted")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if namespaces != "" {
 		c.namespaces = strings.Split(namespaces, ",")
+	}
+	if targets != "" {
+		c.targets = strings.Split(targets, ",")
+	}
+	if c.perAgent < 1 {
+		return fmt.Errorf("-per-agent must be 1 or more")
 	}
 	if c.format != formatOpenAI && c.format != formatAnthropic {
 		return fmt.Errorf("unknown -format %q (openai or anthropic)", c.format)
@@ -154,7 +196,7 @@ func runLoadgen(args []string) error {
 	if !pool.AppendCertsFromPEM(ca) {
 		return fmt.Errorf("no certificates in %s", c.caFile)
 	}
-	tlsCfg := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	tlsCfg := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: c.serverName}
 	if c.certFile != "" {
 		cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
 		if err != nil {
@@ -179,6 +221,8 @@ func runLoadgen(args []string) error {
 		res, err = toolsLoad(cli, c)
 	case modeChannels:
 		res, err = channelLoad(cli, c)
+	case modeSweep:
+		res, err = sweepLoad(cli, c)
 	default:
 		return fmt.Errorf("unknown mode %q", c.mode)
 	}
@@ -630,28 +674,45 @@ func channelURL(base, pathPrefix string, namespaces []string, pad, i int) string
 	return fmt.Sprintf("%s%s%0*d", base, pathPrefix, pad, i)
 }
 
+// channelJobURL is job j's webhook URL under base: agent j/perAgent, placed
+// as channelURL places it, plus slot j%perAgent's suffix. With one channel
+// per agent it is channelURL.
+func channelJobURL(c loadgenConfig, base string, j int) string {
+	perAgent := max(c.perAgent, 1)
+	return channelURL(base, c.pathPrefix, c.namespaces, c.pad, j/perAgent) + channelSuffix(j%perAgent)
+}
+
+// channelRequest is one webhook message for job j under base.
+func channelRequest(c loadgenConfig, base, bearer string, j int) *http.Request {
+	body := fmt.Sprintf(`{"userId":"load","content":{"text":"ping %d"}}`, j)
+	req, _ := http.NewRequest(http.MethodPost, channelJobURL(c, base, j), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	return req
+}
+
+func readBearer(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 // channelLoad posts webhook messages round-robin across the channels at a
 // fixed aggregate rate, so message i lands on channel i mod count. With rate =
 // count/interval every channel receives exactly one message per interval,
 // which is how the hold phase keeps the whole fleet lightly served and the
 // churn phase makes nearly every message a cold wake.
 func channelLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
-	bearerRaw, err := os.ReadFile(c.bearerFile)
+	bearer, err := readBearer(c.bearerFile)
 	if err != nil {
 		return nil, err
 	}
-	bearer := strings.TrimSpace(string(bearerRaw))
 	if c.count <= 0 || c.rate <= 0 {
 		return nil, fmt.Errorf("channels mode needs count > 0 and rate > 0")
 	}
-	newReq := func(i int) *http.Request {
-		body := fmt.Sprintf(`{"userId":"load","content":{"text":"ping %d"}}`, i)
-		req, _ := http.NewRequest(http.MethodPost, channelURL(c.base, c.pathPrefix, c.namespaces, c.pad, i),
-			strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+bearer)
-		return req
-	}
+	newReq := func(i int) *http.Request { return channelRequest(c, c.base, bearer, i) }
 
 	// Warmup against channel 0 until the gateway accepts (202 for async).
 	warmStart := time.Now()
@@ -701,4 +762,114 @@ func channelLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 	close(jobs)
 	wg.Wait()
 	return rec.result(modeChannels, time.Since(start), warmup), nil
+}
+
+// accepted reports whether a webhook answer took the message: 202 for an
+// async channel, 200 for a sync one.
+func accepted(status int) bool { return status == http.StatusAccepted || status == http.StatusOK }
+
+// sweepLoad posts one message to every channel (-count of them, perAgent per
+// agent, as in channels mode) against each target at once, retrying a channel every second until it is
+// accepted or sweepTimeout after the sweep started. A gateway replica loads
+// a channel's Secrets on first use, so a cold replica's sweep times that
+// load and a warm one's is the control. A channel never accepted counts as
+// unserved; it does not fail the sweep.
+func sweepLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
+	bearer, err := readBearer(c.bearerFile)
+	if err != nil {
+		return nil, err
+	}
+	if c.count <= 0 {
+		return nil, fmt.Errorf("sweep mode needs count > 0")
+	}
+	targets := c.targets
+	if len(targets) == 0 {
+		targets = []string{c.base}
+	}
+	start := time.Now()
+	results := make([]sweepTarget, len(targets))
+	var wg sync.WaitGroup
+	for i, base := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = sweepTargetLoad(cli, c, base, bearer)
+		}()
+	}
+	wg.Wait()
+	res := &loadResult{Mode: modeSweep, Statuses: map[string]int{}, Sweep: results}
+	for _, t := range results {
+		res.Requests += t.Requests
+		for k, v := range t.Statuses {
+			res.Statuses[k] += v
+		}
+		for _, e := range t.Errors {
+			if len(res.Errors) < 5 {
+				res.Errors = append(res.Errors, e)
+			}
+		}
+	}
+	elapsed := time.Since(start)
+	res.DurationSec = round3(elapsed.Seconds())
+	if elapsed > 0 {
+		res.RPS = round3(float64(res.Requests) / elapsed.Seconds())
+	}
+	return res, nil
+}
+
+// sweepWorkers is how many channels one target's sweep posts at once.
+const sweepWorkers = 32
+
+// sweepTargetLoad sweeps every channel against one base URL.
+func sweepTargetLoad(cli *http.Client, c loadgenConfig, base, bearer string) sweepTarget {
+	channels := c.count
+	rec := newRecorder()
+	var mu sync.Mutex
+	var acceptMs []float64
+	var last time.Duration
+	jobs := make(chan int, channels)
+	for j := 0; j < channels; j++ {
+		jobs <- j
+	}
+	close(jobs)
+	start := time.Now()
+	deadline := start.Add(c.sweepTimeout)
+	var wg sync.WaitGroup
+	for w := 0; w < min(sweepWorkers, channels); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				for {
+					status, lat, err := doRequest(cli, channelRequest(c, base, bearer, j))
+					rec.record(status, lat, err)
+					if err == nil && accepted(status) {
+						at := time.Since(start)
+						mu.Lock()
+						acceptMs = append(acceptMs, ms(at))
+						last = max(last, at)
+						mu.Unlock()
+						break
+					}
+					if time.Now().Add(time.Second).After(deadline) {
+						break
+					}
+					time.Sleep(time.Second)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	r := rec.result(modeSweep, time.Since(start), 0)
+	return sweepTarget{
+		Target:    base,
+		Channels:  channels,
+		Served:    len(acceptMs),
+		Unserved:  channels - len(acceptMs),
+		Requests:  r.Requests,
+		ServedSec: round3(last.Seconds()),
+		AcceptMs:  summarize(acceptMs),
+		Statuses:  r.Statuses,
+		Errors:    r.Errors,
+	}
 }

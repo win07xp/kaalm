@@ -87,8 +87,8 @@ type AgentReconciler struct {
 	OperatorNamespace string
 	// SecretReader reads Secrets in user namespaces, which the manager's
 	// cache does not hold. In production it is a secretwatch.Reader: one
-	// name-filtered watch per referenced Secret, so repeated reads are cache
-	// hits. nil falls back to the embedded client. SecretChanges reports
+	// name-selected list and watch per referenced Secret, so repeated reads
+	// are cache hits. nil falls back to the embedded client. SecretChanges reports
 	// changes to the Secrets read through it.
 	SecretReader client.Reader
 	// SecretChanges is the watcher behind SecretReader. When set, a change

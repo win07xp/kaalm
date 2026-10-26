@@ -182,7 +182,10 @@ type runtimeSample struct {
 // restartResult is what a rolling restart costs with the fleet up: the
 // controller's rollout and its time to the first reconcile afterwards
 // (leader handoff included), and the gateway's rollout under LLM traffic
-// with the requests that failed while it rolled.
+// with the requests that failed while it rolled. It also records what the
+// channels' Secrets cost each process: the controller's warm-up after the
+// rollout and after a leader failover, the gateway's sweeps before and
+// after its rollout, and the figures at each point.
 type restartResult struct {
 	Agents                      int         `json:"agents"`
 	ControllerRolloutSec        float64     `json:"controllerRolloutSec"`
@@ -190,7 +193,62 @@ type restartResult struct {
 	GatewayRolloutSec           float64     `json:"gatewayRolloutSec"`
 	GatewayClient               *loadResult `json:"gatewayClient"`
 	GatewayFailed               int         `json:"gatewayFailed"`
+
+	// Channels is the ramp fleet's channels; ChannelSecrets the distinct
+	// Secrets they reference.
+	Channels       int `json:"channels"`
+	ChannelSecrets int `json:"channelSecrets"`
+	// ControllerWarmupSec is the controller rollout's start until the new
+	// leader has reconciled every channel and its channel queue is empty;
+	// ControllerWarmupWatches samples the API server's open Secret watches
+	// on the way.
+	ControllerWarmupSec     float64       `json:"controllerWarmupSec"`
+	ControllerWarmupWatches []watchSample `json:"controllerWarmupWatches,omitempty"`
+	// SweepBefore is every channel swept against each warm gateway replica
+	// before the rollouts (the control); SweepAfter against each new
+	// replica after the gateway rollout.
+	SweepBefore []sweepTarget `json:"sweepBefore,omitempty"`
+	SweepAfter  []sweepTarget `json:"sweepAfter,omitempty"`
+	// Failover is the controller leader Pod deleted with grace period 0;
+	// null when it was skipped.
+	Failover *failoverResult `json:"failover"`
+	// Figures is every operator process and the API server at the points
+	// figurePoints names.
+	Figures map[string]scaleFigures `json:"figures,omitempty"`
 }
+
+// watchSample is the API server's open Secret watches at a time from the
+// start of what is being measured.
+type watchSample struct {
+	AtSec         float64 `json:"atSec"`
+	SecretWatches float64 `json:"secretWatches"`
+}
+
+// failoverResult is the controller leader Pod deleted with grace period 0.
+// The kubelet still sends SIGTERM first, and the manager releases its Lease
+// on shutdown, so the standby most likely takes over at its next retry
+// rather than after the Lease expires; Lease records which happened ("" when
+// the Lease reads could not tell). Either way the new leader starts its
+// Secret informers cold. Each time is from the kill.
+type failoverResult struct {
+	Killed            string        `json:"killed"`
+	NewLeader         string        `json:"newLeader"`
+	Lease             string        `json:"lease"`
+	FirstReconcileSec float64       `json:"firstReconcileSec"`
+	WarmupSec         float64       `json:"warmupSec"`
+	RecoveredSec      float64       `json:"recoveredSec"`
+	Watches           []watchSample `json:"watches,omitempty"`
+}
+
+// The points the restart phase reads its figures at, in order.
+const (
+	pointBefore                 = "before"
+	pointAfterControllerRollout = "afterControllerRollout"
+	pointAfterGatewayRollout    = "afterGatewayRollout"
+	pointAfterFailover          = "afterFailover"
+)
+
+var figurePoints = []string{pointBefore, pointAfterControllerRollout, pointAfterGatewayRollout, pointAfterFailover}
 
 // auditSnapshots is the three scrapes an audit window starts and ends with.
 type auditSnapshots struct {
@@ -393,6 +451,8 @@ const (
 	// histogram, labeled by labelController.
 	metricReconcileTime = "controller_runtime_reconcile_time_seconds"
 	labelController     = "controller"
+	// labelWorkqueue names a workqueue on client-go's workqueue metrics.
+	labelWorkqueue = "name"
 )
 
 // gatewayLegDef is one leg of the gateway table: a provider reached over one
@@ -861,22 +921,24 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := h.createChannelSecrets(ctx, f); err != nil {
+		return nil, err
+	}
 	for wave := 0; wave*cfg.WaveSize < f.target; wave++ {
 		lo, hi := wave*cfg.WaveSize, (wave+1)*cfg.WaveSize
 		if hi > f.target {
 			hi = f.target
 		}
 		names := map[string]string{} // agent name to namespace
-		objs := make([]client.Object, 0, 2*(hi-lo))
+		objs := make([]client.Object, 0, (1+cfg.ChannelsPerAgent)*(hi-lo))
 		for i := lo; i < hi; i++ {
 			name, ns := f.name(i), f.namespaceOf(i)
 			names[name] = ns
-			// The channel is created with its agent so the channel
+			// The channels are created with their agent so the channel
 			// reconciler's work overlaps the waves instead of stacking up
 			// in front of the hold phase.
-			objs = append(objs,
-				agentObj(ns, name, activeClassName, cfg.AgentImage, f.phase, false),
-				channelObj(ns, name, f.phase, h.callbackURL()))
+			objs = append(objs, agentObj(ns, name, activeClassName, cfg.AgentImage, f.phase, false))
+			objs = append(objs, f.channels(i, cfg, h.callbackURL())...)
 		}
 		h.logf("%s wave %d: creating agents %d..%d with their channels", f.phase, wave, lo, hi-1)
 		waveStart := time.Now()
@@ -959,7 +1021,7 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 			// The wave that hit the ceiling is trimmed, so the fleet the
 			// later phases run on is the largest one that came up clean.
 			h.logf("  trimming wave %d (%d agents)", wave, len(names))
-			if err := h.k.deleteAgents(ctx, names, 5*time.Minute); err != nil {
+			if err := h.k.deleteAgents(ctx, names, cfg.ChannelsPerAgent, 5*time.Minute); err != nil {
 				h.note("trimming wave %d: %v", wave, err)
 			}
 			if ts, err := h.k.agentTimings(ctx, f.scope(), f.phase); err == nil {
@@ -974,6 +1036,33 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// createChannelSecrets creates the -channel-secrets pairs in each of the
+// fleet's namespaces, copied from the infra pair in the run's namespace.
+// Nothing happens with the default 0, which keeps the shared pair.
+func (h *harness) createChannelSecrets(ctx context.Context, f fleet) error {
+	cfg := h.cfg
+	if cfg.ChannelSecrets <= 0 {
+		return nil
+	}
+	var hook, hmac corev1.Secret
+	for name, sec := range map[string]*corev1.Secret{hookSecretName: &hook, callbackSecretName: &hmac} {
+		if err := h.k.c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: name}, sec); err != nil {
+			return fmt.Errorf("reading %s/%s to copy: %w", cfg.Namespace, name, err)
+		}
+	}
+	var objs []client.Object
+	for _, ns := range f.namespaces {
+		objs = append(objs, channelSecretObjs(ns, f.phase, cfg.ChannelSecrets, &hook, &hmac)...)
+	}
+	h.logf("%s: creating %d channel Secrets (%d pairs in each of %d namespaces)",
+		f.phase, len(objs), cfg.ChannelSecrets, len(f.namespaces))
+	if channels := f.target * cfg.ChannelsPerAgent; cfg.ChannelSecrets > channels {
+		h.note("channel-secrets %d exceeds the %d channels: %d pairs unused; raise -channels-per-agent",
+			cfg.ChannelSecrets, channels, cfg.ChannelSecrets-channels)
+	}
+	return h.k.createAll(ctx, objs)
 }
 
 func readyAmong(ts []agentTiming, names map[string]string) int {
@@ -1008,25 +1097,49 @@ func (h *harness) runHold(ctx context.Context) error {
 }
 
 // holdLoadgenArgs is the hold's channel traffic: one message per agent per
-// interval, round-robin over the first count agents. A fleet spread over
-// several namespaces puts {ns} in the path prefix and passes the namespace
-// list, so the loadgen places agent i where the fleet did.
-func holdLoadgenArgs(f fleet, count int, rate float64, duration time.Duration) []string {
+// interval, round-robin over the first count agents' perAgent channels each.
+// A fleet spread over several namespaces puts {ns} in the path prefix and
+// passes the namespace list, so the loadgen places agent i where the fleet
+// did. One channel per agent gives the arguments a run had before agents
+// could carry several.
+func holdLoadgenArgs(f fleet, count, perAgent int, rate float64, duration time.Duration) []string {
 	prefix := "/channels/" + f.namespaces[0] + "/" + f.prefix
 	var spread []string
 	if len(f.namespaces) > 1 {
 		prefix = "/channels/{ns}/" + f.prefix
 		spread = []string{"-namespaces", strings.Join(f.namespaces, ",")}
 	}
+	channels := count
+	if perAgent > 1 {
+		channels = count * perAgent
+		spread = append(spread, flagPerAgent, strconv.Itoa(perAgent))
+	}
 	args := []string{
 		flagMode, modeChannels,
-		"-path-prefix", prefix,
-		"-count", strconv.Itoa(count),
-		"-pad", "4",
+		flagPathPrefix, prefix,
+		flagCount, strconv.Itoa(channels),
+		flagPad, "4",
 		"-rate", strconv.FormatFloat(rate, 'f', 4, 64),
 		flagDuration, duration.String(),
 	}
 	return append(args, spread...)
+}
+
+// readyRun is the longest run of Ready agents from index 0, the agents the
+// hold and the restart sweeps send to, so a partially failed final wave never
+// turns delivery errors into noise.
+func readyRun(timings []agentTiming, f fleet) int {
+	readySet := map[string]bool{}
+	for _, t := range timings {
+		if t.ReadyNow {
+			readySet[t.Name] = true
+		}
+	}
+	count := 0
+	for readySet[f.name(count)] {
+		count++
+	}
+	return count
 }
 
 // hold drives messages across a fleet's Ready agents for the hold duration
@@ -1040,25 +1153,16 @@ func (h *harness) hold(ctx context.Context, f fleet) (*holdResult, error) {
 	if len(timings) == 0 {
 		return nil, fmt.Errorf("hold needs the %[1]s fleet; run the %[1]s phase first", f.phase)
 	}
-	// Messages go to the longest run of Ready agents from index 0, so a
-	// partially failed final wave never turns delivery errors into noise.
-	readySet := map[string]bool{}
-	for _, t := range timings {
-		if t.ReadyNow {
-			readySet[t.Name] = true
-		}
-	}
-	count := 0
-	for readySet[f.name(count)] {
-		count++
-	}
+	count := readyRun(timings, f)
 	if count == 0 {
 		return nil, fmt.Errorf("hold: no Ready %s agents", f.phase)
 	}
 
-	objs := make([]client.Object, 0, len(timings))
+	objs := make([]client.Object, 0, len(timings)*cfg.ChannelsPerAgent)
 	for _, t := range timings {
-		objs = append(objs, channelObj(t.Namespace, t.Name, f.phase, h.callbackURL()))
+		if i, ok := f.index(t.Name); ok {
+			objs = append(objs, f.channels(i, cfg, h.callbackURL())...)
+		}
 	}
 	h.logf("hold: creating %d channels", len(objs))
 	chStart := time.Now()
@@ -1090,7 +1194,7 @@ func (h *harness) hold(ctx context.Context, f fleet) (*holdResult, error) {
 	sampler := h.sampleUsage(ctx)
 	runtimeSamples := h.sampleRuntime(ctx, cfg.HoldSampleInterval)
 	client, err := h.k.runLoadgen(ctx, cfg.Namespace, f.holdJob, cfg.LoadgenImage,
-		holdLoadgenArgs(f, count, rate, cfg.HoldDuration), "", cfg.HoldDuration+3*time.Minute)
+		holdLoadgenArgs(f, count, cfg.ChannelsPerAgent, rate, cfg.HoldDuration), "", cfg.HoldDuration+3*time.Minute)
 	peak := sampler.finish()
 	res.Series = runtimeSamples.finish()
 	if err != nil {
@@ -1870,9 +1974,12 @@ func (h *harness) runTasks(ctx context.Context) error {
 
 // runRestart rolls each component with the ramp fleet up: the controller
 // alone (rollout wall time, then time to the first reconcile of the new
-// leader, which includes the leader-election handoff), and the gateway under
-// a 60 s token-tier LLM leg, counting the requests that failed while it
-// rolled.
+// leader, which includes the leader-election handoff, then its warm-up over
+// every channel), and the gateway under a 60 s token-tier LLM leg, counting
+// the requests that failed while it rolled. Every channel is swept against
+// each gateway replica before the rollouts and again after the gateway's,
+// and the phase ends with a controller leader failover. The figures are
+// read before, after each rollout, and after the failover.
 func (h *harness) runRestart(ctx context.Context) error {
 	cfg := h.cfg
 	timings, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
@@ -1882,7 +1989,31 @@ func (h *harness) runRestart(ctx context.Context) error {
 	if len(timings) == 0 {
 		return errors.New("restart: no ramp fleet; run the ramp phase first")
 	}
-	res := &restartResult{Agents: len(timings)}
+	var channels kaalmv1beta1.AgentChannelList
+	if err := h.k.c.List(ctx, &channels, client.InNamespace(cfg.Namespace),
+		client.MatchingLabels{phaseLabel: phaseRamp}); err != nil {
+		return err
+	}
+	res := &restartResult{
+		Agents:         len(timings),
+		Channels:       len(channels.Items),
+		ChannelSecrets: distinctChannelSecrets(channels.Items),
+		Figures:        map[string]scaleFigures{},
+	}
+	f := h.rampFleet()
+	count := readyRun(timings, f)
+	h.logf("restart: %d agents, %d channels referencing %d Secrets", res.Agents, res.Channels, res.ChannelSecrets)
+	if want := count * cfg.ChannelsPerAgent; res.Channels != want {
+		h.note("restart: the fleet lists %d channels, not the %d that %d Ready agents times -channels-per-agent %d give; "+
+			"the figures and sweeps follow the listed channels", res.Channels, want, count, cfg.ChannelsPerAgent)
+	}
+	perAgent, skipped := sweepSlots(f, channels.Items, count)
+	if skipped > 0 {
+		h.note("restart: the sweeps post to %d channels per agent, the slots every one of the %d Ready agents lists; "+
+			"%d of their listed channels are left out", perAgent, count, skipped)
+	}
+	h.recordFigures(ctx, res, pointBefore)
+	res.SweepBefore = h.sweepGateway(ctx, "loadgen-sweep-before", count, perAgent)
 
 	h.logf("restart: rolling the controller with %d agents up", res.Agents)
 	t0 := time.Now()
@@ -1894,20 +2025,14 @@ func (h *harness) runRestart(ctx context.Context) error {
 		return err
 	}
 	res.ControllerRolloutSec = round3(time.Since(t0).Seconds())
-	// The new processes start their counters at zero, so the first reconcile
-	// anywhere is the first nonzero total across the replicas.
-	if err := pollUntil(ctx, 5*time.Minute, 2*time.Second, func() (bool, error) {
-		snap, err := h.scrapeController(ctx)
-		if err != nil {
-			return false, nil // a scrape can miss a pod mid-roll
-		}
-		return snap.counter("controller_runtime_reconcile_total", nil) > 0, nil
-	}); err != nil {
+	if err := h.awaitFirstReconcile(ctx); err != nil {
 		return fmt.Errorf("restart: controller never reconciled after the roll: %w", err)
 	}
 	res.ControllerFirstReconcileSec = round3(time.Since(t0).Seconds())
 	h.logf("  controller rolled in %.0fs, first reconcile at %.0fs",
 		res.ControllerRolloutSec, res.ControllerFirstReconcileSec)
+	res.ControllerWarmupSec, res.ControllerWarmupWatches = h.awaitChannelWarmup(ctx, t0, res.Channels)
+	h.recordFigures(ctx, res, pointAfterControllerRollout)
 
 	h.logf("restart: rolling the gateway under a 60s token-tier leg (%d callers)", cfg.GatewayConcurrency)
 	type outcome struct {
@@ -1961,6 +2086,21 @@ func (h *harness) runRestart(ctx context.Context) error {
 	for _, e := range out.res.Errors {
 		h.logf("  client error %s", e)
 	}
+	res.SweepAfter = h.sweepGateway(ctx, "loadgen-sweep-after", count, perAgent)
+	// The sweep's async replies push callbacks, which load the HMAC Secrets.
+	if err := sleepCtx(ctx, 30*time.Second); err != nil {
+		return err
+	}
+	h.recordFigures(ctx, res, pointAfterGatewayRollout)
+
+	failover, err := h.failover(ctx, res.Channels)
+	if err != nil {
+		return fmt.Errorf("restart: leader failover: %w", err)
+	}
+	res.Failover = failover
+	if failover != nil {
+		h.recordFigures(ctx, res, pointAfterFailover)
+	}
 	h.sum.Restart = res
 	return nil
 }
@@ -1991,4 +2131,248 @@ func killingTimes(events []corev1.Event, podPrefix string) []string {
 		lines = append(lines, k.pod+" "+k.at.UTC().Format(errorStampLayout))
 	}
 	return lines
+}
+
+// recordFigures reads the figures at one point into res; a failed read is
+// noted, not fatal, so the phase keeps its other numbers.
+func (h *harness) recordFigures(ctx context.Context, res *restartResult, point string) {
+	fig, err := h.figures(ctx)
+	if err != nil {
+		h.note("restart: figures %s: %v", point, err)
+		return
+	}
+	res.Figures[point] = fig
+	for _, p := range append(append([]processFigures(nil), fig.Gateway...), fig.Controller...) {
+		h.logf("  %s %s: %.0f goroutines, heap %.1f MiB, rss %.1f MiB, %s watches, %.0f API GETs",
+			point, p.Pod, p.Goroutines, p.HeapMiB, p.RSSMiB, watchesText(p), p.APIGets)
+	}
+}
+
+// awaitFirstReconcile waits until a controller replica has reconciled
+// anything. The new processes start their counters at zero, and the
+// snapshot sums only Running Pods that are not terminating, so the first
+// reconcile anywhere is the first nonzero total.
+func (h *harness) awaitFirstReconcile(ctx context.Context) error {
+	return pollUntil(ctx, 5*time.Minute, 2*time.Second, func() (bool, error) {
+		snap, err := h.scrapeController(ctx)
+		if err != nil {
+			return false, nil // a scrape can miss a pod mid-roll
+		}
+		return snap.counter("controller_runtime_reconcile_total", nil) > 0, nil
+	})
+}
+
+// channelControllerName is the AgentChannel controller's name on
+// controller-runtime metrics.
+const channelControllerName = "agentchannel"
+
+// channelWork is the channel controller's reconcile total, queue depth, and
+// busy workers in a controller snapshot.
+func channelWork(snap *snapshot) (reconciles, depth, active float64) {
+	byController := map[string]string{labelController: channelControllerName}
+	return snap.counter("controller_runtime_reconcile_total", byController),
+		snap.gauge("workqueue_depth", map[string]string{labelWorkqueue: channelControllerName}),
+		snap.gauge("controller_runtime_active_workers", byController)
+}
+
+// channelsWarm reports whether a controller snapshot shows the channel
+// controller past its warm-up: at least channels reconciles, an empty queue,
+// and no worker busy. Each channel pass reads its Secrets through the
+// controller's rate-limited client, so a cold process takes longer.
+func channelsWarm(snap *snapshot, channels int) bool {
+	reconciles, depth, active := channelWork(snap)
+	return reconciles >= float64(channels) && depth == 0 && active == 0
+}
+
+// awaitChannelWarmup polls the controller until channelsWarm, sampling the
+// API server's open Secret watches each poll, and returns the seconds from
+// start. A warm-up not reached within 10 minutes is a note with the last
+// counts, and returns 0.
+func (h *harness) awaitChannelWarmup(ctx context.Context, start time.Time, channels int) (float64, []watchSample) {
+	var series []watchSample
+	var last *snapshot
+	err := pollUntil(ctx, 10*time.Minute, 2*time.Second, func() (bool, error) {
+		if api, err := h.k.scrapeAPIServer(ctx); err == nil {
+			if n, ok := secretWatches(api); ok {
+				series = append(series, watchSample{AtSec: round3(time.Since(start).Seconds()), SecretWatches: n})
+			}
+		}
+		snap, err := h.scrapeController(ctx)
+		if err != nil {
+			return false, nil // a scrape can miss a pod mid-roll
+		}
+		last = snap
+		return channelsWarm(snap, channels), nil
+	})
+	if err != nil {
+		reconciles, depth, _ := channelWork(last)
+		h.note("restart: controller channel warm-up not reached (%v): %.0f of %d channels reconciled, queue depth %.0f",
+			err, reconciles, channels, depth)
+		return 0, series
+	}
+	took := round3(time.Since(start).Seconds())
+	h.logf("  controller warm over %d channels at %.0fs", channels, took)
+	return took, series
+}
+
+// sweepGatewayArgs is a sweep of the first count agents' channels against
+// the gateway Pods at ips, each dialed on the user listener with the
+// gateway's own Service name for TLS.
+func sweepGatewayArgs(f fleet, ips []string, count, perAgent int) []string {
+	targets := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		targets = append(targets, "https://"+ip+":8080")
+	}
+	return []string{
+		flagMode, modeSweep,
+		flagTargets, strings.Join(targets, ","),
+		flagServerName, "kaalm-gateway.kaalm-system.svc",
+		flagPathPrefix, "/channels/" + f.namespaces[0] + "/" + f.prefix,
+		flagCount, strconv.Itoa(count * perAgent),
+		flagPad, "4",
+		flagPerAgent, strconv.Itoa(perAgent),
+		"-sweep-timeout", "5m",
+	}
+}
+
+// sweepGateway sweeps perAgent channels of each of the first count ramp
+// agents against each gateway replica and returns the per-replica results
+// named by Pod. A sweep that fails is a note, so the phase keeps its other
+// numbers.
+func (h *harness) sweepGateway(ctx context.Context, job string, count, perAgent int) []sweepTarget {
+	cfg := h.cfg
+	if count == 0 || perAgent == 0 {
+		h.note("restart: %s skipped: no Ready ramp agents with listed channels", job)
+		return nil
+	}
+	pods, err := h.k.componentPods(ctx, "kaalm-system", "gateway")
+	if err != nil {
+		h.note("restart: %s: listing gateway Pods: %v", job, err)
+		return nil
+	}
+	ips, byIP := []string{}, map[string]string{}
+	for _, p := range pods {
+		if p.Status.PodIP != "" {
+			ips = append(ips, p.Status.PodIP)
+			byIP["https://"+p.Status.PodIP+":8080"] = p.Name
+		}
+	}
+	h.logf("restart: %s: %d channels against %d gateway replicas", job, count*perAgent, len(ips))
+	res, err := h.k.runLoadgen(ctx, cfg.Namespace, job, cfg.LoadgenImage,
+		sweepGatewayArgs(h.rampFleet(), ips, count, perAgent), "", 8*time.Minute)
+	if err != nil {
+		h.note("restart: %s: %v", job, err)
+		return nil
+	}
+	for i := range res.Sweep {
+		t := &res.Sweep[i]
+		if name, ok := byIP[t.Target]; ok {
+			t.Target = name
+		}
+		h.logf("  %s %s: %d/%d served, last at %.1fs, accept p50 %.0f ms p95 %.0f ms, statuses %v",
+			job, t.Target, t.Served, t.Channels, t.ServedSec, t.AcceptMs.P50, t.AcceptMs.P95, t.Statuses)
+	}
+	return res.Sweep
+}
+
+// failover deletes the controller leader Pod with grace period 0, follows
+// the Lease to its next holder, and times the first reconcile, the channel
+// warm-up, and the Deployment's return to Ready. A Lease without a holder,
+// or a holder Pod that is gone, is a note and returns nil.
+func (h *harness) failover(ctx context.Context, channels int) (*failoverResult, error) {
+	before, err := h.k.leaderLeaseRecord(ctx)
+	leader := before.holder
+	if err != nil || leader == "" {
+		h.note("restart: failover skipped: no controller leader in the Lease (%v)", err)
+		return nil, nil
+	}
+	var pod corev1.Pod
+	if err := h.k.c.Get(ctx, client.ObjectKey{Namespace: "kaalm-system", Name: leader}, &pod); err != nil {
+		h.note("restart: failover skipped: leader Pod %s: %v", leader, err)
+		return nil, nil
+	}
+	h.logf("restart: killing the controller leader %s", leader)
+	t2 := time.Now()
+	if err := h.k.c.Delete(ctx, &pod, client.GracePeriodSeconds(0)); err != nil {
+		if apierrors.IsNotFound(err) {
+			h.note("restart: failover skipped: leader Pod %s gone before the kill", leader)
+			return nil, nil
+		}
+		return nil, err
+	}
+	// The Lease is followed while the first reconcile is awaited, so the
+	// short window a release leaves empty is not missed.
+	handoff := make(chan handoffResult, 1)
+	go func() {
+		outcome, err := h.followLeaseHandoff(ctx, before)
+		handoff <- handoffResult{outcome, err}
+	}()
+	res := &failoverResult{Killed: leader}
+	leaseErr, err := timeFailoverWaits(t2, res,
+		func() error { return h.awaitFirstReconcile(ctx) },
+		func() (float64, []watchSample) { return h.awaitChannelWarmup(ctx, t2, channels) },
+		handoff)
+	if err != nil {
+		return nil, fmt.Errorf("no reconcile after killing %s: %w", leader, err)
+	}
+	if leaseErr != nil {
+		h.note("restart: failover: could not tell whether %s released the Lease: %v", leader, leaseErr)
+	}
+	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "status",
+		"deploy/kaalm-controller", "--timeout=5m"); err != nil {
+		return nil, err
+	}
+	res.RecoveredSec = round3(time.Since(t2).Seconds())
+	if res.NewLeader, err = h.k.controllerLeader(ctx); err != nil {
+		h.note("restart: reading the new controller leader: %v", err)
+	}
+	h.logf("  failover: %s killed, Lease %s, %s leads; first reconcile %.0fs, warm %.0fs, recovered %.0fs",
+		res.Killed, res.Lease, res.NewLeader, res.FirstReconcileSec, res.WarmupSec, res.RecoveredSec)
+	return res, nil
+}
+
+// handoffResult is what followLeaseHandoff returned: the Lease outcome, or
+// why it could not be told.
+type handoffResult struct {
+	outcome string
+	err     error
+}
+
+// timeFailoverWaits runs the waits after the leader kill at start and fills
+// res: the first reconcile, then the channel warm-up, then the Lease outcome
+// from handoff. The Lease is read last so its follower, which can poll for
+// up to two minutes, never delays either timing. It returns the handoff's error apart from the first
+// reconcile's, since an unknown Lease outcome still leaves the timings.
+func timeFailoverWaits(start time.Time, res *failoverResult, firstReconcile func() error,
+	warmup func() (float64, []watchSample), handoff <-chan handoffResult) (leaseErr, err error) {
+	if err := firstReconcile(); err != nil {
+		return nil, err
+	}
+	res.FirstReconcileSec = round3(time.Since(start).Seconds())
+	res.WarmupSec, res.Watches = warmup()
+	got := <-handoff
+	if got.err == nil {
+		res.Lease = got.outcome
+	}
+	return got.err, nil
+}
+
+// followLeaseHandoff reads the controller's Lease from the kill until a new
+// holder takes it and returns leaseReleased or leaseExpired. It reads often
+// enough to see the empty holder a release leaves before the standby's
+// next retry, and gives up after two minutes. It runs beside the failover's
+// other waits, so it reports through its error instead of a note.
+func (h *harness) followLeaseHandoff(ctx context.Context, killed leaseRecord) (string, error) {
+	tracker := newLeaseHandoff(killed)
+	outcome := ""
+	err := pollUntil(ctx, 2*time.Minute, 200*time.Millisecond, func() (bool, error) {
+		rec, err := h.k.leaderLeaseRecord(ctx)
+		if err != nil {
+			return false, err
+		}
+		var done bool
+		outcome, done = tracker.observe(rec)
+		return done, nil
+	})
+	return outcome, err
 }
