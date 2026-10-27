@@ -144,6 +144,7 @@ Run these checks on the open release PR, because merging publishes at once.
    - The `ARG BASE` line of each `examples/*/Dockerfile`.
    - `images/agent-python/pyproject.toml`.
    - The learn book's version pin.
+   - The agent skill: run `hack/skill-pin.sh X.Y.Z`. It sets the version in `plugins/kaalm/.claude-plugin/plugin.json` and in the `This skill matches Kaalm v...` line of `plugins/kaalm/skills/kaalm/SKILL.md`, and points the skill's links at `blob/vX.Y.Z/`. `make docs-check` fails when the three disagree.
 
    The previous release's commit "release: move the version pins to X.Y.Z" shows the full set.
 
