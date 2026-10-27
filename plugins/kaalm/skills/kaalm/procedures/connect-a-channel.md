@@ -8,7 +8,7 @@ Use this to send messages to a running Agent from outside the cluster. An *Agent
 2. **Create the bearer token Secret.** The channel authenticates callers with a token kept in a Secret in the Agent's namespace. The Secret must carry the label `kaalm.io/channel-credential=true`, or the channel is not `Ready` (see [Create the channel](https://github.com/win07xp/kaalm/blob/main/learn/src/talking-to-your-agent.md#create-the-channel)). Generate a random token inside the command, so nobody has to type or see it. Run the dry run first with `--dry-run=server` on the last `kubectl`, then, after the user's OK, without it:
 
    ```bash
-   openssl rand -hex 32 | tr -d '\n' |
+   head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' |
      kubectl --context CONTEXT -n NAMESPACE create secret generic SECRET_NAME \
        --from-file=token=/dev/stdin --dry-run=client -o yaml |
      kubectl label --local -f - -o yaml kaalm.io/channel-credential=true |

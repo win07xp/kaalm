@@ -31,6 +31,52 @@ Use this for work that starts, finishes, and reports a result. An *AgentTask* ru
    See [Watching and reading results](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#watching-and-reading-results).
 8. **If it does not reach `Succeeded`,** use [diagnose.md](diagnose.md). A crashed Pod is retried only when `completion.backoffLimit` is above zero. See [Cleanup and retries](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#cleanup-and-retries).
 
+## A task that calls a model
+
+A task reaches a model only through a ModelProvider it asks for. Three things must line up, as they do for an agent ([deploy-an-agent.md](deploy-an-agent.md) step 1):
+
+- The task lists the provider in `spec.providers`: `providers: [{providerRef: {name: PROVIDER_NAME}}]`.
+- The task's class lists the provider in `allowedProviders`.
+- The provider's `allowedNamespaces` admits the task's namespace.
+
+Without all three, the gateway answers the task's model calls with `403 access_denied` ([LLM call returns 403 access_denied](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/troubleshooting.md#llm-call-returns-403-access_denied)).
+
+### Porting a script that calls a model directly
+
+A script that calls a provider with its own API key changes in four ways:
+
+1. Remove the key from the code, the environment, and the image. The gateway holds it ([add-a-model-key.md](add-a-model-key.md)).
+2. Send the call to the gateway, not to the provider. The Python base image gives the code a client that already carries the task's identity and trusts the cluster CA: `kaalm.http_client()` returns a standard `httpx.Client`, and `kaalm.gateway` is a preconfigured session ([The Python image](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-image)). An image built another way follows [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md).
+3. Name the model with the provider prefix, `PROVIDER_NAME/MODEL_ID`. The gateway reads the provider from the prefix.
+4. Run blocking calls, such as `requests` or a synchronous client, with `asyncio.to_thread` inside `run_task`, so they do not block the event loop the runtime serves on:
+
+```python
+import asyncio
+import os
+
+import kaalm
+
+
+def handle_message(envelope):
+    return {"content": ""}  # required, though a task receives no messages
+
+
+def ask(prompt):
+    client = kaalm.http_client()
+    reply = client.post(
+        os.environ["KAALM_GATEWAY_ENDPOINT"] + "/v1/chat/completions",
+        json={"model": "PROVIDER_NAME/MODEL_ID", "messages": [{"role": "user", "content": prompt}]},
+    )
+    return reply.json()
+
+
+async def run_task():
+    answer = await asyncio.to_thread(ask, "Summarize the report.")
+    await kaalm.complete_task("success", "done")
+```
+
+The path `/v1/chat/completions` is for an `openai` or `openai-compatible` provider; an `anthropic` provider takes `/v1/messages`.
+
 ## A secret the task reads
 
 A task or agent that reads a value that is not a model key, such as an API token for a service, gets it through `spec.env`:
@@ -53,7 +99,7 @@ A task or agent reaches only the gateway and cluster DNS unless its class opens 
 - `allowedCIDRs` allows address ranges, on any CNI that enforces NetworkPolicy.
 - `allowedHosts` allows DNS names, on Cilium only. On another CNI it has no effect.
 
-See what the class allows with `kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.network.egress}'`. Changing it is a change to the class: use [change-safely.md](change-safely.md), including its rule for when the user may not change classes. A running task keeps the egress it started with; only tasks whose Pod is created afterward see the edit. The field rules are in [Network egress: allowedCIDRs and allowedHosts](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts), and [Changing a class later](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#changing-a-class-later) covers when edits reach workloads.
+See what the class allows with `kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.network.egress}'`. Changing it is a change to the class: decide first whether the class is shared, with [Change a class only if no one else uses it](change-safely.md#change-a-class-only-if-no-one-else-uses-it), and use [change-safely.md](change-safely.md), including its rule for when the user may not change classes. A running task keeps the egress it started with; only tasks whose Pod is created afterward see the edit. The field rules are in [Network egress: allowedCIDRs and allowedHosts](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts), and [Changing a class later](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#changing-a-class-later) covers when edits reach workloads.
 
 ## Run it on a schedule
 

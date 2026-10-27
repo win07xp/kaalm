@@ -13,6 +13,8 @@ helm version --short
 
 *kubectl* is the remote control for a cluster. *Helm* is the installer that puts Kaalm on it. Helm must be 3.8 or newer, as the learn book says in [Check they worked](https://github.com/win07xp/kaalm/blob/main/learn/src/setting-up.md#check-they-worked), because Kaalm's chart comes from a container registry.
 
+The channel steps ([connect-a-channel.md](connect-a-channel.md)) also use `curl`, `base64`, `head`, `od`, and `tr`. They come with macOS and most Linux systems; on Windows the user runs them in WSL or Git Bash. Check with `command -v curl base64 od`.
+
 If one is missing, give the user the install page: [kubectl](https://kubernetes.io/docs/tasks/tools/) or [Helm](https://helm.sh/docs/intro/install/). Run an installer yourself only when the user says to.
 
 ## 2. A reachable cluster
@@ -33,7 +35,7 @@ kubectl --context CONTEXT get crd certificates.cert-manager.io bundles.trust.cer
 kubectl --context CONTEXT get pods -n cert-manager
 ```
 
-*cert-manager* issues each agent its own TLS certificate, which is its identity. *trust-manager* shares the certificate authority, so the parts can check each other's identity. Both must be running before Kaalm is installed, and cert-manager needs `--enable-certificate-owner-ref=true`. Every Pod in the namespace must be `Running` with all its containers ready (`READY` such as `1/1`). That covers cert-manager's controller, webhook, and cainjector Pods and trust-manager's Pod. Use the namespace cert-manager is installed in, `cert-manager` by default.
+*cert-manager* issues each agent its own TLS certificate, which is its identity. *trust-manager* shares the certificate authority, so the parts can check each other's identity. Both must be running before Kaalm is installed, and cert-manager needs `--enable-certificate-owner-ref=true`. Every Pod in the namespace must be `Running` with all its containers ready (`READY` such as `1/1`). That covers cert-manager's controller, webhook, and cainjector Pods and trust-manager's Pod. Use the namespace cert-manager is installed in, `cert-manager` by default. A *namespace* is a named folder for objects inside the cluster, and each add-on keeps its parts in its own.
 
 If either is missing, read the "The prerequisites" section of [A cluster in one command](https://github.com/win07xp/kaalm/blob/main/learn/src/a-cluster-in-one-command.md#the-prerequisites) and run its Helm commands for the user. Keep its `--set` values, and note the namespace you install into, which Kaalm's install needs as `certManager.clusterResourceNamespace`.
 

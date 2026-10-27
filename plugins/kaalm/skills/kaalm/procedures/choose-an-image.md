@@ -54,15 +54,18 @@ The Dockerfile in `examples/starter-python` has no install step. A user who adds
 kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.image.allowHandlerMounts}{"\n"}{.spec.image.allowedImages}{"\n"}'
 ```
 
-- Mount-and-run needs `spec.image.allowHandlerMounts: true`. Its default is `false`, and an Agent that mounts a handler then goes `Degraded` with `HandlerMountNotAllowed`. See [A starter class for handler mounts](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts) for what the grant means. Set it with `kubectl --context CONTEXT patch agentclass CLASS_NAME --type=merge -p '{"spec":{"image":{"allowHandlerMounts":true}}}'`.
-- `allowedImages` must admit the image. An empty list admits every image, so there is nothing to add. The `ghcr.io/win07xp/*` pattern in [agentclass.yaml](../examples/agentclass.yaml) admits the base images but not an image the user built. Append one pattern instead of re-applying the whole class:
+- Mount-and-run needs `spec.image.allowHandlerMounts: true`. Its default is `false`, and an Agent that mounts a handler then goes `Degraded` with `HandlerMountNotAllowed`. See [A starter class for handler mounts](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts) for what the grant means.
+- `allowedImages` must admit the image. An empty list admits every image, so there is nothing to add. The `ghcr.io/win07xp/*` pattern in [agentclass.yaml](../examples/agentclass.yaml) admits the base images but not an image the user built.
 
-  ```bash
-  kubectl --context CONTEXT patch agentclass CLASS_NAME --type=json \
-    -p '[{"op":"add","path":"/spec/image/allowedImages/-","value":"PATTERN"}]'
-  ```
+If the class needs a grant or a pattern, decide first whether the class is shared, with [Change a class only if no one else uses it](change-safely.md#change-a-class-only-if-no-one-else-uses-it). For a class only the user uses, the two changes are:
 
-Run each patch through [change-safely.md](change-safely.md): the dry run is the same command with `--dry-run=server`, then the OK. A class can be shared, so changing it changes other people's setup. If the user may not change classes, [change-safely.md](change-safely.md#when-the-user-may-not-change-the-object) says what to do.
+```bash
+kubectl --context CONTEXT patch agentclass CLASS_NAME --type=merge -p '{"spec":{"image":{"allowHandlerMounts":true}}}'
+kubectl --context CONTEXT patch agentclass CLASS_NAME --type=json \
+  -p '[{"op":"add","path":"/spec/image/allowedImages/-","value":"PATTERN"}]'
+```
+
+Run each patch through [change-safely.md](change-safely.md): the dry run is the same command with `--dry-run=server`, then the OK. For a shared class, the user's own class carries the grant instead: put `image.allowHandlerMounts: true` or the image pattern in the new class's manifest, scoped to the user's namespace. If the user may not create or change classes, [change-safely.md](change-safely.md#when-the-user-may-not-change-the-object) says what to do.
 
 **An image built for a local k3d cluster.** The saved context `k3d-NAME` tells you the cluster is k3d.
 
@@ -77,7 +80,7 @@ Run each patch through [change-safely.md](change-safely.md): the dry run is the 
    [Testing an image before pointing an Agent at it](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/building-your-own-image.md#testing-an-image-before-pointing-an-agent-at-it) shows the import with the maintainers' cluster name; use the user's cluster name `NAME`.
 3. Use a new `TAG` for each rebuild (`dev1`, `dev2`). Importing over a tag the Agent already runs does not restart its Pod. Changing the Agent's `image` to the new tag does.
 
-**An image for any other cluster.** The user pushes the image to a registry the cluster can pull from, and the Agent uses the pushed name. [From source](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/installation.md#from-source) shows a build and push. For a private registry, the class's `image.imagePullSecrets` lists Secrets that must exist in the workload's namespace. Kaalm looks them up there and copies none across namespaces. A missing one gives the workload `Ready=False` with `ImagePullSecretMissing` ([imagePullSecrets namespace resolution](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#imagepullsecrets-namespace-resolution)). The user creates that Secret from their registry's own instructions, because it holds a password. A cluster whose nodes already have pull rights, such as EKS nodes with an IAM role that reads ECR, needs none.
+**An image for any other cluster.** The user pushes the image to a registry the cluster can pull from, and the Agent uses the pushed name. A push publishes the image, so name the registry and the image and ask for the OK before the push, as [Changes with no dry run](change-safely.md#changes-with-no-dry-run) says. [From source](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/installation.md#from-source) shows a build and push. For a private registry, the class's `image.imagePullSecrets` lists Secrets that must exist in the workload's namespace. Kaalm looks them up there and copies none across namespaces. A missing one gives the workload `Ready=False` with `ImagePullSecretMissing` ([imagePullSecrets namespace resolution](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#imagepullsecrets-namespace-resolution)). Check that the Secret exists, with a command that shows names only: `kubectl --context CONTEXT get secret SECRET_NAME -n NAMESPACE`. The user creates a missing Secret from their registry's own instructions, because it holds a password. A cluster whose nodes already have pull rights, such as EKS nodes with an IAM role that reads ECR, needs none.
 
 **Starting from an example.** The README of each example has the steps:
 
@@ -116,4 +119,4 @@ The class and image-delivery notes in step 2 apply to a task's image too (the `a
 
 ## 3. Hand back
 
-This step is done when you have told the user the image or rung you chose, the reason, and, when the image starts from a repository example, that example's name and README link. Then return to the calling procedure with the image name and tag, and with the handler ConfigMap if the choice was mount-and-run.
+This step is done when you have told the user, in this form: "I chose RUNG because REASON. Start from EXAMPLE (README link)." Leave out the second sentence when the image starts from no repository example. Then return to the calling procedure with the image name and tag, and with the handler ConfigMap if the choice was mount-and-run.

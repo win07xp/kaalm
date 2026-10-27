@@ -12,7 +12,7 @@ Use this to run a long-lived agent: a Pod with its own identity, optional storag
      kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.allowedProviders[*].name}{"\n"}{.spec.allowedNamespaces}{"\n"}'
      ```
 
-     If no class fits, copy [agentclass.yaml](../examples/agentclass.yaml) (one person) or use [team-setup.md](team-setup.md). Check that the class name is free first, as [Names that already exist](change-safely.md#names-that-already-exist) says.
+     If no class fits, do not change a class that others use ([Change a class only if no one else uses it](change-safely.md#change-a-class-only-if-no-one-else-uses-it)). Copy [agentclass.yaml](../examples/agentclass.yaml) (one person, or one namespace when it is set) or use [team-setup.md](team-setup.md). Check that the class name is free first, as [Names that already exist](change-safely.md#names-that-already-exist) says.
    - The ModelProvider, if the agent should call a model: `kubectl --context CONTEXT get modelproviders`. Its `allowedNamespaces` must admit the namespace. With none yet, use [add-a-model-key.md](add-a-model-key.md) now that the namespace exists, then come back here. Or deploy without one.
 2. **Pick the image** with [choose-an-image.md](choose-an-image.md), then come back. For a first agent it picks the published Python base image, which echoes each message and proves the agent runs and can be reached.
 3. **Write the Agent.** Copy [agent.yaml](../examples/agent.yaml). Set the name, `agentClassRef`, the image, and `providers`. Delete the `providers` block when there is no ModelProvider.

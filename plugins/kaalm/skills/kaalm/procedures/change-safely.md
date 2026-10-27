@@ -39,7 +39,7 @@ If the name exists, reuse that object, or pick another name. Applying a manifest
 
 ## Changes with no dry run
 
-A change that is not a Kubernetes API call has no dry run: creating a k3d cluster, `helm repo add`, or installing a tool. Explain it in one or two sentences, name the context or machine it affects, and ask for the OK before running it.
+A change that is not a Kubernetes API call has no dry run: creating a k3d cluster, `helm repo add`, installing a tool, building an image, or importing it into k3d. Explain it in one or two sentences, name the context or machine it affects, and ask for the OK before running it. A `docker push` to a registry publishes the image, so name the registry and the image, and ask before every push.
 
 ## A cluster that lacks a kind
 
@@ -48,6 +48,21 @@ On a first Kaalm install, the dry run of the chart fails with `no matches for ki
 ## When your own settings block the command
 
 If the agent's tool or permission settings block the real command after the dry run passed, do not look for another way around the block. Give the user the exact command to run themselves, in a code block, in their own terminal (in Claude Code, with a leading `!`). Check the result with the calling procedure's check after the user says it ran.
+
+## Change a class only if no one else uses it
+
+An AgentClass is shared: it sets the rules for every workload that names it. Before any change to a class (a patch, an apply over it, a new grant such as handler mounts, an image pattern, or egress), find out who uses it:
+
+```bash
+kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.allowedNamespaces}{"\n"}'
+kubectl --context CONTEXT get agents,agenttasks -A \
+  -o jsonpath='{range .items[*]}{.kind} {.metadata.namespace}/{.metadata.name} {.spec.agentClassRef.name}{"\n"}{end}' | grep -w CLASS_NAME
+```
+
+An empty first answer means the class admits every namespace. If the user is not sure who else relies on it, ask.
+
+- **Only the user uses it** (its `allowedNamespaces` lists only the user's namespaces, and the second command shows only the user's workloads): patch or apply the change through the steps above.
+- **Anyone else uses it:** do not change it. Offer a separate class for the user's namespace instead, with only the grants the user needs. Copy [agentclass.yaml](../examples/agentclass.yaml) and set `allowedNamespaces` to the user's namespace. The guide gives the same advice: [offer it as its own class rather than loosening a shared one](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts). Creating a class needs permission: follow [When the user may not change the object](#when-the-user-may-not-change-the-object).
 
 ## When the user may not change the object
 

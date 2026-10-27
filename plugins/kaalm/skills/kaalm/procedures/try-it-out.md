@@ -2,6 +2,15 @@
 
 Use this for a user whose goal is `try-it`. It follows the [learn book](https://github.com/win07xp/kaalm/blob/main/learn/src/welcome.md), which walks from an empty laptop to a running agent on a throwaway cluster. The first agent echoes messages and needs no API key and no account.
 
+## Start where the user is
+
+Run [check-dependencies.md](check-dependencies.md) steps 1 to 4 first. They only read. Then skip what is already in place:
+
+- Skip step 1 when a reachable cluster exists and the user agrees to try Kaalm on it. The first agent creates a class and an agent in the `default` namespace, so ask before using a cluster that holds other people's work, and offer a local cluster instead.
+- Skip step 2 when cert-manager and trust-manager are running.
+- Skip step 3 when Kaalm is installed and the version check passes.
+- Step 4 is optional on any path. Offer it, and skip it if the user wants to go straight to the agent.
+
 Go one chapter at a time. After each, say what now exists and ask whether to continue. Skip the book's explanations for terms the user's experience level already covers, and keep them for `new-to-kubernetes`.
 
 | Step | Do | Learn book chapter |
@@ -11,9 +20,11 @@ Go one chapter at a time. After each, say what now exists and ask whether to con
 | 3 | Install Kaalm with [install-kaalm.md](install-kaalm.md). | [Kaalm](https://github.com/win07xp/kaalm/blob/main/learn/src/a-cluster-in-one-command.md#kaalm), [What got installed](https://github.com/win07xp/kaalm/blob/main/learn/src/a-cluster-in-one-command.md#what-got-installed) |
 | 4 | Look at what Kaalm added. Run the read-only `kubectl get` and `describe` commands from the chapter. | [Looking around](https://github.com/win07xp/kaalm/blob/main/learn/src/looking-around.md) |
 | 5 | Run the first agent: a class named `tutorial` and an agent named `helper`, through [change-safely.md](change-safely.md). | [Running an agent](https://github.com/win07xp/kaalm/blob/main/learn/src/running-an-agent.md) |
-| 6 | Send it a message with [connect-a-channel.md](connect-a-channel.md). The reply is `echo: ...`. | [Talking to your agent](https://github.com/win07xp/kaalm/blob/main/learn/src/talking-to-your-agent.md) |
+| 6 | Send it a message with [connect-a-channel.md](connect-a-channel.md). The reply is `echo: ...`. The skill's generated token replaces the book's fixed one (see below). | [Talking to your agent](https://github.com/win07xp/kaalm/blob/main/learn/src/talking-to-your-agent.md) |
 
 Before step 5, check the book's names with [Names that already exist](change-safely.md#names-that-already-exist): `kubectl --context CONTEXT get agentclass tutorial` and `get agent helper`. If a class named `tutorial` exists, reuse it when it matches the book's class (compare its spec with the chapter's), or create the book's class under another name and set the agent's `agentClassRef` to it. Tell the user what differs from the book. Write the manifests in step 5 from the chapter, with the image tag set to the installed Kaalm version. The chapter's own tag is the version it was walked against. The book's commands do not pass a context: add `--context CONTEXT` to each `kubectl` and `--kube-context CONTEXT` to each `helm`. The book's `k3d cluster create` command also gets `--kubeconfig-switch-context=false`, as [get-a-cluster.md](get-a-cluster.md) explains.
+
+In step 6, do not use the book's Secret manifest, which holds a fixed token. [connect-a-channel.md](connect-a-channel.md) generates a token inside the command and names its Secret `helper-hook`, where the book's is `webhook-token`. The channel is `helper-webhook` in both. The book's `curl` command uses the fixed token; the user runs the skill's version, which reads the token from the Secret.
 
 When step 6 works, the user has a running agent. Offer what the book does next, one at a time:
 
