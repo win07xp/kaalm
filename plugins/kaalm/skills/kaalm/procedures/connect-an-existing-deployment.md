@@ -49,7 +49,7 @@ Tell the user up front what it costs and what it does not give:
                path: ca.crt
    ```
 
-   The `audience` must be `kaalm-gateway`; the default audience is rejected with `401`. Editing the Pod template rolls the workload's Pods: say so, and apply the edit with [change-safely.md](change-safely.md).
+   The `audience` must be `kaalm-gateway`; the default audience is rejected with `401`. Editing the Pod template rolls the workload's Pods: say so, and apply the edit with [change-safely.md](change-safely.md). Leave the old model key (its environment variable or mount) in the Pod template through steps 3 to 6, so a failed check can be rolled back to the old setup. Step 7 removes it.
 4. **Point the client at the gateway.**
    - URL: `https://kaalm-gateway.KAALM_NAMESPACE.svc:8443` (`KAALM_NAMESPACE` is `install.namespace` in the config). An OpenAI-format client uses `base_url` with `/v1` added. The Anthropic SDK takes the URL without `/v1`.
    - Trust: the client verifies the gateway with `/var/run/ca/ca.crt`.
@@ -78,7 +78,7 @@ Tell the user up front what it costs and what it does not give:
 
    A `403` with `access_denied` means a provider check failed: [LLM call returns 403 access_denied](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/troubleshooting.md#llm-call-returns-403-access_denied). A `401` has the causes listed under [Mode 2](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token): a token with the wrong audience, a token the apiserver rejects, or a Pod that Kaalm manages. Use [diagnose.md](diagnose.md) for the provider's own status.
 
-7. **Remove the old key and rotate it.** The workload's own copy of the provider key sat in its Pods, in an environment variable or a Secret, so anyone who could read those had it. Do these in order, each with the user's OK:
+7. **Remove the old key and rotate it.** The workload's own copy of the provider key sat in its Pods, in an environment variable or a Secret, so anyone who could read those had it. Start only after step 6's check succeeds, because until then the old key lets a failed check roll back to the old setup. Do these in order, each with the user's OK:
    1. Edit the workload to drop the key: remove the environment variable or mount from the Pod template, through [change-safely.md](change-safely.md).
    2. Delete the Secret that held it, if nothing else uses it: `kubectl --context CONTEXT delete secret SECRET_NAME -n NAMESPACE`, with `--dry-run=server` first. Do not read the Secret first.
    3. The user revokes the old key at the model provider's own console, so the copy that sat in the Pods stops working.
