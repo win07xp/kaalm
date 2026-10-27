@@ -29,7 +29,7 @@ The default is the lowest rung that fits, because each higher rung gives the use
 
 For a framework agent, offer these in order, as [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md) describes them:
 
-1. [Level 1](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion): keep the user's image and point the framework's model client at the gateway.
+1. [Level 1](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion): keep the user's image and point the framework's model client at the gateway. The steps are in [connect-an-existing-deployment.md](connect-an-existing-deployment.md); skip the rest of this page.
 2. [Level 2](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-2-full-lifecycle-the-framework-inside-the-handler): put the framework inside the handler on the base image, which is the `FROM` rung.
 3. A custom image, when neither fits.
 
@@ -79,7 +79,7 @@ Run each patch through [change-safely.md](change-safely.md): the dry run is the 
 
 **An image for any other cluster.** The user pushes the image to a registry the cluster can pull from, and the Agent uses the pushed name. [From source](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/installation.md#from-source) shows a build and push. For a private registry, the class's `image.imagePullSecrets` lists Secrets that must exist in the workload's namespace. Kaalm looks them up there and copies none across namespaces. A missing one gives the workload `Ready=False` with `ImagePullSecretMissing` ([imagePullSecrets namespace resolution](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#imagepullsecrets-namespace-resolution)). The user creates that Secret from their registry's own instructions, because it holds a password. A cluster whose nodes already have pull rights, such as EKS nodes with an IAM role that reads ECR, needs none.
 
-**Starting from an example.** Name the example you start from to the user, and point to its README for the steps:
+**Starting from an example.** The README of each example has the steps:
 
 - [starter-python](https://github.com/win07xp/kaalm/tree/main/examples/starter-python) ([README](https://github.com/win07xp/kaalm/blob/main/examples/starter-python/README.md)): the `FROM` rung, a `handler.py` and a short Dockerfile on the Python base image.
 - [starter-go](https://github.com/win07xp/kaalm/tree/main/examples/starter-go) ([README](https://github.com/win07xp/kaalm/blob/main/examples/starter-go/README.md)): the starter-template rung, a complete Go agent that imports the runtime module.
@@ -95,16 +95,25 @@ git clone --depth 1 --branch vX.Y.Z https://github.com/win07xp/kaalm SCRATCH_DIR
 
 Replace `X.Y.Z` with the installed version, then copy `examples/NAME` into the user's folder. A clone downloads files to the user's machine, so ask for the OK first.
 
+**The Go starter template** needs its runtime module pinned to the installed Kaalm version after the copy. A bare `go mod tidy` resolves the newest module, which may not match the cluster. In the copied folder, run:
+
+```bash
+go get github.com/win07xp/kaalm/agentruntime/v2@vX.Y.Z
+go mod tidy
+```
+
+Replace `X.Y.Z` with the installed version. The module's tags look like `agentruntime/vX.Y.Z`. Keep it in step on upgrades: [upgrade-kaalm.md](upgrade-kaalm.md) step 7.
+
 ## Tasks
 
 `spec.handler` exists only on an Agent, so mount-and-run cannot run a task ([Task mode](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#task-mode) states why). A task uses one of these:
 
 - The demo: `ghcr.io/win07xp/kaalm-agent-go` with `KAALM_TASK_AUTOCOMPLETE`, as [agenttask.yaml](../examples/agenttask.yaml) does. It proves the path and does no work.
-- A Python image built `FROM` the Python base image, whose `handler.py` defines `run_task` ([Writing a task in Python](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#writing-a-task-in-python)). Follow the `FROM` notes in step 2.
+- A Python image built `FROM` the Python base image, whose `handler.py` defines `run_task` ([Writing a task in Python](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#writing-a-task-in-python)). Follow the `FROM` notes in step 2, and read the completion-mode advice for the Python base image in step 3 of [run-a-task.md](run-a-task.md).
 - The Go starter template, or a custom image. [langgraph-task](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-task) is the worked example of a custom image.
 
 The class and image-delivery notes in step 2 apply to a task's image too (the `allowedImages` check and getting a built image into the cluster). Everything else about tasks (completion modes, results, secrets, outside access, schedules) is in [run-a-task.md](run-a-task.md).
 
 ## 3. Hand back
 
-Return to the calling procedure with the image name and tag, and with the handler ConfigMap if the choice was mount-and-run.
+This step is done when you have told the user the image or rung you chose, the reason, and, when the image starts from a repository example, that example's name and README link. Then return to the calling procedure with the image name and tag, and with the handler ConfigMap if the choice was mount-and-run.

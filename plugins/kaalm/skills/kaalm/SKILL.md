@@ -96,6 +96,7 @@ Start with the row that matches the request. If the request names no task, use t
 | Give agents a model, with an API key | [procedures/add-a-model-key.md](procedures/add-a-model-key.md) |
 | Give an agent or task a secret value, such as an API token | [procedures/add-a-secret.md](procedures/add-a-secret.md) |
 | Choose or build the agent's image | [procedures/choose-an-image.md](procedures/choose-an-image.md) |
+| Send model calls from an existing Deployment through the gateway | [procedures/connect-an-existing-deployment.md](procedures/connect-an-existing-deployment.md) |
 | Run a long-lived agent | [procedures/deploy-an-agent.md](procedures/deploy-an-agent.md) |
 | Run a job that finishes | [procedures/run-a-task.md](procedures/run-a-task.md) |
 | Send messages to an agent from outside | [procedures/connect-a-channel.md](procedures/connect-a-channel.md) |

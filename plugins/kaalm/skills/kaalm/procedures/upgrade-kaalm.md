@@ -35,3 +35,4 @@ Running agents are not restarted by an upgrade. The gateway rollout resets its i
    kubectl --context CONTEXT get agents,agenttasks -A
    ```
 6. **Save the version:** `python3 SKILL_DIR/scripts/config.py set install.chartVersion VERSION`.
+7. **Keep the user's own images in step.** An image the user built `FROM` a Kaalm base image should be rebuilt against the base image tag `VERSION`. A Go agent copied from the starter template should pin the runtime module to `VERSION` and rebuild, with the commands under "The Go starter template" in [choose-an-image.md](choose-an-image.md). Running agents keep their Pods until the user points them at the new image.
