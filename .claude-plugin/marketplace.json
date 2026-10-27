@@ -1,0 +1,13 @@
+{
+  "name": "kaalm",
+  "owner": {
+    "name": "The Kaalm Authors"
+  },
+  "plugins": [
+    {
+      "name": "kaalm",
+      "source": "./plugins/kaalm",
+      "description": "Install Kaalm and run AI agents on Kubernetes with it."
+    }
+  ]
+}

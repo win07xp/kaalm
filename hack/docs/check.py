@@ -51,6 +51,12 @@ Across the repository, outside the books:
   that version's file;
 - release notes under releases/ have no em or en dash and none of the words
   the prose rules ban (see WORDING_PATTERNS) outside code;
+- the kaalm agent skill (SKILL_DIR) keeps the books' dash, wording, and
+  time rules in its Markdown files. Its links to this repository on GitHub
+  point at main or at the tag of the version its plugin.json states, its
+  SKILL.md states that same version on a SKILL_VERSION line, and the root
+  marketplace file lists the plugin with no version of its own (plugin.json
+  holds it). hack/skill-pin.sh moves all three in the release PR;
 - no code comment, build file, script, or workflow cites an issue or PR
   number (a `#` followed by digits): it states the reason instead, and git history keeps the
   link. Tracked files under docs/, guide/, and learn/ are exempt, and so are
@@ -74,6 +80,7 @@ Exit status 1 when any check fails.
 """
 
 import bisect
+import json
 import pathlib
 import re
 import subprocess
@@ -124,6 +131,15 @@ BANNED_TOKEN = re.compile(r"(?<!feature )\b[A-Za-z0-9_-]*gat(?:e|es|ed|ing)[A-Za
 TOKEN_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 # Generated or rendered files: their sources are scanned instead.
 BANNED_WORD_SKIP = ("config/crd/bases/", "charts/kaalm/crds/")
+# The kaalm agent skill: a Claude Code plugin whose SKILL.md names the Kaalm
+# version it matches. A user installs it from that version's tag, so its
+# links must point at that tag or, between releases, at main.
+SKILL_DIR = "plugins/kaalm/"
+SKILL_MANIFEST = "plugins/kaalm/.claude-plugin/plugin.json"
+SKILL_PAGE = "plugins/kaalm/skills/kaalm/SKILL.md"
+SKILL_MARKETPLACE = ".claude-plugin/marketplace.json"
+SKILL_VERSION = re.compile(r"^This skill matches Kaalm v(\S+)\.$", re.MULTILINE)
+REPO_BLOB_REF = re.compile(r"https://github\.com/win07xp/kaalm/(?:blob|tree)/([^/\s)]+)/")
 BANNED_WORD_SKIP_SUFFIXES = (".svg", ".sum")
 # Ginkgo node labels, checked against the scenario coverage map and against
 # spec labels quoted on other pages.
@@ -548,6 +564,61 @@ class Checker:
                     self.problems.append(f"{rel}:{n}: em or en dash")
             self.check_wording(rel, strip_fences(raw.splitlines()))
 
+    def check_skill(self) -> None:
+        """The kaalm agent skill keeps the books' prose rules, and its links
+        and stated version agree with the version in its plugin.json, so a
+        user who installs it from a tag reads pages of that tag."""
+        try:
+            manifest = json.loads((ROOT / SKILL_MANIFEST).read_text(encoding="utf-8"))
+            version = manifest["version"]
+        except (OSError, ValueError, KeyError) as e:
+            self.problems.append(f"{SKILL_MANIFEST}: cannot read its version: {e}")
+            return
+        allowed = {"main", f"v{version}"}
+        for rel in self.tracked_outside_books():
+            if not rel.startswith(SKILL_DIR):
+                continue
+            f = ROOT / rel
+            if not f.is_file():
+                continue
+            try:
+                raw = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for n, line in enumerate(raw.splitlines(), 1):
+                for m in REPO_BLOB_REF.finditer(line):
+                    if m.group(1) not in allowed:
+                        self.problems.append(
+                            f"{rel}:{n}: links to ref {m.group(1)}; the skill links to main or "
+                            f"v{version} (the version in {SKILL_MANIFEST})"
+                        )
+            if rel.endswith(".md"):
+                for n, line in enumerate(raw.splitlines(), 1):
+                    if DASHES.search(line):
+                        self.problems.append(f"{rel}:{n}: em or en dash")
+                prose = strip_fences(raw.splitlines())
+                self.check_wording(rel, prose)
+                self.check_time(rel, prose)
+        page = ROOT / SKILL_PAGE
+        stated = SKILL_VERSION.findall(page.read_text(encoding="utf-8")) if page.is_file() else []
+        if stated != [version]:
+            self.problems.append(
+                f"{SKILL_PAGE}: needs exactly one line 'This skill matches Kaalm v{version}.' "
+                f"(the version in {SKILL_MANIFEST}), found {stated}"
+            )
+        try:
+            market = json.loads((ROOT / SKILL_MARKETPLACE).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            self.problems.append(f"{SKILL_MARKETPLACE}: cannot read it: {e}")
+            return
+        entries = [p for p in market.get("plugins", []) if p.get("source") == "./plugins/kaalm"]
+        if len(entries) != 1:
+            self.problems.append(f"{SKILL_MARKETPLACE}: needs one plugin with source ./plugins/kaalm")
+        elif "version" in entries[0]:
+            self.problems.append(
+                f"{SKILL_MARKETPLACE}: the kaalm plugin entry sets a version; only {SKILL_MANIFEST} holds it"
+            )
+
     def check_issue_refs(self) -> None:
         """No code comment, build file, script, or workflow cites an issue or
         PR number: AGENTS.md asks for the reason instead, and this keeps a
@@ -650,6 +721,7 @@ def main(argv: list[str]) -> int:
     checker.check_guide_figures()
     checker.check_book_refs()
     checker.check_release_notes()
+    checker.check_skill()
     checker.check_issue_refs()
     checker.check_banned_word()
     checker.check_coverage_map()
