@@ -56,7 +56,8 @@ Across the repository, outside the books:
   point at main or at the tag of the version its plugin.json states, its
   SKILL.md states that same version on a SKILL_VERSION line, and the root
   marketplace file lists the plugin with no version of its own (plugin.json
-  holds it). hack/skill-pin.sh moves all three in the release PR;
+  holds it). Its example manifests tag the Kaalm base images with that
+  version too. hack/skill-pin.sh moves all of these in the release PR;
 - no code comment, build file, script, or workflow cites an issue or PR
   number (a `#` followed by digits): it states the reason instead, and git history keeps the
   link. Tracked files under docs/, guide/, and learn/ are exempt, and so are
@@ -139,6 +140,7 @@ SKILL_MANIFEST = "plugins/kaalm/.claude-plugin/plugin.json"
 SKILL_PAGE = "plugins/kaalm/skills/kaalm/SKILL.md"
 SKILL_MARKETPLACE = ".claude-plugin/marketplace.json"
 SKILL_VERSION = re.compile(r"^This skill matches Kaalm v(\S+)\.$", re.MULTILINE)
+SKILL_IMAGE_TAG = re.compile(r"ghcr\.io/win07xp/kaalm-agent-(?:python|go):([^\s\"']+)")
 REPO_BLOB_REF = re.compile(r"https://github\.com/win07xp/kaalm/(?:blob|tree)/([^/\s)]+)/")
 BANNED_WORD_SKIP_SUFFIXES = (".svg", ".sum")
 # Ginkgo node labels, checked against the scenario coverage map and against
@@ -592,6 +594,14 @@ class Checker:
                             f"{rel}:{n}: links to ref {m.group(1)}; the skill links to main or "
                             f"v{version} (the version in {SKILL_MANIFEST})"
                         )
+            if rel.endswith(".yaml"):
+                for n, line in enumerate(raw.splitlines(), 1):
+                    for m in SKILL_IMAGE_TAG.finditer(line):
+                        if m.group(1) != version:
+                            self.problems.append(
+                                f"{rel}:{n}: tags a Kaalm base image {m.group(1)}; the examples use "
+                                f"{version} (the version in {SKILL_MANIFEST})"
+                            )
             if rel.endswith(".md"):
                 for n, line in enumerate(raw.splitlines(), 1):
                     if DASHES.search(line):

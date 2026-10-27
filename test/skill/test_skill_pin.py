@@ -31,8 +31,15 @@ class SkillPinTest(unittest.TestCase):
         )
         self.proc = self.plugin / "skills" / "kaalm" / "procedures" / "first-agent.md"
         self.proc.write_text(
-            f"Old [link]({BLOB}/v2.0.1/guide/src/developers/first-agent.md#before-you-start)\n"
+            f"Old [link]({BLOB}/v2.0.1/guide/src/developers/first-agent.md#1-pick-an-image)\n"
             f"Other repo https://github.com/other/kaalm/blob/main/x.md stays.\n"
+        )
+        (self.plugin / "skills" / "kaalm" / "examples").mkdir()
+        self.example = self.plugin / "skills" / "kaalm" / "examples" / "agent.yaml"
+        self.example.write_text(
+            "spec:\n  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1\n"
+            "  other: ghcr.io/win07xp/kaalm-agent-go:2.0.1\n"
+            "  mine: ghcr.io/example/my-agent:2.0.1\n"
         )
 
     def tearDown(self):
@@ -54,8 +61,12 @@ class SkillPinTest(unittest.TestCase):
         self.assertIn("This skill matches Kaalm v2.1.0.", skill)
         self.assertIn(f"{BLOB}/v2.1.0/guide/src/getting-started/installation.md", skill)
         proc = self.proc.read_text()
-        self.assertIn(f"{BLOB}/v2.1.0/guide/src/developers/first-agent.md#before-you-start", proc)
+        self.assertIn(f"{BLOB}/v2.1.0/guide/src/developers/first-agent.md#1-pick-an-image", proc)
         self.assertIn("https://github.com/other/kaalm/blob/main/x.md", proc)
+        example = self.example.read_text()
+        self.assertIn("ghcr.io/win07xp/kaalm-agent-python:2.1.0\n", example)
+        self.assertIn("ghcr.io/win07xp/kaalm-agent-go:2.1.0\n", example)
+        self.assertIn("ghcr.io/example/my-agent:2.0.1\n", example)
 
     def test_accepts_a_leading_v_and_a_prerelease(self):
         res = self.pin("v2.1.0-rc.1")
