@@ -12,7 +12,9 @@ window and a write that returned survives a process or node crash. The log is
 folded into the snapshot (temp file, fsync, rename) when it outgrows a few
 times the snapshot and at a clean shutdown. The log's record shape and the
 snapshot's keys are the same in the Go runtime, so each runtime parses the
-other's files and a volume written by either reads in both.
+other's files and a volume written by either reads in both. For that reason
+this runtime writes strict JSON only: Go's encoding/json has no NaN or
+Infinity, so a value holding one is rejected before it reaches the files.
 
 The state carries two disjoint areas: the runtime-owned dedup window
 (messageId to cached reply, with LRU order), and a general key/value area.
@@ -66,6 +68,20 @@ def _sync_dir(directory: Path) -> None:
         log.warning("memory: syncing %s: %s", directory, exc)
     finally:
         os.close(fd)
+
+
+def ensure_json(value: Any, what: str) -> None:
+    """Raise TypeError unless value serializes as strict JSON.
+
+    The state files and the reply on the wire are read by Go's encoding/json,
+    which has no NaN, Infinity, or -Infinity, so those are rejected along with
+    values json cannot serialize at all. Reading stays lenient on purpose:
+    files that already hold such values keep loading in this runtime.
+    """
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{what} is not a JSON value: {exc}") from exc
 
 
 class Store:
@@ -343,8 +359,9 @@ class Store:
 
     def put(self, key: str, value: Any) -> None:
         """Store a JSON-serializable value. Raises TypeError on anything else,
-        loudly and immediately, rather than corrupting the state file later."""
-        json.dumps(value)
+        including NaN, Infinity, and -Infinity, loudly and immediately, rather
+        than corrupting the state file later. Nothing is stored on error."""
+        ensure_json(value, f"value for key {key!r}")
         with self._lock:
             self._kv[key] = value
             self._append_locked({"op": "set", "key": key, "value": value})
@@ -367,6 +384,9 @@ class Store:
             return reply
 
     def remember(self, message_id: str, reply: Any, cap: int = DEDUP_CAP) -> None:
+        """Cache a reply for message_id. The reply is not checked here: its
+        only caller, Agent.respond, rejects a reply that is not strict JSON
+        before it gets this far."""
         with self._lock:
             self._remember_locked(message_id, reply, cap)
             self._append_locked({"op": "remember", "id": message_id, "reply": reply})

@@ -5,6 +5,8 @@ built-in echo handler's contract."""
 
 from __future__ import annotations
 
+import pytest
+
 from kaalm_agent import echo
 from kaalm_agent.__main__ import Agent
 from kaalm_agent.memory import Store
@@ -85,3 +87,38 @@ async def test_echo_contract():
     assert reply["attachments"] == [] and reply["metadata"] == {}
     # Deterministic: same input, same output.
     assert reply == await echo.handle_message({"content": "x"})
+
+
+def assert_nothing_logged(d):
+    log_path = d / "state.log"
+    assert not log_path.exists() or log_path.read_bytes() == b""
+
+
+async def test_reply_with_nan_is_rejected_before_it_is_cached(tmp_path):
+    async def handler(_envelope):
+        return {"content": "x", "metadata": {"score": float("nan")}}
+
+    d = tmp_path / "mem"
+    store = Store(str(d))
+    agent = Agent(handler=handler, store=store, gateway=None, reloader=None)
+    with pytest.raises(TypeError, match="m1"):
+        await agent.respond({"messageId": "m1", "content": "hi"})
+    assert store.recall("m1") is None
+    with pytest.raises(TypeError):
+        await agent.respond({"content": "hi"})
+    assert_nothing_logged(d)
+
+
+async def test_unserializable_reply_leaves_the_window_untouched(tmp_path):
+    async def handler(_envelope):
+        return {"content": object()}
+
+    d = tmp_path / "mem"
+    store = Store(str(d))
+    agent = Agent(handler=handler, store=store, gateway=None, reloader=None)
+    with pytest.raises(TypeError):
+        await agent.respond({"messageId": "m1", "content": "hi"})
+    assert store.recall("m1") is None
+    store.put("user/k", 1)
+    store.close()
+    assert Store(str(d)).get("user/k") == 1

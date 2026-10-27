@@ -35,7 +35,7 @@ import kaalm
 from . import loader, tracecontext
 from .gateway import GatewayClient
 from .httpclient import make_http_async_client, make_http_client
-from .memory import Store, UserMemory
+from .memory import Store, UserMemory, ensure_json
 from .tls import CertReloader, gateway_sans, peer_san_matches_gateway, workload_is_task
 
 log = logging.getLogger("agent")
@@ -129,6 +129,10 @@ class Agent:
         An envelope without a messageId is dispatched but never cached:
         deduplicating on the empty string would answer every id-less message
         with the first id-less reply forever.
+
+        A reply that is not strict JSON (NaN, Infinity, or an object json
+        cannot serialize) raises TypeError here, before it is cached or sent,
+        so neither the state log nor the gateway ever sees it.
         """
         message_id = envelope.get("messageId", "")
         if message_id:
@@ -136,6 +140,7 @@ class Agent:
             if cached is not None:
                 return cached
         reply = await self.handler(envelope)
+        ensure_json(reply, f"handler reply to messageId {message_id!r}")
         if message_id:
             self.store.remember(message_id, reply)
         return reply
