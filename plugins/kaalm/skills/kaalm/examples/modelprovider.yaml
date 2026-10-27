@@ -1,0 +1,28 @@
+# A ModelProvider for Anthropic. It needs the Secret that procedures/add-a-model-key.md creates.
+# Set allowedNamespaces to the namespaces that may use it, and the prices to the provider's current ones.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: anthropic-shared
+spec:
+  type: anthropic
+  endpoint: https://api.anthropic.com
+  credentialsRef:
+    name: anthropic-api-key
+    key: token
+  models:
+    - id: claude-opus-4-6
+      costPer1MInputTokens: "15.00"
+      costPer1MOutputTokens: "75.00"
+    - id: claude-sonnet-4-6
+      costPer1MInputTokens: "3.00"
+      costPer1MOutputTokens: "15.00"
+  allowedNamespaces: ["default"]
+  budget:
+    period: monthly
+    perNamespaceUSD: "20"
+    policies:
+      - atPercent: 80
+        action: warn
+      - atPercent: 100
+        action: block
