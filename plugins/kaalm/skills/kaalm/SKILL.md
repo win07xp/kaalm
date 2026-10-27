@@ -9,6 +9,8 @@ This skill matches Kaalm v2.0.1.
 
 This skill holds procedures: what to run, in what order, and what to check. The facts live in Kaalm's books, which each procedure links. Read the linked page when a step fails or the user asks for more than the procedure covers.
 
+**Read a linked page as raw Markdown.** A fetch tool that is handed a GitHub page address often returns a summary without the exact commands. Fetch the raw text instead: replace `https://github.com/win07xp/kaalm/blob/` with `https://raw.githubusercontent.com/win07xp/kaalm/` and keep the ref after it (`main` or a version tag). Take commands and values from that text word for word.
+
 ## Start every task
 
 1. **Load the config.** The user's choices live in `.claude/kaalm.json` in the folder the user works from. Run `python3 SKILL_DIR/scripts/config.py show` from the user's folder, where `SKILL_DIR` is this skill's folder. The script reads and writes `.claude/kaalm.json` relative to where it runs. Without `python3`, read the file by hand, treat a missing file as empty, and keep to the keys in the "Format" section of the `config.py` docstring.
@@ -18,15 +20,14 @@ This skill holds procedures: what to run, in what order, and what to check. The 
 
    Repeat the choice back. The values to save are `new-to-kubernetes`, `uses-kubernetes`, `runs-clusters`, `try-it`, `run-agents`, and `team-setup`. The user can change either at any time, and a request that shows a different level or goal is a reason to update it.
 3. **Save the choices with `config.py set`.** Before the first write, ask whether to create the file, and say that it holds choices and names, never secrets. In a git repository, offer to append `.claude/kaalm.json` to the file that `git rev-parse --git-path info/exclude` prints. If the user declines, keep the answers for this conversation only.
-4. **Confirm the cluster context** (see [The cluster context](#the-cluster-context)) for any task that reads or changes a cluster.
-5. **Check the Kaalm version** (see [The version check](#the-version-check)).
-6. **Pick the procedure** from [Where to go](#where-to-go).
+4. **Pick the procedure** from [Where to go](#where-to-go).
+5. **Confirm the cluster context** (see [The cluster context](#the-cluster-context)) and **check the Kaalm version** (see [The version check](#the-version-check)) before any step that reads or changes a cluster. If the user has no cluster or no context, do these once the cluster exists: [procedures/try-it-out.md](procedures/try-it-out.md) for a user who wants to try Kaalm, otherwise [procedures/get-a-cluster.md](procedures/get-a-cluster.md), which come back to this step.
 
 ## The cluster context
 
 A kube context names a cluster and a user. Every command below passes the saved context, so no command reaches a cluster the user did not confirm. Never run `kubectl config use-context`.
 
-- **No saved context, or `context.name` is gone from `kubectl config get-contexts -o name`:** list the contexts, ask which one to use, and show the user its name and API server address. After the user confirms, save both with `config.py set context.name` and `config.py set context.server`.
+- **No saved context, or `context.name` is gone from `kubectl config get-contexts -o name`:** list the contexts and ask which one to use. For `new-to-kubernetes`, name the cluster in plain words, such as "the local cluster `kaalm-tutorial` we created", and do not show the API server address. For the other levels, show the name and the address. After the user confirms, save both with `config.py set context.name` and `config.py set context.server`.
 - **A saved context that still exists:** read its API server address and compare it with `context.server`. Ask again only when they differ. A context name can point at another cluster after a kubeconfig change.
 
   ```bash
@@ -49,10 +50,10 @@ The entry whose `chart` starts with `kaalm-` gives `namespace` and `app_version`
 
 ```bash
 kubectl --context CONTEXT get deploy -A -l app.kubernetes.io/name=kaalm,app.kubernetes.io/component=controller \
-  -o jsonpath='{.items[0].metadata.namespace} {.items[0].spec.template.spec.containers[0].image}{"\n"}'
+  -o jsonpath='{range .items[*]}{.metadata.namespace} {.spec.template.spec.containers[0].image}{"\n"}{end}'
 ```
 
-No match means Kaalm is not installed, and [procedures/install-kaalm.md](procedures/install-kaalm.md) installs the version this skill matches.
+No output means Kaalm is not installed, and [procedures/install-kaalm.md](procedures/install-kaalm.md) installs the version this skill matches.
 
 If the installed version differs from the version above, warn the user in plain words: the steps and examples in this skill may not fit their cluster. Name the skill that matches: in Claude Code, `/plugin marketplace add win07xp/kaalm#vX.Y.Z` with the installed version, then install the `kaalm` plugin. For another agent, copy `plugins/kaalm/skills/kaalm` from that tag. Continue only when the user says to.
 

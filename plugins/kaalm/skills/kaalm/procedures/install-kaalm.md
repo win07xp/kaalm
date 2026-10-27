@@ -18,7 +18,7 @@ The skill installs the Kaalm version in the line "This skill matches Kaalm v..."
      --wait
    ```
 
-   Tell the user that the install adds Kaalm's own kinds of object to the cluster (CRDs), two controller Pods, and two gateway Pods, and that `--wait` can take up to five minutes on a first install while certificates are issued.
+   On a first install the server dry run fails with `no matches for kind "AgentClass"`. That is expected: [A cluster that lacks a kind](change-safely.md#a-cluster-that-lacks-a-kind) says what to tell the user. Also tell the user that the install adds Kaalm's own kinds of object to the cluster (CRDs), two controller Pods, and two gateway Pods, and that `--wait` can take up to five minutes on a first install while certificates are issued.
 4. **Verify** with the three checks in [Verifying the install](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/verifying.md), using `--context CONTEXT`:
 
    ```bash
