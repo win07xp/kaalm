@@ -48,3 +48,15 @@ On a first Kaalm install, the dry run of the chart fails with `no matches for ki
 ## When your own settings block the command
 
 If the agent's tool or permission settings block the real command after the dry run passed, do not look for another way around the block. Give the user the exact command to run themselves, in a code block, in their own terminal (in Claude Code, with a leading `!`). Check the result with the calling procedure's check after the user says it ran.
+
+## When the user may not change the object
+
+Check whether the user's account may make the change, with the verb and kind of the change (`create`, `patch`, or `delete`; add `-n NAMESPACE` for a namespaced kind):
+
+```bash
+kubectl --context CONTEXT auth can-i create agentclasses.kaalm.io
+kubectl --context CONTEXT auth can-i patch agentclasses.kaalm.io
+```
+
+This applies to any object the user may not own, and most often to cluster-scoped kinds: AgentClass, ModelProvider, and ToolProvider. If the answer is `no`, write the manifest or patch to a file, and give the user a short request in plain words for their platform team: what object, what change, why, and the file. Wait until the platform team has made the change, and check that it is in place, before you apply workloads that need it. Do not look for another way to make the change.
+

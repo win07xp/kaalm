@@ -41,4 +41,5 @@ Use this to run a long-lived agent: a Pod with its own identity, optional storag
 - Send it a message: [connect-a-channel.md](connect-a-channel.md). An agent has no address outside the cluster until it has a channel.
 - Give it a real model: the echo handler makes no model call. Code that calls one needs a ModelProvider, the class and agent listing it, and a handler that sends requests through the gateway ([How the agent calls a model](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/first-agent.md#4-how-the-agent-calls-a-model)).
 - Tools: [give-tools.md](give-tools.md).
+- Reaching a service outside the cluster, or reading a non-model secret: [Reaching outside the cluster](run-a-task.md#reaching-outside-the-cluster) and [A secret the task reads](run-a-task.md#a-secret-the-task-reads) apply to agents too.
 - Day-to-day behavior (idle, hibernation, wake): [Agent lifecycle day to day](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/lifecycle.md).

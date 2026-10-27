@@ -1,20 +1,22 @@
 # Choose or build the agent's image
 
-Use this when [deploy-an-agent.md](deploy-an-agent.md) or [run-a-task.md](run-a-task.md) needs an image. It ends with an image chosen, and the calling procedure continues.
+Use this when [deploy-an-agent.md](deploy-an-agent.md) or [run-a-task.md](run-a-task.md) needs an image. It ends with an image chosen and the user's agreement, and the calling procedure continues.
 
-An *image* is the packaged program a Pod runs. Kaalm publishes base images that already speak its protocol, and the ways to go from there form a ladder of four rungs: mount-and-run, `FROM` a base image, a starter template, and a custom image. What each rung is, what the user owns on it, and when it fits is in the table [Relationship to the starter templates](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#relationship-to-the-starter-templates). Read that table; this page does not repeat it.
+An *image* is the packaged program a Pod runs. Kaalm publishes base images that already speak its protocol, and the ways to go from there form a ladder of four rungs. What each rung is, what the user owns on it, and when it fits is in the table [Relationship to the starter templates](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#relationship-to-the-starter-templates). Read that table; this page maps the user's answers to a rung and says what each choice needs next.
 
-## 1. Find out what the user wants
+## 1. Choose
 
-Ask only what the request does not answer. Use plain words, and for `new-to-kubernetes` ask one question at a time:
+This step is done when you have told the user the choice and a one-sentence reason, and the user has agreed or chosen another.
+
+Ask only what the request leaves open:
 
 - Do you want to see an agent work first, or run your own code?
-- Is your code one small file, or does it need extra libraries, or does it already exist as a program?
+- Is your code one small file, does it need extra libraries, or does it already exist as a program?
 - Should it stay running and answer messages, or do one job and finish?
-- Can you build a container image here (is Docker installed), and can the cluster get it: a local k3d cluster, or a registry (a place that stores images) the cluster can pull from?
 - Is it already built with a framework such as LangGraph?
+- Can you build a container image here (is Docker installed), and can the cluster get it: a local k3d cluster, or a registry (a place that stores images) the cluster can pull from?
 
-Map the answers to a choice, and give the reason in one sentence:
+The default is the lowest rung that fits, because each higher rung gives the user more to own. Map the answers:
 
 | The user | Choice |
 |---|---|
@@ -22,45 +24,87 @@ Map the answers to a choice, and give the reason in one sentence:
 | Has one small handler and no build tools | Mount-and-run |
 | Needs extra libraries, has a large handler, or wants a Python task | `FROM` a base image |
 | Wants to restructure the program itself, in Go or Python | A starter template |
-| Has an existing agent, another language, or a framework agent with its own server | A custom image |
+| Has an existing agent or program in another language | A custom image |
+| Has an existing framework agent | In this order: Level 1, then Level 2, then a custom image |
 
-For `new-to-kubernetes`, suggest the lowest rung that fits and say why. For the other levels, lay out the rungs that fit and let the user choose. A framework agent has two ways in, described in [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md): the framework's model client pointed at the gateway ([Level 1](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion)), or the framework inside the handler ([Level 2](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-2-full-lifecycle-the-framework-inside-the-handler)).
+For a framework agent, offer these in order, as [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md) describes them:
 
-## 2. What the choice means for the next steps
+1. [Level 1](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion): keep the user's image and point the framework's model client at the gateway.
+2. [Level 2](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-2-full-lifecycle-the-framework-inside-the-handler): put the framework inside the handler on the base image, which is the `FROM` rung.
+3. A custom image, when neither fits.
 
-**The demo.** An Agent uses `ghcr.io/win07xp/kaalm-agent-python`, which echoes each message. An AgentTask uses `ghcr.io/win07xp/kaalm-agent-go` with `KAALM_TASK_AUTOCOMPLETE`, as [agenttask.yaml](../examples/agenttask.yaml) does. Use the tag already in the example, which is the Kaalm version this skill matches. If the installed version differs and the user chose to continue, use the installed version's tag. Base images share the chart's tags.
+If the work is a task, continue at [Tasks](#tasks). Otherwise continue with step 2.
 
-**Class checks.** Read the class before you build anything:
+## 2. Prepare the image for an agent
+
+**The demo.** An Agent uses `ghcr.io/win07xp/kaalm-agent-python`, which echoes each message. Use the tag already in [agent.yaml](../examples/agent.yaml), which is the Kaalm version this skill matches. If the installed version differs and the user chose to continue, use the installed version's tag. Base images share the chart's tags.
+
+**Mount-and-run.** The steps are in [Deploying from a base image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/deploying-from-a-base-image.md). The class must allow it: see the class checks below.
+
+**`FROM` with extra libraries.** Follow the Dockerfile in [The Python image](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-image) (the block with `USER 0` and `USER 65532:65532`). Two lines matter, and each has a reason:
+
+- `USER 0` before `RUN pip install`, and `USER 65532:65532` after it: the image runs as a non-root user, so installing needs root and serving does not.
+- `ENV KAALM_HANDLER_PATH=/opt/kaalm/handler`: without it, the image quietly serves the built-in echo handler instead of the user's code.
+
+The Dockerfile in `examples/starter-python` has no install step. A user who adds `RUN pip install` to it needs the two `USER` lines around that step.
+
+**Class checks.** Read the class before the user builds anything:
 
 ```bash
 kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.image.allowHandlerMounts}{"\n"}{.spec.image.allowedImages}{"\n"}'
 ```
 
-- Mount-and-run needs `spec.image.allowHandlerMounts: true` on the class. Its default is `false`, and an Agent that mounts a handler then goes `Degraded` with `HandlerMountNotAllowed`. See [A starter class for handler mounts](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts).
-- `allowedImages` must admit the image. An empty list admits every image. The `ghcr.io/win07xp/*` pattern in [agentclass.yaml](../examples/agentclass.yaml) admits the base images but not an image the user built.
-- A class can be shared, so changing one is a change to other people's setup: apply it through [change-safely.md](change-safely.md), or give the user their own class.
+- Mount-and-run needs `spec.image.allowHandlerMounts: true`. Its default is `false`, and an Agent that mounts a handler then goes `Degraded` with `HandlerMountNotAllowed`. See [A starter class for handler mounts](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts) for what the grant means. Set it with `kubectl --context CONTEXT patch agentclass CLASS_NAME --type=merge -p '{"spec":{"image":{"allowHandlerMounts":true}}}'`.
+- `allowedImages` must admit the image. An empty list admits every image, so there is nothing to add. The `ghcr.io/win07xp/*` pattern in [agentclass.yaml](../examples/agentclass.yaml) admits the base images but not an image the user built. Append one pattern instead of re-applying the whole class:
 
-**Getting a built image into the cluster.** Building and pushing are not Kubernetes API calls, so there is no dry run: explain, name the machine or registry, and ask for the OK (see [change-safely.md](change-safely.md#changes-with-no-dry-run)).
+  ```bash
+  kubectl --context CONTEXT patch agentclass CLASS_NAME --type=json \
+    -p '[{"op":"add","path":"/spec/image/allowedImages/-","value":"PATTERN"}]'
+  ```
 
-- *Local k3d cluster.* The saved context `k3d-NAME` tells you the cluster is k3d. Build the image with a tag other than `latest`, such as `dev`, so the cluster uses the imported copy, then import it: `k3d image import IMAGE:TAG -c NAME`. Details are in [Testing an image before pointing an Agent at it](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/building-your-own-image.md#testing-an-image-before-pointing-an-agent-at-it), where the example uses the cluster name `kaalm-dev`; use the user's cluster name.
-- *Any other cluster.* Push the image to a registry the cluster can pull from, then use the pushed name. [From source](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/installation.md#from-source) shows a build and push. A private registry also needs the class's `image.imagePullSecrets`.
+Run each patch through [change-safely.md](change-safely.md): the dry run is the same command with `--dry-run=server`, then the OK. A class can be shared, so changing it changes other people's setup. If the user may not change classes, [change-safely.md](change-safely.md#when-the-user-may-not-change-the-object) says what to do.
 
-**Where to start.** Copy nothing from these pages. Point the user to the README, and read it for the steps:
+**An image built for a local k3d cluster.** The saved context `k3d-NAME` tells you the cluster is k3d.
 
-- [starter-python](https://github.com/win07xp/kaalm/tree/main/examples/starter-python): the `FROM` rung. A `handler.py` and a four-line Dockerfile on the Python base image. [README](https://github.com/win07xp/kaalm/blob/main/examples/starter-python/README.md)
-- [starter-go](https://github.com/win07xp/kaalm/tree/main/examples/starter-go): the starter-template rung. A complete Go agent that imports the runtime module. [README](https://github.com/win07xp/kaalm/blob/main/examples/starter-go/README.md)
-- [langgraph-chat](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-chat): a conversational LangGraph agent on the Python base image. [README](https://github.com/win07xp/kaalm/blob/main/examples/langgraph-chat/README.md)
-- [langgraph-tools](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-tools): a LangGraph agent whose tools come through the gateway's tool broker. [README](https://github.com/win07xp/kaalm/blob/main/examples/langgraph-tools/README.md)
-- [langgraph-task](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-task): a LangGraph job as an AgentTask, on the custom-image rung. [README](https://github.com/win07xp/kaalm/blob/main/examples/langgraph-task/README.md)
+1. Name the image with a prefix that is not a real registry, such as `registry.test/agents/APP:TAG`. Names under `.test` can never belong to a real registry, so the image exists only in the cluster. The matching `allowedImages` pattern is `registry.test/agents/*`.
+2. Build and import it. Building and importing are not Kubernetes API calls, so there is no dry run: explain, name the machine, and ask for the OK (see [Changes with no dry run](change-safely.md#changes-with-no-dry-run)).
 
-**Tasks.** `spec.handler` exists only on an Agent, so a handler mount cannot run a task. A task uses one of these:
+   ```bash
+   docker build -t registry.test/agents/APP:TAG .
+   k3d image import registry.test/agents/APP:TAG -c NAME
+   ```
 
-- The demo above, which proves the path and does no work.
-- A Python image built `FROM` the Python base image, whose `handler.py` defines `run_task`. See [Writing a task in Python](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#writing-a-task-in-python).
-- The Go starter template, or a custom image. [langgraph-task](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-task) is the worked example.
+   [Testing an image before pointing an Agent at it](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/building-your-own-image.md#testing-an-image-before-pointing-an-agent-at-it) shows the import with the maintainers' cluster name; use the user's cluster name `NAME`.
+3. Use a new `TAG` for each rebuild (`dev1`, `dev2`). Importing over a tag the Agent already runs does not restart its Pod. Changing the Agent's `image` to the new tag does.
 
-[Task mode](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#task-mode) states the rules.
+**An image for any other cluster.** The user pushes the image to a registry the cluster can pull from, and the Agent uses the pushed name. [From source](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/installation.md#from-source) shows a build and push. For a private registry, the class's `image.imagePullSecrets` lists Secrets that must exist in the workload's namespace. Kaalm looks them up there and copies none across namespaces. A missing one gives the workload `Ready=False` with `ImagePullSecretMissing` ([imagePullSecrets namespace resolution](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#imagepullsecrets-namespace-resolution)). The user creates that Secret from their registry's own instructions, because it holds a password. A cluster whose nodes already have pull rights, such as EKS nodes with an IAM role that reads ECR, needs none.
+
+**Starting from an example.** Name the example you start from to the user, and point to its README for the steps:
+
+- [starter-python](https://github.com/win07xp/kaalm/tree/main/examples/starter-python) ([README](https://github.com/win07xp/kaalm/blob/main/examples/starter-python/README.md)): the `FROM` rung, a `handler.py` and a short Dockerfile on the Python base image.
+- [starter-go](https://github.com/win07xp/kaalm/tree/main/examples/starter-go) ([README](https://github.com/win07xp/kaalm/blob/main/examples/starter-go/README.md)): the starter-template rung, a complete Go agent that imports the runtime module.
+- [langgraph-chat](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-chat) ([README](https://github.com/win07xp/kaalm/blob/main/examples/langgraph-chat/README.md)): a conversational LangGraph agent on the Python base image.
+- [langgraph-tools](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-tools) ([README](https://github.com/win07xp/kaalm/blob/main/examples/langgraph-tools/README.md)): a LangGraph agent whose tools come through the gateway's tool broker.
+- [langgraph-task](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-task) ([README](https://github.com/win07xp/kaalm/blob/main/examples/langgraph-task/README.md)): a LangGraph job as an AgentTask, on the custom-image rung.
+
+A user without a checkout of the repository gets an example with a shallow clone at the installed Kaalm version's tag, into a scratch folder outside the user's project:
+
+```bash
+git clone --depth 1 --branch vX.Y.Z https://github.com/win07xp/kaalm SCRATCH_DIR/kaalm
+```
+
+Replace `X.Y.Z` with the installed version, then copy `examples/NAME` into the user's folder. A clone downloads files to the user's machine, so ask for the OK first.
+
+## Tasks
+
+`spec.handler` exists only on an Agent, so mount-and-run cannot run a task ([Task mode](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#task-mode) states why). A task uses one of these:
+
+- The demo: `ghcr.io/win07xp/kaalm-agent-go` with `KAALM_TASK_AUTOCOMPLETE`, as [agenttask.yaml](../examples/agenttask.yaml) does. It proves the path and does no work.
+- A Python image built `FROM` the Python base image, whose `handler.py` defines `run_task` ([Writing a task in Python](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#writing-a-task-in-python)). Follow the `FROM` notes in step 2.
+- The Go starter template, or a custom image. [langgraph-task](https://github.com/win07xp/kaalm/tree/main/examples/langgraph-task) is the worked example of a custom image.
+
+The class and image-delivery notes in step 2 apply to a task's image too (the `allowedImages` check and getting a built image into the cluster). Everything else about tasks (completion modes, results, secrets, outside access, schedules) is in [run-a-task.md](run-a-task.md).
 
 ## 3. Hand back
 
-Tell the user which image you chose and why, in one sentence. Return to the calling procedure with the image name and tag, and with the handler ConfigMap if the choice was mount-and-run ([Deploying from a base image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/deploying-from-a-base-image.md) has the steps).
+Return to the calling procedure with the image name and tag, and with the handler ConfigMap if the choice was mount-and-run.

@@ -9,7 +9,7 @@ This skill matches Kaalm v2.0.1.
 
 This skill holds procedures: what to run, in what order, and what to check. The facts live in Kaalm's books, which each procedure links. Read the linked page when a step fails or the user asks for more than the procedure covers.
 
-**Read a linked page as raw Markdown.** A fetch tool that is handed a GitHub page address often returns a summary without the exact commands. Fetch the raw text instead: replace `https://github.com/win07xp/kaalm/blob/` with `https://raw.githubusercontent.com/win07xp/kaalm/` and keep the ref after it (`main` or a version tag). Take commands and values from that text word for word, with two changes. Book commands do not pass a context, so add `--context CONTEXT` to every `kubectl` command and `--kube-context CONTEXT` to every `helm` command you take from a page. And a `#anchor` means nothing in raw Markdown, so find the section by its heading text.
+**Read a linked page as raw Markdown.** A fetch tool that is handed a GitHub page address often returns a summary without the exact commands. Fetch the raw text with `curl -fsSL URL` (or `gh api`), because a fetch tool can summarize even a raw page. Build the URL by replacing `https://github.com/win07xp/kaalm/blob/` with `https://raw.githubusercontent.com/win07xp/kaalm/`, and replace the ref (`main` or the skill's tag) with `v` and the installed Kaalm version, since the cluster runs that version. Before Kaalm is installed, keep the ref in the link. Take commands and values from that text word for word, with two changes. Book commands do not pass a context, so add `--context CONTEXT` to every `kubectl` command and `--kube-context CONTEXT` to every `helm` command you take from a page. And a `#anchor` means nothing in raw Markdown, so find the section by its heading text.
 
 ## Start every task
 
@@ -76,9 +76,9 @@ Use short sentences and plain words with every user. After a command, say what i
 
 These rules hold at every experience level.
 
-- **Dry run, explain, ask, apply.** Every change to a cluster gets a server-side dry run, then one or two sentences on what it does, then the user's OK, then the real command. [procedures/change-safely.md](procedures/change-safely.md) has the commands. The key command that the user runs has no dry run from you, because only the user can type the key. The checks after it replace the dry run.
+- **Dry run, explain, ask, apply.** Every change to a cluster gets a server-side dry run, then one or two sentences on what it does, then the user's OK, then the real command. [procedures/change-safely.md](procedures/change-safely.md) has the commands. The secret command that the user runs has no dry run from you, because only the user can type the value. The checks after it replace the dry run.
 - **Scripts that create resources only write files.** Write the manifest or script for the user to review. Apply a manifest only through the steps above.
-- **Never read or print a Secret value or an API key.** Do not run `kubectl get secret -o yaml`, `-o json`, or a `jsonpath` on `data`. Do not ask the user to paste a key into the chat. The user runs the command that handles a key, as [procedures/add-a-model-key.md](procedures/add-a-model-key.md) shows. To see which keys a Secret holds, run `kubectl --context CONTEXT describe secret NAME`: it lists key names and sizes, never values. If a command output holds a key anyway, do not repeat it, and tell the user.
+- **Never read or print a Secret value or an API key.** Do not run `kubectl get secret -o yaml`, `-o json`, or a `jsonpath` on `data`. Do not ask the user to paste a key into the chat. The user runs the command that handles a key, as [procedures/add-a-secret.md](procedures/add-a-secret.md) shows. To see which keys a Secret holds, run `kubectl --context CONTEXT describe secret NAME`: it lists key names and sizes, never values. If a command output holds a key anyway, do not repeat it, and tell the user.
 - **Pass the saved context on every command:** `kubectl --context CONTEXT` and `helm --kube-context CONTEXT`.
 - **Name the context in every proposed change.** Start the summary with the context, for example "On context `k3d-kaalm-tutorial`, this creates...".
 - **Create no cloud accounts and no paid resources.** For a managed cluster or a model provider account, give the steps and let the user do them.
@@ -94,6 +94,7 @@ Start with the row that matches the request. If the request names no task, use t
 | Get a Kubernetes cluster | [procedures/get-a-cluster.md](procedures/get-a-cluster.md) |
 | Install Kaalm | [procedures/install-kaalm.md](procedures/install-kaalm.md) |
 | Give agents a model, with an API key | [procedures/add-a-model-key.md](procedures/add-a-model-key.md) |
+| Give an agent or task a secret value, such as an API token | [procedures/add-a-secret.md](procedures/add-a-secret.md) |
 | Choose or build the agent's image | [procedures/choose-an-image.md](procedures/choose-an-image.md) |
 | Run a long-lived agent | [procedures/deploy-an-agent.md](procedures/deploy-an-agent.md) |
 | Run a job that finishes | [procedures/run-a-task.md](procedures/run-a-task.md) |

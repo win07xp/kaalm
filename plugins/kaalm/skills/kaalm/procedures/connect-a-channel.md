@@ -15,7 +15,7 @@ Use this to send messages to a running Agent from outside the cluster. An *Agent
      kubectl --context CONTEXT -n NAMESPACE create -f -
    ```
 
-   The command prints only `secret/SECRET_NAME created`. If the user wants to choose the token instead, use the hidden-prompt command in [add-a-model-key.md](add-a-model-key.md) with the label `kaalm.io/channel-credential` and no host annotation.
+   The command prints only `secret/SECRET_NAME created`. If the user wants to choose the token instead, use the command in [add-a-secret.md](add-a-secret.md) with the "Channel token" column.
 3. **Create the channel.** Copy [agentchannel.yaml](../examples/agentchannel.yaml). Set the name, `agentRef.name`, the Secret name, and `path`. The path must start with `/channels/NAMESPACE/`, and no two channels in a namespace may share one. Apply it with [change-safely.md](change-safely.md), adding `-n NAMESPACE`.
 4. **Check it:**
 
