@@ -49,4 +49,4 @@ An agent needs a key only when it calls a language model. The first agent in [tr
 kubectl --context CONTEXT get modelproviders
 ```
 
-A *ModelProvider* is Kaalm's record of a model service, its prices, and who may use it. If the goal needs a model and `Ready` is not `True`, or the list is empty, use [add-a-model-key.md](add-a-model-key.md). The user needs an account with a model provider and a key from it. Do not create the account.
+A *ModelProvider* is Kaalm's record of a model service, its prices, and who may use it. If the goal needs a model and `Ready` is not `True`, or the list is empty, use [add-a-model-key.md](add-a-model-key.md), after the agent's namespace exists ([deploy-an-agent.md](deploy-an-agent.md) step 1). The user needs an account with a model provider and a key from it. Do not create the account.

@@ -9,7 +9,7 @@ This skill matches Kaalm v2.0.1.
 
 This skill holds procedures: what to run, in what order, and what to check. The facts live in Kaalm's books, which each procedure links. Read the linked page when a step fails or the user asks for more than the procedure covers.
 
-**Read a linked page as raw Markdown.** A fetch tool that is handed a GitHub page address often returns a summary without the exact commands. Fetch the raw text instead: replace `https://github.com/win07xp/kaalm/blob/` with `https://raw.githubusercontent.com/win07xp/kaalm/` and keep the ref after it (`main` or a version tag). Take commands and values from that text word for word.
+**Read a linked page as raw Markdown.** A fetch tool that is handed a GitHub page address often returns a summary without the exact commands. Fetch the raw text instead: replace `https://github.com/win07xp/kaalm/blob/` with `https://raw.githubusercontent.com/win07xp/kaalm/` and keep the ref after it (`main` or a version tag). Take commands and values from that text word for word, with two changes. Book commands do not pass a context, so add `--context CONTEXT` to every `kubectl` command and `--kube-context CONTEXT` to every `helm` command you take from a page. And a `#anchor` means nothing in raw Markdown, so find the section by its heading text.
 
 ## Start every task
 
@@ -55,7 +55,9 @@ kubectl --context CONTEXT get deploy -A -l app.kubernetes.io/name=kaalm,app.kube
 
 No output means Kaalm is not installed, and [procedures/install-kaalm.md](procedures/install-kaalm.md) installs the version this skill matches.
 
-If the installed version differs from the version above, warn the user in plain words: the steps and examples in this skill may not fit their cluster. Name the skill that matches: in Claude Code, `/plugin marketplace add win07xp/kaalm#vX.Y.Z` with the installed version, then install the `kaalm` plugin. For another agent, copy `plugins/kaalm/skills/kaalm` from that tag. Continue only when the user says to.
+When Kaalm is installed, save what you found: `config.py set install.namespace` with the namespace, and `config.py set install.chartVersion` with the version (the `chart` value without `kaalm-`, or the image tag). The same consent as the config file applies.
+
+Compare versions without the leading `v`: Helm's `app_version` is `2.0.1`, and the line above says `v2.0.1`. If the installed version differs from the version above, warn the user in plain words: the steps and examples in this skill may not fit their cluster. Name the skill that matches: in Claude Code, `/plugin marketplace add win07xp/kaalm#vX.Y.Z` with the installed version, then install the `kaalm` plugin. For another agent, copy `plugins/kaalm/skills/kaalm` from that tag. Continue only when the user says to.
 
 ## How experience changes what you do
 
@@ -76,14 +78,14 @@ These rules hold at every experience level.
 
 - **Dry run, explain, ask, apply.** Every change to a cluster gets a server-side dry run, then one or two sentences on what it does, then the user's OK, then the real command. [procedures/change-safely.md](procedures/change-safely.md) has the commands. The key command that the user runs has no dry run from you, because only the user can type the key. The checks after it replace the dry run.
 - **Scripts that create resources only write files.** Write the manifest or script for the user to review. Apply a manifest only through the steps above.
-- **Never read or print a Secret value or an API key.** Do not run `kubectl get secret -o yaml`, `-o json`, or a `jsonpath` on `data`. Do not ask the user to paste a key into the chat. The user runs the command that handles a key, as [procedures/add-a-model-key.md](procedures/add-a-model-key.md) shows. If a command output holds a key anyway, do not repeat it, and tell the user.
+- **Never read or print a Secret value or an API key.** Do not run `kubectl get secret -o yaml`, `-o json`, or a `jsonpath` on `data`. Do not ask the user to paste a key into the chat. The user runs the command that handles a key, as [procedures/add-a-model-key.md](procedures/add-a-model-key.md) shows. To see which keys a Secret holds, run `kubectl --context CONTEXT describe secret NAME`: it lists key names and sizes, never values. If a command output holds a key anyway, do not repeat it, and tell the user.
 - **Pass the saved context on every command:** `kubectl --context CONTEXT` and `helm --kube-context CONTEXT`.
 - **Name the context in every proposed change.** Start the summary with the context, for example "On context `k3d-kaalm-tutorial`, this creates...".
 - **Create no cloud accounts and no paid resources.** For a managed cluster or a model provider account, give the steps and let the user do them.
 
 ## Where to go
 
-Start with the row that matches the request. If the request names no task, use the user's goal: `try-it` starts at the first row, `run-agents` at the dependency check and then the Agent or task rows, and `team-setup` at the team row.
+Start with the row that matches the request. If the request names no task, use the user's goal: `try-it` starts at the first row, `run-agents` at the dependency check, then the agent's namespace, then (when the agent needs a model) the key row, then the Agent or task rows, in that order, because a provider's `allowedNamespaces` needs the namespace, and `team-setup` at the team row.
 
 | The user wants to | Read |
 |---|---|

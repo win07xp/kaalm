@@ -16,12 +16,26 @@ A *server-side dry run* sends the change to the cluster's API server, which chec
    | Delete | `kubectl --context CONTEXT delete --dry-run=server ...` |
    | Install or upgrade with Helm | The same `helm --kube-context CONTEXT install` or `upgrade` command with `--dry-run=server` added |
 
+   A dry run does not check references to other objects. An Agent whose class or provider does not exist yet still passes, so check with `kubectl get` that the objects a manifest names exist.
+
    Pass `-n NAMESPACE` for any file that holds a namespaced object. For the cluster-scoped kinds (AgentClass, ModelProvider, and ToolProvider) kubectl ignores it, so a file that holds both kinds takes it too. If Helm rejects `--dry-run=server`, use `--dry-run`, which renders the chart without contacting the cluster, and say so.
+   Read the answer. `created` means a new object. `configured` means an object with that name already exists, and the real command would change it. Tell the user so (see [Names that already exist](#names-that-already-exist)).
 3. **Fix a rejection.** Read the error, correct the file, and run the dry run again. An error that names a field or a rule means the manifest is wrong, not the cluster.
 4. **Explain the change.** Start with the context. Use one or two sentences on what will exist or change afterward, in the style the user's experience level calls for.
 5. **Ask for the OK.** Wait for a clear yes.
 6. **Apply** with the same command and without the dry-run flag.
 7. **Check the result** with the command the calling procedure names. Report it in one sentence.
+
+## Names that already exist
+
+Some names are shared: ModelProvider, ToolProvider, and AgentClass are cluster-scoped, and a Secret in Kaalm's namespace serves every team. The examples use fixed names (`anthropic-shared`, `my-agents`, `anthropic-api-key`). Before you write a manifest or a Secret command for one, list what exists. These commands show names only:
+
+```bash
+kubectl --context CONTEXT get modelproviders,toolproviders,agentclasses
+kubectl --context CONTEXT -n KAALM_NAMESPACE get secret SECRET_NAME
+```
+
+If the name exists, reuse that object, or pick another name. Applying a manifest over an existing ModelProvider or AgentClass overwrites the fields it sets, such as another team's `allowedNamespaces` and budget.
 
 ## Changes with no dry run
 
@@ -30,3 +44,7 @@ A change that is not a Kubernetes API call has no dry run: creating a k3d cluste
 ## A cluster that lacks a kind
 
 On a first Kaalm install, the dry run of the chart fails with `no matches for kind "AgentClass"`. The chart ships Kaalm's CRDs, and Helm adds them during the real install, so the cluster cannot check Kaalm's own kinds beforehand. A CRD teaches the cluster a new kind of object. This failure is expected. Tell the user in a sentence or two: the practice run stops because the install itself adds Kaalm's object types, and nothing is wrong. Then ask for the OK to run the real install.
+
+## When your own settings block the command
+
+If the agent's tool or permission settings block the real command after the dry run passed, do not look for another way around the block. Give the user the exact command to run themselves, in a code block, in their own terminal (in Claude Code, with a leading `!`). Check the result with the calling procedure's check after the user says it ran.
