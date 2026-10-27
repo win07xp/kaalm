@@ -14,8 +14,8 @@ Use this to run a long-lived agent: a Pod with its own identity, optional storag
 
      If no class fits, copy [agentclass.yaml](../examples/agentclass.yaml) (one person) or use [team-setup.md](team-setup.md). Check that the class name is free first, as [Names that already exist](change-safely.md#names-that-already-exist) says.
    - The ModelProvider, if the agent should call a model: `kubectl --context CONTEXT get modelproviders`. Its `allowedNamespaces` must admit the namespace. With none yet, use [add-a-model-key.md](add-a-model-key.md) now that the namespace exists, then come back here. Or deploy without one.
-2. **Pick the image.** Start with the published base image `ghcr.io/win07xp/kaalm-agent-python`, at the tag already in [agent.yaml](../examples/agent.yaml), which is the Kaalm version this skill matches. If the installed version differs and the user chose to continue, use the installed version's tag. It answers every message by echoing it, which proves the agent runs and can be reached. To add the agent's own behavior, use [Deploying from a base image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/deploying-from-a-base-image.md) (the class must allow handler mounts) or [Building your own agent image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/building-your-own-image.md). A class with `allowedImages` must match the image.
-3. **Write the Agent.** Copy [agent.yaml](../examples/agent.yaml). Set the name, `agentClassRef`, and `providers`. Delete the `providers` block when there is no ModelProvider.
+2. **Pick the image** with [choose-an-image.md](choose-an-image.md), then come back. For a first agent it picks the published Python base image, which echoes each message and proves the agent runs and can be reached.
+3. **Write the Agent.** Copy [agent.yaml](../examples/agent.yaml). Set the name, `agentClassRef`, the image, and `providers`. Delete the `providers` block when there is no ModelProvider.
 4. **Apply it** with [change-safely.md](change-safely.md), adding `-n NAMESPACE`.
 5. **Watch it come up.** Run this every few seconds instead of `-w`, which never returns:
 

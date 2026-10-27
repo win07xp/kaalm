@@ -94,6 +94,7 @@ Start with the row that matches the request. If the request names no task, use t
 | Get a Kubernetes cluster | [procedures/get-a-cluster.md](procedures/get-a-cluster.md) |
 | Install Kaalm | [procedures/install-kaalm.md](procedures/install-kaalm.md) |
 | Give agents a model, with an API key | [procedures/add-a-model-key.md](procedures/add-a-model-key.md) |
+| Choose or build the agent's image | [procedures/choose-an-image.md](procedures/choose-an-image.md) |
 | Run a long-lived agent | [procedures/deploy-an-agent.md](procedures/deploy-an-agent.md) |
 | Run a job that finishes | [procedures/run-a-task.md](procedures/run-a-task.md) |
 | Send messages to an agent from outside | [procedures/connect-a-channel.md](procedures/connect-a-channel.md) |
