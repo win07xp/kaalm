@@ -239,6 +239,34 @@ func TestChannel_ServiceDisabled(t *testing.T) {
 	expectChannelReady(t, "ch-svc", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentServiceDisabled)
 }
 
+// A change to the bound Agent's service.enabled reaches the channel through
+// the Agent watch, well inside the one-minute requeue: the channel turns
+// AgentServiceDisabled when the service goes off and Ready again when it
+// comes back.
+func TestChannel_AgentServiceToggleWakesChannel(t *testing.T) {
+	mkWorkloadClass(t, "chc-svc-toggle", nil)
+	mkWorkloadAgent(t, "ch-agent-svc-toggle", "chc-svc-toggle", nil)
+	mkChannelSecret(t, "ch-svc-toggle-secret")
+	mkChannel(t, "ch-svc-toggle", "ch-agent-svc-toggle", "/channels/default/ch-svc-toggle", nil)
+	expectChannelReady(t, "ch-svc-toggle", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	setService := func(enabled bool) {
+		eventually(t, func() error {
+			var ag kaalmv1beta1.Agent
+			if err := testAPIReader.Get(ctxT(),
+				types.NamespacedName{Namespace: "default", Name: "ch-agent-svc-toggle"}, &ag); err != nil {
+				return err
+			}
+			ag.Spec.Service = &kaalmv1beta1.AgentService{Enabled: enabled}
+			return testClient.Update(ctxT(), &ag)
+		})
+	}
+	setService(false)
+	expectChannelReady(t, "ch-svc-toggle", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentServiceDisabled)
+	setService(true)
+	expectChannelReady(t, "ch-svc-toggle", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+}
+
 func TestChannel_InvalidPathPrefix(t *testing.T) {
 	mkWorkloadClass(t, "chc-path", nil)
 	mkWorkloadAgent(t, "ch-agent-path", "chc-path", nil)
