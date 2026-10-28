@@ -141,7 +141,7 @@ func agentWithGateway(name string, phase kaalmv1beta1.AgentPhase, conds []metav1
 func TestAgentsWaitingOnGateway(t *testing.T) {
 	down := gatewayReachableCond(metav1.ConditionFalse, time.Now())
 	up := gatewayReachableCond(metav1.ConditionTrue, time.Now())
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(
 		agentWithGateway("running-down", kaalmv1beta1.AgentRunning, down),
 		agentWithGateway("idle-down", kaalmv1beta1.AgentIdle, down),
 		agentWithGateway("running-up", kaalmv1beta1.AgentRunning, up),
@@ -259,7 +259,7 @@ func TestAgentsWaitingOnGateway_SkipsAgentsWithoutActivityStep(t *testing.T) {
 		Type: kaalmv1beta1.ConditionIdleDetection, Status: metav1.ConditionFalse,
 		Reason: kaalmv1beta1.ReasonIdleDetectionDisabled,
 	})
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(
 		agentWithGateway("running-down", kaalmv1beta1.AgentRunning, down),
 		agentWithGateway("idle-off", kaalmv1beta1.AgentRunning, idleOff),
 	).Build()

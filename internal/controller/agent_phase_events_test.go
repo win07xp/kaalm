@@ -38,7 +38,7 @@ import (
 // after the status write that persists it.
 func TestSetPhase_EmitsPhaseChangedOnTransitionOnly(t *testing.T) {
 	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sp", Namespace: "default"}}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).WithStatusSubresource(ag).Build()
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(ag).WithStatusSubresource(ag).Build()
 	rec := events.NewFakeRecorder(8)
 	r := &AgentReconciler{Client: c, Recorder: rec}
 	write := func() {
@@ -90,7 +90,7 @@ func TestSetPhase_EmitsPhaseChangedOnTransitionOnly(t *testing.T) {
 func TestWriteStatus_FailedWriteDropsHeldEvents(t *testing.T) {
 	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sp-conflict", Namespace: "default"},
 		Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentRunning}}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).WithStatusSubresource(ag).Build()
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(ag).WithStatusSubresource(ag).Build()
 	rec := events.NewFakeRecorder(8)
 	r := &AgentReconciler{Client: c, Recorder: rec}
 
@@ -216,7 +216,7 @@ func TestAgent_StateEventsFollowTheStatusWrite(t *testing.T) {
 			ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "ev-agent", Namespace: "default"},
 				Status: kaalmv1beta1.AgentStatus{Phase: tc.phase}}
 			conflicts := &statusConflicts{}
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(ag).
 				WithStatusSubresource(ag).WithInterceptorFuncs(conflicts.funcs()).Build()
 			rec := events.NewFakeRecorder(16)
 			r := &AgentReconciler{Client: c, Recorder: rec}

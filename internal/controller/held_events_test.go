@@ -191,7 +191,7 @@ func (a *actionRecorder) Eventf(_, related runtime.Object, _, reason, action, _ 
 func TestSetPhase_ActionIsTheNewPhase(t *testing.T) {
 	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "act", Namespace: "default"},
 		Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentRunning}}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).WithStatusSubresource(ag).Build()
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(ag).WithStatusSubresource(ag).Build()
 	rec := &actionRecorder{}
 	r := &AgentReconciler{Client: c, Recorder: rec}
 	for _, phase := range []kaalmv1beta1.AgentPhase{kaalmv1beta1.AgentIdle, kaalmv1beta1.AgentHibernating} {

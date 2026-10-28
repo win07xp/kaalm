@@ -788,7 +788,7 @@ func TestHandleTTL_SpecWithinRecordedBounds(t *testing.T) {
 	byDefault := settled("by-default", nil, recordedDefault)
 	raised := settled("raised", i32(3600), recordedDefault)
 	clamped := settled("clamped", i32(3600), recordedMax)
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithObjects(class, kept, ownSpec, byDefault, raised, clamped).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
 	r := &AgentTaskReconciler{Client: c}
@@ -841,7 +841,7 @@ func TestDriveProvisioning_RepairsLostSnapshotOnly(t *testing.T) {
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 				Name: "p-" + tc.name, Namespace: "default", CreationTimestamp: metav1.Now(),
 			}}
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, pod).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task, pod).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
 			r := &AgentTaskReconciler{Client: c}
 			if _, err := r.driveProvisioning(ctx, task, class, eff, pod); err != nil {
@@ -1492,7 +1492,7 @@ func TestAgentTask_EventsFollowTheStatusWrite(t *testing.T) {
 				Status: kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.TaskRunning},
 			}
 			conflicts := &statusConflicts{}
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task).
 				WithStatusSubresource(task).WithInterceptorFuncs(conflicts.funcs()).Build()
 			rec := events.NewFakeRecorder(16)
 			r := &AgentTaskReconciler{Client: c, Recorder: rec}

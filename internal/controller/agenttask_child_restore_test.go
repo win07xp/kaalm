@@ -93,7 +93,7 @@ func restorePod(t *testing.T, task *kaalmv1beta1.AgentTask, phase corev1.PodPhas
 // restoreReconciler is a task reconciler on a fake client holding objs.
 func restoreReconciler(t *testing.T, objs ...client.Object) (*AgentTaskReconciler, client.Client) {
 	t.Helper()
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
 	return &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(16)}, c
 }
@@ -354,7 +354,7 @@ func TestEnsureTaskChildren_ReadsBeforeCreating(t *testing.T) {
 	task := restoreTask("reads-first", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
 	task.Spec.Completion.Condition = ""
 	var creates int
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(agentReportedChildren(t, task)...).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(agentReportedChildren(t, task)...).
 		WithInterceptorFuncs(countingCreates(&creates, nil)).Build()
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system"}
 	if err := r.ensureTaskChildren(context.Background(), task, &kaalmv1beta1.AgentClass{}, effectiveTaskSpec{}); err != nil {
@@ -804,7 +804,7 @@ func TestDriveRunning_RestoresMissingChildrenOnly(t *testing.T) {
 				}
 			}
 			var writes, ugets int
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
 			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8)}
@@ -839,7 +839,7 @@ func TestTaskReconcile_ConflictDoesNotStopOtherChildren(t *testing.T) {
 	pod := restorePod(t, task, corev1.PodRunning, true)
 	foreign := desiredTaskCertificate(task, CertLifetime{})
 	rec := events.NewFakeRecorder(8)
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, class, pod, foreign).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task, class, pod, foreign).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
@@ -884,7 +884,7 @@ func TestDriveProvisioning_TailRestoresWithoutFQDNRead(t *testing.T) {
 	class := &kaalmv1beta1.AgentClass{}
 	class.Spec.Network.Egress.AllowedHosts = []string{"a.example.com"}
 	var writes, ugets int
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, pod).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task, pod).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system",
@@ -964,7 +964,7 @@ func TestDriveRunning_RevertsDriftedChildrenOnly(t *testing.T) {
 				objs = append(objs, obj)
 			}
 			var writes, ugets int
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
 			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8)}
@@ -1029,7 +1029,7 @@ func TestEnsureTaskChildren_ConvergesToCurrentClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	var writes, ugets int
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(old).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(old).
 		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system"}
 	if err := r.ensureTaskChildren(context.Background(), task, classB, effectiveTaskSpec{}); err != nil {
@@ -1132,7 +1132,7 @@ func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
 		objs = append(objs, obj)
 	}
 	var writes, ugets int
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(8),

@@ -294,7 +294,7 @@ func budgetReconciler(t *testing.T, names, refs []string) (*AgentReconciler, *ka
 		agent.Spec.Providers = append(agent.Spec.Providers,
 			kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: r}})
 	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).Build()
 	return &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}, agent
 }
 

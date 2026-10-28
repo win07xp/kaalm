@@ -63,7 +63,7 @@ func TestDriveProvisioning_WaitingRecheckSkipsUnchangedStatus(t *testing.T) {
 			task.Status.StartTime = nil
 			pod, objs := tc.setup(t, task)
 			writes := &statusWrites{}
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(append(objs, task)...).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(append(objs, task)...).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(writes.funcs()).Build()
 			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: events.NewFakeRecorder(16)}
@@ -126,7 +126,7 @@ func TestAgentTask_HeldRecheckSkipsUnchangedStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			task := restoreTask("held-write", kaalmv1beta1.TaskRunning, true, "PodReady")
 			writes := &statusWrites{}
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
+			c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task).
 				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 				WithInterceptorFuncs(writes.funcs()).Build()
 			rec := events.NewFakeRecorder(16)
@@ -159,7 +159,7 @@ func TestAgentTask_HeldRecheckSkipsUnchangedStatus(t *testing.T) {
 // reason.
 func TestMarkTaskNotReady_StaleCopySkipsDuplicateEvent(t *testing.T) {
 	task := restoreTask("stale-held", kaalmv1beta1.TaskRunning, false, kaalmv1beta1.ReasonSecretNotOptedIn)
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
 	rec := events.NewFakeRecorder(16)
 	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}

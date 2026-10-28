@@ -808,7 +808,7 @@ func TestHandleWake_CountsByTriggerAndClearsBoth(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: strings.ToLower(name), Namespace: "wake-metric", Annotations: ann},
 			Status:     kaalmv1beta1.AgentStatus{Phase: tc.phase},
 		}
-		c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).
 			WithObjects(ag).WithStatusSubresource(ag).Build()
 		r := &AgentReconciler{Client: c, Recorder: events.NewFakeRecorder(8)}
 		before := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.want))

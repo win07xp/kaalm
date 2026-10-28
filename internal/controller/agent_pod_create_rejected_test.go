@@ -44,7 +44,7 @@ import (
 func TestAgent_PodCreateRejectedKeepsResuming(t *testing.T) {
 	rejection := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "woken-",
 		errors.New(`pod rejected: RuntimeClass "absent" not found`))
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithInterceptorFuncs(interceptor.Funcs{
 		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 			return rejection
 		},
@@ -77,7 +77,7 @@ func TestAgent_PodCreateRejectedKeepsResuming(t *testing.T) {
 // Warning carries the same text.
 func TestAgent_PodCreateRejectedCutsLongDenial(t *testing.T) {
 	rejection := longDenial("pods", "woken-")
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithInterceptorFuncs(interceptor.Funcs{
 		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 			return rejection
 		},

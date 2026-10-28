@@ -182,7 +182,7 @@ func retryRejecter(t *testing.T, on *bool, objs ...client.Object) client.Client 
 	forbidden := func(resource, name string) error {
 		return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, errors.New("denied by webhook"))
 	}
-	return fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+	return withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(objs...).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
