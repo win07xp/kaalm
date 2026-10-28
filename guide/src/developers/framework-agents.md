@@ -58,20 +58,21 @@ change in the client code.
    http_client = httpx.Client(verify="/var/run/ca/ca.crt", auth=GatewayToken())
    ```
 
-   The Anthropic SDK uses the `httpx2` package, not `httpx`. For it, import
-   `httpx2` and use `httpx2.Auth` and `httpx2.Client` (or
+   Anthropic SDK 2.0 and later uses the `httpx2` package, not `httpx`. For
+   it, import `httpx2` and use `httpx2.Auth` and `httpx2.Client` (or
    `httpx2.AsyncClient`) with the same class body. Passing an `httpx.Client`
-   to it raises a `TypeError` when you construct the SDK client.
+   to it raises a `TypeError` when you construct the SDK client. Earlier
+   versions take the `httpx` client shown.
 
    Set any placeholder as the client's `api_key`, for both SDKs: they fail
    without a credential, and the hook sets the header the gateway reads.
    Step 3 says the gateway strips the client's own key before forwarding.
 
    For an async client, use `httpx.AsyncClient` with the same class, for
-   `AsyncOpenAI` and `AsyncAnthropic` (with `httpx2.AsyncClient` for the
-   Anthropic SDK). A framework client that takes both `http_client` and
-   `http_async_client`, such as LangChain's `ChatOpenAI`, needs the hook on
-   both, for the reason given under
+   `AsyncOpenAI` and `AsyncAnthropic` (with `httpx2.AsyncClient` for
+   Anthropic SDK 2.0 and later). A framework client that takes both
+   `http_client` and `http_async_client`, such as LangChain's `ChatOpenAI`,
+   needs the hook on both, for the reason given under
    [Level 2](#level-2-full-lifecycle-the-framework-inside-the-handler).
    In another language, build the client so it reads the file for each
    request's credential, or rebuild the client when the file changes.
