@@ -66,7 +66,7 @@ The runtime exposes one importable module, `kaalm`, as the handler's interface t
 
 The client factories matter because a client hand-built from the certificate files snapshots its SSL context at construction, and would keep presenting a stale certificate past its expiry while the probes stay green. The factories' transports rebuild on the rotation watch. For both packages, extra keyword arguments pass through to the chosen package's client constructor; `transport`, `verify`, and `cert` are set by the factory and rejected as arguments; and proxy environment variables are ignored unless re-enabled, because a proxy would route around the identity-bearing transport.
 
-The second package exists because the Anthropic SDK 2.0 and later accepts only httpx2 clients and raises `TypeError` for an httpx client, while the OpenAI SDK accepts either. [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md) shows which to pass to which SDK.
+The second package exists because the Anthropic SDK 2.0 and later accepts only httpx2 clients and raises `TypeError` for an httpx client, while the OpenAI SDK accepts the default httpx client. [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-2-full-lifecycle-the-framework-inside-the-handler) shows which to pass to which SDK.
 
 This surface is append-only within a minor release series: a handler written against one `X.Y` tag runs unchanged on every `X.Y.z`.
 

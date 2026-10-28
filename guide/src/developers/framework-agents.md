@@ -119,9 +119,9 @@ runtime executes sync handlers on a thread without an event loop.
 
 The Anthropic SDK 2.0 and later accepts only httpx2 clients and raises a
 `TypeError` at client construction when given an httpx client. Pass
-`package="httpx2"` to either factory to mint httpx2 clients. The OpenAI SDK
-and LangChain's `ChatOpenAI` accept either package, so the example above
-needs no change. The Anthropic endpoint has no `/v1`:
+`package="httpx2"` to either factory to mint httpx2 clients. The OpenAI SDK,
+and so LangChain's `ChatOpenAI`, accepts the default httpx client, so the
+example above needs no change. The Anthropic endpoint has no `/v1`:
 
 ```python
 client = anthropic.AsyncAnthropic(
