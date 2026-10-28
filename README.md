@@ -71,6 +71,26 @@ Three books, each with a different job. Build them with `make books`.
 | [`guide/`](guide/src/introduction.md) | Using it. Installing for real, offering classes to teams, providers, budgets, the console and dashboards, troubleshooting. |
 | [`docs/`](docs/src/introduction.md) | Changing it. The specification: architecture, the six resources, the runtime contract. |
 
+## Agent skill
+
+The `kaalm` skill teaches a coding agent how to use Kaalm. It checks what your
+setup is missing, gets you a cluster, installs Kaalm, adds a model key without
+the agent seeing it, deploys agents and tasks, and explains why a resource is
+not Ready. It adapts to how much Kubernetes you know and asks before every
+change.
+
+In Claude Code, add the marketplace at the tag that matches the Kaalm release
+you run, then install the plugin:
+
+```text
+/plugin marketplace add win07xp/kaalm#vX.Y.Z
+/plugin install kaalm@kaalm
+```
+
+Replace `X.Y.Z` with your Kaalm version. For another agent, copy
+[`plugins/kaalm/skills/kaalm`](plugins/kaalm/skills/kaalm) from that tag into
+the agent's skills folder.
+
 ## Contributing
 
 Open an [issue](https://github.com/win07xp/kaalm/issues). There is no template

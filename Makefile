@@ -494,6 +494,10 @@ perf-deploy: chart-sync ## Install the chart onto the perf cluster with the mock
 perf-unit: ## Unit tests of the perf harness's pure helpers (no cluster; the perftest tag keeps them out of make test).
 	go test -tags perftest -count=1 ./test/perf/
 
+.PHONY: skill-test
+skill-test: ## Unit tests of the kaalm agent skill's scripts and hack/skill-pin.sh (no cluster).
+	python3 -m unittest discover -s test/skill -v
+
 # perf-run passes the pprof port so the harness can count each operator
 # process's watches from its goroutine profile.
 .PHONY: perf-run

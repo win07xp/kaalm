@@ -1,0 +1,19 @@
+# An Agent on the published Python base image, which echoes each message back until you give it code.
+# Set the class and provider names. Remove providers if you have none.
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: helper
+spec:
+  agentClassRef:
+    name: my-agents
+  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1
+  providers:
+    - providerRef:
+        name: anthropic-shared
+  persistence:
+    enabled: true
+    sizeGi: 1
+  lifecycle:
+    hibernationEnabled: true
+    activitySource: gatewayTraffic

@@ -1,0 +1,37 @@
+# A NetworkPolicy for a Deployment that sends model calls through the gateway: its Pods may reach only the gateway and cluster DNS.
+# Set the namespace, the app label, and the Kaalm namespace. It blocks all other egress, so add rules for anything else the app needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-only-egress
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: my-app
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kaalm-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kaalm
+              app.kubernetes.io/component: gateway
+      ports:
+        - protocol: TCP
+          port: 8443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

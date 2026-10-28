@@ -196,10 +196,23 @@ func decodeDocs(t *testing.T, path string) []*unstructured.Unstructured {
 // rules and has no field the schema does not know. Strict field validation
 // rejects unknown fields, which the default dry-run only prunes with a warning.
 func TestSamplesApply(t *testing.T) {
+	applyAll(t, filepath.Join("..", "..", "config", "samples"))
+}
+
+// TestSkillExamplesApply holds the kaalm skill's example manifests to the same
+// rules: a user's agent copies them as they are, so an example the API has
+// moved away from would fail on the user's cluster.
+func TestSkillExamplesApply(t *testing.T) {
+	applyAll(t, filepath.Join("..", "..", "plugins", "kaalm", "skills", "kaalm", "examples"))
+}
+
+// applyAll dry-run creates every document of every manifest in dir with strict
+// field validation and fails on any rejection.
+func applyAll(t *testing.T, dir string) {
 	c := newClient(t)
-	all, err := filepath.Glob(filepath.Join("..", "..", "config", "samples", "*.yaml"))
+	all, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
 	if err != nil {
-		t.Fatalf("glob samples: %v", err)
+		t.Fatalf("glob %s: %v", dir, err)
 	}
 	var files []string
 	for _, f := range all {
@@ -209,7 +222,7 @@ func TestSamplesApply(t *testing.T) {
 		}
 	}
 	if len(files) == 0 {
-		t.Fatalf("no samples in config/samples")
+		t.Fatalf("no manifests in %s", dir)
 	}
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {

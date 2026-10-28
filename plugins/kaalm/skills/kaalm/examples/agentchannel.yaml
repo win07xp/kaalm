@@ -1,0 +1,20 @@
+# A webhook channel that lets callers with a bearer token talk to the Agent named helper and read the reply.
+# Replace default in path with the Agent's namespace. The Secret helper-hook needs the label kaalm.io/channel-credential: "true".
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: helper-webhook
+spec:
+  agentRef:
+    name: helper
+  type: webhook
+  webhook:
+    path: /channels/default/helper-webhook
+    responseMode: sync
+    content:
+      fromBody: text
+    auth:
+      type: bearer
+      secretRef:
+        name: helper-hook
+        key: token

@@ -93,6 +93,9 @@ jobs:
       - name: Perf harness unit tests (no cluster)
         run: make perf-unit
 
+      - name: Agent skill script tests (no cluster)
+        run: make skill-test
+
       - name: Python base image unit suite (docker test stage)
         run: make python-test
 

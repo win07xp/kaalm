@@ -1,0 +1,20 @@
+# An AgentClass for one person's agents: published images only, small storage, hibernation allowed.
+# Set allowedProviders to your ModelProvider names. For a team, start from agentclass-team.yaml.
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: my-agents
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["ghcr.io/win07xp/*"]
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+    maxSizeGi: 5
+  allowedProviders:
+    - name: anthropic-shared
+  lifecycle:
+    defaultIdleTimeout: 30m
+    hibernationAllowed: true

@@ -1,0 +1,17 @@
+# An AgentTask that runs once. The Go base image reports success at start (KAALM_TASK_AUTOCOMPLETE), which proves the path.
+# For real work, use your own image and remove the env block.
+apiVersion: kaalm.io/v1beta1
+kind: AgentTask
+metadata:
+  name: one-off-job
+spec:
+  agentClassRef:
+    name: my-agents
+  image: ghcr.io/win07xp/kaalm-agent-go:2.0.1
+  env:
+    - name: KAALM_TASK_AUTOCOMPLETE
+      value: success
+  completion:
+    condition: agentReported
+    timeout: 10m
+  ttlSecondsAfterFinished: 600

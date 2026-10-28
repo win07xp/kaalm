@@ -1,0 +1,19 @@
+# A ToolProvider for an MCP tool server. Its credential Secret lives in the Kaalm namespace and carries two opt-ins.
+# Set endpoint, credentialsRef, allowedNamespaces, and tools for your server. Omit credentialsRef if it needs no sign-in.
+apiVersion: kaalm.io/v1beta1
+kind: ToolProvider
+metadata:
+  name: search-tools
+spec:
+  type: mcp
+  endpoint: https://mcp-search.tools.svc:8443
+  credentialsRef:
+    name: search-tools-key
+    key: token
+  allowedNamespaces: ["default"]
+  tools:
+    - id: web_search
+    - id: fetch_page
+  healthCheck:
+    enabled: true
+    intervalSeconds: 60

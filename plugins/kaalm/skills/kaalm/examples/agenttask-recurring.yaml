@@ -1,0 +1,79 @@
+# A recurring AgentTask: a CronJob creates a new AgentTask from the ConfigMap's manifest on a schedule.
+# Set the namespace in every object, the schedule, the task, and KUBECTL_VERSION. The ServiceAccount may only create AgentTasks.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nightly-report-task
+  namespace: default
+data:
+  task.yaml: |
+    apiVersion: kaalm.io/v1beta1
+    kind: AgentTask
+    metadata:
+      generateName: nightly-report-
+    spec:
+      agentClassRef:
+        name: my-agents
+      image: ghcr.io/win07xp/kaalm-agent-go:2.0.1
+      env:
+        - name: KAALM_TASK_AUTOCOMPLETE
+          value: success
+      completion:
+        condition: agentReported
+        timeout: 10m
+      ttlSecondsAfterFinished: 3600
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nightly-report-creator
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nightly-report-creator
+  namespace: default
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agenttasks"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nightly-report-creator
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: nightly-report-creator
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nightly-report-creator
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-report
+  namespace: default
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: nightly-report-creator
+          restartPolicy: Never
+          containers:
+            - name: create-task
+              image: registry.k8s.io/kubectl:KUBECTL_VERSION
+              command: ["kubectl", "create", "-f", "/task/task.yaml"]
+              volumeMounts:
+                - name: task
+                  mountPath: /task
+          volumes:
+            - name: task
+              configMap:
+                name: nightly-report-task

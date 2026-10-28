@@ -1,0 +1,26 @@
+# An AgentClass a platform team offers to chosen team namespaces, with bounds on storage and task runs.
+# Set allowedNamespaces to the team namespaces, allowedImages to the registries you trust, and allowedProviders to your ModelProviders.
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: team-standard
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["ghcr.io/win07xp/*"]
+  persistence:
+    enabled: true
+    defaultSizeGi: 5
+    maxSizeGi: 20
+    pvcRetention: Retain
+  allowedProviders:
+    - name: anthropic-shared
+  allowedNamespaces: ["team-*"]
+  lifecycle:
+    defaultIdleTimeout: 30m
+    hibernationAllowed: true
+    defaultTaskTimeout: 1h
+    maxTaskTimeout: 4h
+    defaultTTLSecondsAfterFinished: 3600
+    maxTTLSecondsAfterFinished: 86400

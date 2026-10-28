@@ -1,0 +1,17 @@
+# An Agent that may call two tools of one ToolProvider through the gateway.
+# The class must list the ToolProvider in allowedToolProviders.
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: researcher
+spec:
+  agentClassRef:
+    name: my-agents
+  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1
+  tools:
+    - providerRef:
+        name: search-tools
+      tools: ["web_search", "fetch_page"]
+  persistence:
+    enabled: true
+    sizeGi: 1
