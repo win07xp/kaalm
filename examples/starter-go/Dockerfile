@@ -1,8 +1,10 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 #
 # The template's Dockerfile, written for a COPY of this directory: it fetches
-# the published agentruntime module, so run `go mod tidy` once after copying
-# (it pins the module version and writes go.sum). Inside the Kaalm repo this
+# the published agentruntime module. After copying, pin the module to the
+# version of the chart your cluster runs with
+# `go get github.com/win07xp/kaalm/agentruntime/v2@vX.Y.Z`, then run
+# `go mod tidy` to write go.sum. Inside the Kaalm repo this
 # file does not build until that version exists on the module proxy; in-repo
 # and e2e builds compile the working tree via test/e2e/starter-go/Dockerfile
 # instead. Those are different builds on purpose: e2e must test the tree,
