@@ -133,6 +133,9 @@ class Agent:
         A reply that is not strict JSON (NaN, Infinity, or an object json
         cannot serialize) raises TypeError here, before it is cached or sent,
         so neither the state log nor the gateway ever sees it.
+
+        The store write runs on a worker thread, so its fsync does not stall
+        the loop (probes, heartbeat, other deliveries).
         """
         message_id = envelope.get("messageId", "")
         if message_id:
@@ -142,7 +145,7 @@ class Agent:
         reply = await self.handler(envelope)
         ensure_json(reply, f"handler reply to messageId {message_id!r}")
         if message_id:
-            self.store.remember(message_id, reply)
+            await asyncio.to_thread(self.store.remember, message_id, reply)
         return reply
 
     async def handle_readyz(self, _: web.Request) -> web.Response:
