@@ -139,7 +139,9 @@ class Agent:
         """
         message_id = envelope.get("messageId", "")
         if message_id:
-            cached = self.store.recall(message_id)
+            # recall takes the same lock as remember, so on the loop thread it
+            # would wait out another delivery's in-flight fsync.
+            cached = await asyncio.to_thread(self.store.recall, message_id)
             if cached is not None:
                 return cached
         reply = await self.handler(envelope)

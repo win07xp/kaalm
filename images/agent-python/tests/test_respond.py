@@ -157,3 +157,24 @@ async def test_respond_yields_to_the_loop_while_the_store_writes(tmp_path):
     task.cancel()
     assert ticks >= 1
     assert elapsed < 4
+
+
+async def test_store_calls_run_off_the_loop_thread(tmp_path):
+    """recall and remember share the Store's lock, so a recall on the loop
+    thread would wait out another delivery's in-flight fsync."""
+    seen: dict[str, int] = {}
+
+    class RecordingStore(Store):
+        def recall(self, message_id):
+            seen["recall"] = threading.get_ident()
+            return super().recall(message_id)
+
+        def remember(self, message_id, reply):
+            seen["remember"] = threading.get_ident()
+            super().remember(message_id, reply)
+
+    agent, _ = mk_agent(RecordingStore(str(tmp_path / "mem")))
+    loop_thread = threading.get_ident()
+    await agent.respond({"messageId": "m1", "content": "hi"})
+    assert seen["recall"] != loop_thread
+    assert seen["remember"] != loop_thread
