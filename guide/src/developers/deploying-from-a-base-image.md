@@ -50,7 +50,8 @@ runtime binds seven members before your handler is imported, reached with
 through the gateway), `kaalm.memory` (persistent key-value state, backed by
 the agent's volume when persistence is enabled), `kaalm.http_client()` and
 `kaalm.http_async_client()` (httpx clients carrying the Pod's identity, for
-framework SDKs), `kaalm.trace_context()` (the current message's trace
+framework SDKs; pass `package="httpx2"` for the Anthropic SDK 2.0 and later,
+see [Level 2](framework-agents.md#level-2-full-lifecycle-the-framework-inside-the-handler)), `kaalm.trace_context()` (the current message's trace
 headers), `kaalm.complete_task` (reports an AgentTask's result), and
 `kaalm.TaskAlreadyCompleted` (the exception `complete_task` raises when the
 task has already reported or finished). The last two matter only for tasks; see
