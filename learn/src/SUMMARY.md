@@ -12,4 +12,5 @@
 - [Giving it a job](giving-it-a-job.md)
 - [Sleep and wake](sleep-and-wake.md)
 - [Give it a real brain](give-it-a-real-brain.md)
+- [Let a coding agent help](let-a-coding-agent-help.md)
 - [Where to go next](where-to-go-next.md)
