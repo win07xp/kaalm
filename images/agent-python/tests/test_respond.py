@@ -132,11 +132,14 @@ async def test_respond_yields_to_the_loop_while_the_store_writes(tmp_path):
     """The store write runs off the loop thread, so other coroutines (probes,
     heartbeat, other deliveries) keep running during its fsync. The write here
     blocks until a coroutine on the loop runs; on the loop thread it would wait
-    out the full timeout instead."""
+    out the full timeout instead. Only ticks after the write starts count, so
+    a tick while respond awaits the recall cannot release the write."""
+    writing = threading.Event()
     loop_ran = threading.Event()
 
     class SlowStore(Store):
         def remember(self, message_id, reply):
+            writing.set()
             loop_ran.wait(timeout=5)
             super().remember(message_id, reply)
 
@@ -146,8 +149,9 @@ async def test_respond_yields_to_the_loop_while_the_store_writes(tmp_path):
     async def ticker():
         nonlocal ticks
         while True:
-            ticks += 1
-            loop_ran.set()
+            if writing.is_set():
+                ticks += 1
+                loop_ran.set()
             await asyncio.sleep(0.01)
 
     task = asyncio.create_task(ticker())
