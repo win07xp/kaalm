@@ -8,7 +8,7 @@
 # surfaces a release adds have no baseline here and get walked when they
 # appear.
 #
-# audited-commit: 62538a58
+# audited-commit: 1a6d77d2
 #
 # Re-walked for the v2.0.1 release: every drifted verdict re-checked against
 # the v2.0.1 code, all holding, with the Pod wait's files joined to 4.6, 4.7,
@@ -49,7 +49,7 @@
 4.3 internal/gateway/mcpbroker.go internal/gateway/server.go
 4.4 internal/gateway/discord.go internal/gateway/whatsapp.go internal/gateway/platform.go
 4.5 internal/gateway/tracing.go cmd/gateway/main.go internal/gateway/baseurl.go
-4.6 internal/gateway/user.go internal/gateway/pipeline_bound.go
+4.6 internal/gateway/user.go internal/gateway/pipeline_bound.go internal/gateway/podready.go
 4.7 internal/gateway/user.go internal/controller/agent_activity.go internal/controller/agentchannel_health.go internal/controller/health.go internal/controller/toolprovider_health.go internal/controller/health_vertex.go internal/gcpauth/ internal/controller/agent_controller.go
 4.8 internal/controller/ownership.go internal/controller/fqdn_policy.go internal/controller/secret_access.go internal/controller/dns_selector.go internal/secretwatch/
 5.1 internal/gateway/channelauth.go internal/gateway/whatsapp.go internal/gateway/mcpsession.go

@@ -2,28 +2,28 @@
 
 This file is the human half of `manifest.txt`. The manifest holds the files each verdict examined and the audited commit, and `make audit-drift` checks them. This file holds the verdicts themselves and the corrections to them. The release PR updates it whenever the audited commit moves.
 
-The audited commit is `62538a58`. Every verdict holds at that commit. The original walk covered 33 checklist items: 23 passed (several with reasoning now recorded in the threat model) and 10 produced findings. Every finding got its own issue. Nine were fixed and one was closed as a false finding, with its correction recorded below.
+The audited commit is `1a6d77d2`. Every verdict holds at that commit. The original walk covered 33 checklist items: 23 passed (several with reasoning now recorded in the threat model) and 10 produced findings. Every finding got its own issue. Nine were fixed and one was closed as a false finding, with its correction recorded below.
 
-The 2.0.1 re-walk examined the 26 verdicts whose files had changed. All hold. The gateway's Pod wait joined the files of verdicts 4.6, 4.7, and 5.3.
+The 2.1.0 re-walk examined the 26 verdicts whose files had changed since `62538a58`. All hold, with no findings. Two surfaces were new: the gateway's per-Agent Pod wait cap and the Pod readiness tracker, which joined the files of verdict 4.6.
 
 To recompute a verdict, run `make audit-drift`. An empty diff means the verdict stands. A non-empty one names exactly what to re-walk, using `brief.md` and `checklist.md` in this directory.
 
 ## Verdicts
 
 Gateway cluster listener :8443
-- 1.1 dual-mode auth order: pass (2.0.0 delta: secretwatch stops on Forbidden and never serves a revoked cache, #549 fixed in PR #552)
+- 1.1 dual-mode auth order: pass (2.0.0 delta: secretwatch stops on Forbidden and never serves a revoked cache, #549 fixed in PR #552; 2.1.0 re-walk: secretwatch lists each Secret by exact name and watches from that list, a refused list falls back to live GETs, and a refused GET returns the refusal, so a revoked grant is never served from cache)
 - 1.2 inbound auth header strip: pass
 - 1.3 body cap and JSON refusal: pass
 - 1.4 authz order and fallback re-check: pass (reasoning: What a denied caller learns; Fallback edges and allowedProviders)
 - 1.5 upstream error leakage: pass (reasoning: What flows back from a failed provider call)
 - 1.6 MCP broker: pass (2.0.0 re-walk: a narrowed tools/list now keeps one `tools` list and one `name` per entry in every spelling, #547 fixed in PR #548)
-- 1.7 agent-report paths: finding #148 (missing live List-Pods fallback), fixed in PR #157; rest passes
+- 1.7 agent-report paths: finding #148 (missing live List-Pods fallback), fixed in PR #157; rest passes (2.1.0 re-walk: `/v1/task/complete` answers 413 for a body over 1 MiB, after all identity checks)
 - 1.8 controller/console SAN paths: pass
 - 1.9 catch-all: pass
 - 1.10 Vertex inbound: finding #147 (documented but unroutable), resolved in PR #164 (reserved type, docs aligned, dead branch removed)
 
 Gateway user listener :8080
-- 2.1 route order: pass
+- 2.1 route order: pass (2.1.0 re-walk: the per-Agent Pod wait cap is reached only after webhook, platform-signature, or console auth, counts waits for the channel's own Agent, frees its slot on every return path, and a non-positive flag stops the gateway at startup)
 - 2.2 webhook auth: pass (replay reasoning already in the threat model)
 - 2.3 Discord inbound: pass
 - 2.4 WhatsApp: pass (replay reasoning already in the threat model)
@@ -43,9 +43,9 @@ Outbound dial inventory
 - 4.3 ToolProvider endpoint: pass
 - 4.4 platform apiBaseUrl segments: finding #150 (Discord segments unescaped), fixed in PR #158; WhatsApp pass; finding #151 (64KiB event details), fixed in PR #161
 - 4.5 otlpEndpoint: pass
-- 4.6 gateway to agent Services: pass (2.0.1 re-walk: the Pod wait resolves the same Service name as delivery, and the pipeline bound covers it)
+- 4.6 gateway to agent Services: pass (2.0.1 re-walk: the Pod wait resolves the same Service name as delivery, and the pipeline bound covers it; 2.1.0 re-walk: the Pod readiness tracker in `podready.go` matches Pods by labels within the namespace, so a Pod that copies the labels changes only when the wait connects, never the dial target or namespace)
 - 4.7 controller dials: pass except the #149 and #153 sites above (2.0.1 re-walk: activity older than the Agent is ignored; dial targets unchanged)
-- 4.8 Secret access scope: pass (2.0.0 delta: still one GET and one name-filtered watch per Secret, now starting at the latest version, #550 fixed in PR #553)
+- 4.8 Secret access scope: pass (2.0.0 delta: the watch starts at the latest version, #550 fixed in PR #553; 2.1.0 re-walk: one name-selected list and one name-selected watch per Secret, resuming from the list, so the scope is unchanged and a refused list falls back to live GETs)
 
 Cross-cutting
 - 5.1 constant-time comparisons: pass
