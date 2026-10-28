@@ -38,12 +38,14 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -298,7 +300,7 @@ func (r *AgentChannelReconciler) validateChannel(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent, credReason, credMsg string,
 ) (string, string) {
 	// Step 2: the Agent must expose a Service (delivery target).
-	if agent.Spec.Service != nil && !agent.Spec.Service.Enabled {
+	if !agentServiceEnabled(agent) {
 		return kaalmv1beta1.ReasonAgentServiceDisabled,
 			fmt.Sprintf("Agent %q has service.enabled=false; channels need a delivery target", agent.Name)
 	}
@@ -860,6 +862,32 @@ func deref(s *string, fallback string) string {
 	return fallback
 }
 
+// agentServiceEnabled reports whether the Agent exposes a Service, the
+// delivery target a channel needs. An unset spec.service means enabled.
+func agentServiceEnabled(agent *kaalmv1beta1.Agent) bool {
+	return agent.Spec.Service == nil || agent.Spec.Service.Enabled
+}
+
+// agentChangeMatters admits an Agent update to the channel fan-out only when
+// status.phase or the effective service.enabled changed. A channel pass reads
+// nothing else from its Agent beyond whether it exists (the Agent check, the
+// service check, and the phase reduction), so a status write that keeps the
+// phase (activity, conditions, spend) or a spec edit the channel does not
+// read wakes no channel. Creates and deletes always pass.
+func agentChangeMatters() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldAg, ok1 := e.ObjectOld.(*kaalmv1beta1.Agent)
+			newAg, ok2 := e.ObjectNew.(*kaalmv1beta1.Agent)
+			if !ok1 || !ok2 {
+				return true
+			}
+			return oldAg.Status.Phase != newAg.Status.Phase ||
+				agentServiceEnabled(oldAg) != agentServiceEnabled(newAg)
+		},
+	}
+}
+
 // reducePhase maps the referenced Agent's phase onto the Channel phase.
 // status.phase and Ready are deliberately separate axes.
 func (r *AgentChannelReconciler) reducePhase(channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent) {
@@ -972,7 +1000,8 @@ func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1beta1.AgentChan
 }
 
 // SetupWithManager wires the reconciler, its owned RBAC pair, the Agent
-// watch (phase reduction must track Agent phase changes), the path sibling
+// watch (filtered by agentChangeMatters to the Agent fields a channel pass
+// reads: its existence, service.enabled, and phase), the path sibling
 // watch (a rule 15 conflict's outcome depends on every channel on the
 // path), and, when SecretChanges is set, the referenced-Secret watch (the
 // rule 25, 40, 45, and 46 checks read each Secret's label, annotation, and
@@ -983,7 +1012,8 @@ func (r *AgentChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kaalmv1beta1.AgentChannel{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
-		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent)).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent),
+			builder.WithPredicates(agentChangeMatters())).
 		Watches(&kaalmv1beta1.AgentChannel{}, r.pathSiblingHandler())
 	if r.SecretChanges != nil {
 		b = b.WatchesRawSource(secretChangeSource(r.SecretChanges, r.channelsForSecret))
