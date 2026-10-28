@@ -5,7 +5,7 @@ description: Use Kaalm, the Kubernetes operator that runs AI agents (kaalm.io re
 
 # Kaalm
 
-This skill matches Kaalm v2.0.1.
+This skill matches Kaalm v2.1.0.
 
 This skill holds procedures: what to run, in what order, and what to check. The facts live in Kaalm's books, which each procedure links. Read the linked page when a step fails or the user asks for more than the procedure covers.
 
@@ -57,7 +57,7 @@ No output means Kaalm is not installed, and [procedures/install-kaalm.md](proced
 
 When Kaalm is installed, tell the user its version and namespace. A *namespace* is a named folder for objects inside the cluster; Kaalm's own parts live in one. Then save what you found: `config.py set install.namespace` with the namespace, and `config.py set install.chartVersion` with the version (the `chart` value without `kaalm-`, or the image tag). The same consent as the config file applies.
 
-Compare versions without the leading `v`: Helm's `app_version` is `2.0.1`, and the line above says `v2.0.1`. If the installed version differs from the version above, warn the user in plain words: the steps and examples in this skill may not fit their cluster. Name the skill that matches: in Claude Code, `/plugin marketplace add win07xp/kaalm#vX.Y.Z` with the installed version, then install the `kaalm` plugin. For another agent, copy `plugins/kaalm/skills/kaalm` from that tag. Continue only when the user says to.
+Compare versions without the leading `v`: Helm's `app_version` is `2.1.0`, and the line above says `v2.1.0`. If the installed version differs from the version above, warn the user in plain words: the steps and examples in this skill may not fit their cluster. Name the skill that matches: in Claude Code, `/plugin marketplace add win07xp/kaalm#vX.Y.Z` with the installed version, then install the `kaalm` plugin. For another agent, copy `plugins/kaalm/skills/kaalm` from that tag. Continue only when the user says to.
 
 ## How experience changes what you do
 

@@ -62,7 +62,7 @@ kubectl --context CONTEXT get agents,agenttasks -A \
 An empty first answer means the class admits every namespace. If the user is not sure who else relies on it, ask.
 
 - **Only the user uses it** (its `allowedNamespaces` lists only the user's namespaces, and the second command shows only the user's workloads): patch or apply the change through the steps above.
-- **Anyone else uses it:** do not change it. Offer a separate class for the user's namespace instead, with only the grants the user needs. Copy [agentclass.yaml](../examples/agentclass.yaml) and set `allowedNamespaces` to the user's namespace. The guide gives the same advice: [offer it as its own class rather than loosening a shared one](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts). Creating a class needs permission: follow [When the user may not change the object](#when-the-user-may-not-change-the-object).
+- **Anyone else uses it:** do not change it. Offer a separate class for the user's namespace instead, with only the grants the user needs. Copy [agentclass.yaml](../examples/agentclass.yaml) and set `allowedNamespaces` to the user's namespace. The guide gives the same advice: [offer it as its own class rather than loosening a shared one](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/platform/agent-classes.md#a-starter-class-for-handler-mounts). Creating a class needs permission: follow [When the user may not change the object](#when-the-user-may-not-change-the-object).
 
 ## When the user may not change the object
 

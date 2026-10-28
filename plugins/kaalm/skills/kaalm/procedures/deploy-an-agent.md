@@ -1,6 +1,6 @@
 # Deploy an Agent
 
-Use this to run a long-lived agent: a Pod with its own identity, optional storage, and hibernation when idle. Kaalm must be installed ([install-kaalm.md](install-kaalm.md)). The page behind this procedure is [Your first agent](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/first-agent.md).
+Use this to run a long-lived agent: a Pod with its own identity, optional storage, and hibernation when idle. Kaalm must be installed ([install-kaalm.md](install-kaalm.md)). The page behind this procedure is [Your first agent](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/first-agent.md).
 
 ## Steps
 
@@ -23,7 +23,7 @@ Use this to run a long-lived agent: a Pod with its own identity, optional storag
    kubectl --context CONTEXT get agents -n NAMESPACE
    ```
 
-   `Phase` goes from `Pending` to `Provisioning` to `Running`, with `READY` `True`. It takes about 15 seconds on a small cluster, longer while the image downloads for the first time. See [Watch it come up](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/first-agent.md#3-watch-it-come-up).
+   `Phase` goes from `Pending` to `Provisioning` to `Running`, with `READY` `True`. It takes about 15 seconds on a small cluster, longer while the image downloads for the first time. See [Watch it come up](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/first-agent.md#3-watch-it-come-up).
 
    When the Agent lists providers, `Running` and `READY` `True` do not prove the model works: an Agent reaches `Running` while its ModelProvider is not `Ready`. Also read the `ProvidersReady` condition:
 
@@ -33,13 +33,13 @@ Use this to run a long-lived agent: a Pod with its own identity, optional storag
    ```
 
    `True AllProvidersHealthy` is success. Anything else, such as `False ProviderUnhealthy` or `False ClassConstraintViolation`, goes to [diagnose.md](diagnose.md). Do not report success on `READY` alone.
-6. **If it stays in `Pending` or `Provisioning`, shows `Degraded`, or `ProvidersReady` is not `True`,** use [diagnose.md](diagnose.md). The usual cause of `Degraded` with `ClassConstraintViolation` is that the class does not list the provider, or the provider does not admit the namespace. See [If it never reaches Running](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/first-agent.md#if-it-never-reaches-running).
+6. **If it stays in `Pending` or `Provisioning`, shows `Degraded`, or `ProvidersReady` is not `True`,** use [diagnose.md](diagnose.md). The usual cause of `Degraded` with `ClassConstraintViolation` is that the class does not list the provider, or the provider does not admit the namespace. See [If it never reaches Running](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/first-agent.md#if-it-never-reaches-running).
 7. **Save the namespace:** `python3 SKILL_DIR/scripts/config.py set namespace NAMESPACE`.
 
 ## What next
 
 - Send it a message: [connect-a-channel.md](connect-a-channel.md). An agent has no address outside the cluster until it has a channel.
-- Give it a real model: the echo handler makes no model call. Code that calls one needs a ModelProvider, the class and agent listing it, and a handler that sends requests through the gateway ([How the agent calls a model](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/first-agent.md#4-how-the-agent-calls-a-model)).
+- Give it a real model: the echo handler makes no model call. Code that calls one needs a ModelProvider, the class and agent listing it, and a handler that sends requests through the gateway ([How the agent calls a model](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/first-agent.md#4-how-the-agent-calls-a-model)).
 - Tools: [give-tools.md](give-tools.md).
 - Reaching a service outside the cluster, or reading a non-model secret: [Reaching outside the cluster](run-a-task.md#reaching-outside-the-cluster) and [A secret the task reads](run-a-task.md#a-secret-the-task-reads) apply to agents too.
-- Day-to-day behavior (idle, hibernation, wake): [Agent lifecycle day to day](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/lifecycle.md).
+- Day-to-day behavior (idle, hibernation, wake): [Agent lifecycle day to day](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/lifecycle.md).

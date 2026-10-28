@@ -1,11 +1,11 @@
 # Connect a channel
 
-Use this to send messages to a running Agent from outside the cluster. An *AgentChannel* gives an Agent an authenticated webhook address on Kaalm's gateway. This procedure covers the generic webhook with a reply in the same HTTP response. The page behind it is [Connecting a channel](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-a-channel.md).
+Use this to send messages to a running Agent from outside the cluster. An *AgentChannel* gives an Agent an authenticated webhook address on Kaalm's gateway. This procedure covers the generic webhook with a reply in the same HTTP response. The page behind it is [Connecting a channel](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/connecting-a-channel.md).
 
 ## Steps
 
-1. **Gather the names:** the Agent and its namespace, which must be `Running`, `Idle`, or `Hibernated` ([deploy-an-agent.md](deploy-an-agent.md)). On a class that allows hibernation, an agent goes `Idle` and then `Hibernated` when it is quiet, and it still answers: the first message wakes it in a few seconds. `Pending`, `Provisioning`, `Degraded`, `Failed`, and `Terminating` mean it cannot answer yet; use [diagnose.md](diagnose.md). The phases are in the [Agent status cheatsheet](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/status-cheatsheet.md#agent). Choose a channel name, such as `AGENT-webhook`, and a Secret name, such as `AGENT-hook`.
-2. **Create the bearer token Secret.** The channel authenticates callers with a token kept in a Secret in the Agent's namespace. The Secret must carry the label `kaalm.io/channel-credential=true`, or the channel is not `Ready` (see [Create the channel](https://github.com/win07xp/kaalm/blob/main/learn/src/talking-to-your-agent.md#create-the-channel)). Generate a random token inside the command, so nobody has to type or see it. Run the dry run first with `--dry-run=server` on the last `kubectl`, then, after the user's OK, without it:
+1. **Gather the names:** the Agent and its namespace, which must be `Running`, `Idle`, or `Hibernated` ([deploy-an-agent.md](deploy-an-agent.md)). On a class that allows hibernation, an agent goes `Idle` and then `Hibernated` when it is quiet, and it still answers: the first message wakes it in a few seconds. `Pending`, `Provisioning`, `Degraded`, `Failed`, and `Terminating` mean it cannot answer yet; use [diagnose.md](diagnose.md). The phases are in the [Agent status cheatsheet](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/reference/status-cheatsheet.md#agent). Choose a channel name, such as `AGENT-webhook`, and a Secret name, such as `AGENT-hook`.
+2. **Create the bearer token Secret.** The channel authenticates callers with a token kept in a Secret in the Agent's namespace. The Secret must carry the label `kaalm.io/channel-credential=true`, or the channel is not `Ready` (see [Create the channel](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/talking-to-your-agent.md#create-the-channel)). Generate a random token inside the command, so nobody has to type or see it. Run the dry run first with `--dry-run=server` on the last `kubectl`, then, after the user's OK, without it:
 
    ```bash
    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' |
@@ -42,12 +42,12 @@ Use this to send messages to a running Agent from outside the cluster. An *Agent
        -d '{"text":"hello there"}'
      ```
 
-   A good reply is one line of JSON that contains `echo: hello there`. If window 1 is not running, `curl` prints `curl: (7) Failed to connect to 127.0.0.1 port 18080`. Start window 1 and run `curl` again. `-k` skips certificate checking only because the call goes through a local port-forward ([Reach the gateway](https://github.com/win07xp/kaalm/blob/main/learn/src/talking-to-your-agent.md#reach-the-gateway)). The user may paste the reply back, and must not paste the token.
-6. **If the call fails,** a `401` and the other webhook errors are under [Webhook returns 401](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/troubleshooting.md#webhook-returns-401); use [diagnose.md](diagnose.md).
+   A good reply is one line of JSON that contains `echo: hello there`. If window 1 is not running, `curl` prints `curl: (7) Failed to connect to 127.0.0.1 port 18080`. Start window 1 and run `curl` again. `-k` skips certificate checking only because the call goes through a local port-forward ([Reach the gateway](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/talking-to-your-agent.md#reach-the-gateway)). The user may paste the reply back, and must not paste the token.
+6. **If the call fails,** a `401` and the other webhook errors are under [Webhook returns 401](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/reference/troubleshooting.md#webhook-returns-401); use [diagnose.md](diagnose.md).
 
 ## More than this
 
-- Replies delivered later, to a callback address: [Asynchronous channels](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-a-channel.md#asynchronous-channels).
-- A Discord slash command: [Connecting Discord](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-discord.md).
-- A WhatsApp business number: [Connecting WhatsApp](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-whatsapp.md).
-- Reaching the gateway from outside the cluster: [Exposing it outside the cluster](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-a-channel.md#exposing-it-outside-the-cluster).
+- Replies delivered later, to a callback address: [Asynchronous channels](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/connecting-a-channel.md#asynchronous-channels).
+- A Discord slash command: [Connecting Discord](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/connecting-discord.md).
+- A WhatsApp business number: [Connecting WhatsApp](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/connecting-whatsapp.md).
+- Reaching the gateway from outside the cluster: [Exposing it outside the cluster](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/connecting-a-channel.md#exposing-it-outside-the-cluster).

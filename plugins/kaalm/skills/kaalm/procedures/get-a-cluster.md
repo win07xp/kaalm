@@ -14,8 +14,8 @@ For a user who wants to try Kaalm, suggest the local cluster.
 
 ## Local k3d cluster
 
-1. Check the tools with the commands in [Setting up your laptop](https://github.com/win07xp/kaalm/blob/main/learn/src/setting-up.md#check-they-worked). If one is missing, give the user its install link from [Install them](https://github.com/win07xp/kaalm/blob/main/learn/src/setting-up.md#install-them). Docker must be running, not only installed.
-2. Read [The cluster](https://github.com/win07xp/kaalm/blob/main/learn/src/a-cluster-in-one-command.md#the-cluster) and run its `k3d cluster create` command with `--kubeconfig-switch-context=false` added. It has no dry run, so explain it first: it starts a cluster named `kaalm-tutorial` in a Docker container. Ask for the OK. The flag keeps k3d from making the new cluster the user's current kube context, so a cluster the user already works with stays the default for their own `kubectl` commands. Every command here passes `--context`, so the skill does not need the switch.
+1. Check the tools with the commands in [Setting up your laptop](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/setting-up.md#check-they-worked). If one is missing, give the user its install link from [Install them](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/setting-up.md#install-them). Docker must be running, not only installed.
+2. Read [The cluster](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/a-cluster-in-one-command.md#the-cluster) and run its `k3d cluster create` command with `--kubeconfig-switch-context=false` added. It has no dry run, so explain it first: it starts a cluster named `kaalm-tutorial` in a Docker container. Ask for the OK. The flag keeps k3d from making the new cluster the user's current kube context, so a cluster the user already works with stays the default for their own `kubectl` commands. Every command here passes `--context`, so the skill does not need the switch.
 3. The new context is `k3d-kaalm-tutorial`. Confirm it as [The cluster context](../SKILL.md#the-cluster-context) says, and save it.
 4. Check it:
 
@@ -25,7 +25,7 @@ For a user who wants to try Kaalm, suggest the local cluster.
 
    One node with status `Ready` means the cluster works.
 
-To remove the cluster later, use the command in [Tear it down](https://github.com/win07xp/kaalm/blob/main/learn/src/where-to-go-next.md#tear-it-down), and only with the user's OK.
+To remove the cluster later, use the command in [Tear it down](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/where-to-go-next.md#tear-it-down), and only with the user's OK.
 
 ## Managed cluster
 

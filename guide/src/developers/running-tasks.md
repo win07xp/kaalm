@@ -18,7 +18,7 @@ metadata:
 spec:
   agentClassRef:
     name: standard
-  image: ghcr.io/win07xp/kaalm-agent-go:2.0.1
+  image: ghcr.io/win07xp/kaalm-agent-go:2.1.0
   env:
     - name: KAALM_TASK_AUTOCOMPLETE
       value: success
@@ -44,7 +44,7 @@ Dockerfile: `spec.handler` is Agent-only, so the controller never sets it for
 a task:
 
 ```dockerfile
-FROM ghcr.io/win07xp/kaalm-agent-python:2.0.1
+FROM ghcr.io/win07xp/kaalm-agent-python:2.1.0
 COPY handler.py /opt/kaalm/handler/handler.py
 ENV KAALM_HANDLER_PATH=/opt/kaalm/handler
 ```

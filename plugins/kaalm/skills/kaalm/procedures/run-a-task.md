@@ -1,12 +1,12 @@
 # Run an AgentTask
 
-Use this for work that starts, finishes, and reports a result. An *AgentTask* runs one Pod to completion. It has no Service, no channel, and no hibernation. Kaalm must be installed, and a class must allow the task's image. The page behind this procedure is [Running tasks](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md).
+Use this for work that starts, finishes, and reports a result. An *AgentTask* runs one Pod to completion. It has no Service, no channel, and no hibernation. Kaalm must be installed, and a class must allow the task's image. The page behind this procedure is [Running tasks](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/running-tasks.md).
 
 ## Steps
 
 1. **Gather the names:** the namespace, an AgentClass that allows the image (see step 1 of [deploy-an-agent.md](deploy-an-agent.md)), and the image.
-2. **Choose the image** with [choose-an-image.md](choose-an-image.md), then come back. To prove the path first, the demo image reports `success` at start and does no work; for real work, the user's image does the work and reports its own result ([Declaring a task](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#declaring-a-task)).
-3. **Pick a completion mode** with the user. `agentReported` means the task says when it is done and can return artifacts. `exitCode` means the container's exit status is the result, and zero succeeds. [The two completion modes](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#the-two-completion-modes) explains both. The mode decides how the user reads the result (step 7) and how long the Pod stays. In `agentReported` mode the Pod is not stopped when the task reports: a container that keeps running stays up until the TTL removes the task. The Python base image keeps serving after the report, so on it, prefer `exitCode` when the task needs no artifacts and no result ConfigMap: the runtime then exits when `run_task` returns. With `agentReported` on the Python base image, set a short `ttlSecondsAfterFinished` and read the result first.
+2. **Choose the image** with [choose-an-image.md](choose-an-image.md), then come back. To prove the path first, the demo image reports `success` at start and does no work; for real work, the user's image does the work and reports its own result ([Declaring a task](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/running-tasks.md#declaring-a-task)).
+3. **Pick a completion mode** with the user. `agentReported` means the task says when it is done and can return artifacts. `exitCode` means the container's exit status is the result, and zero succeeds. [The two completion modes](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/running-tasks.md#the-two-completion-modes) explains both. The mode decides how the user reads the result (step 7) and how long the Pod stays. In `agentReported` mode the Pod is not stopped when the task reports: a container that keeps running stays up until the TTL removes the task. The Python base image keeps serving after the report, so on it, prefer `exitCode` when the task needs no artifacts and no result ConfigMap: the runtime then exits when `run_task` returns. With `agentReported` on the Python base image, set a short `ttlSecondsAfterFinished` and read the result first.
 4. **Write the task.** Copy [agenttask.yaml](../examples/agenttask.yaml). Set the name, class, image, and `completion`. Set `ttlSecondsAfterFinished`: the task, its Pod, and its result are deleted that many seconds after it finishes. If the task reads a secret value or calls a host outside the cluster, do [A secret the task reads](#a-secret-the-task-reads) and [Reaching outside the cluster](#reaching-outside-the-cluster) first.
 5. **Apply it** with [change-safely.md](change-safely.md), adding `-n NAMESPACE`.
 6. **Watch it:**
@@ -28,8 +28,8 @@ Use this for work that starts, finishes, and reports a result. An *AgentTask* ru
    kubectl --context CONTEXT logs -l kaalm.io/task=TASK_NAME -n NAMESPACE --all-containers
    ```
 
-   See [Watching and reading results](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#watching-and-reading-results).
-8. **If it does not reach `Succeeded`,** use [diagnose.md](diagnose.md). A crashed Pod is retried only when `completion.backoffLimit` is above zero. See [Cleanup and retries](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/running-tasks.md#cleanup-and-retries).
+   See [Watching and reading results](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/running-tasks.md#watching-and-reading-results).
+8. **If it does not reach `Succeeded`,** use [diagnose.md](diagnose.md). A crashed Pod is retried only when `completion.backoffLimit` is above zero. See [Cleanup and retries](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/running-tasks.md#cleanup-and-retries).
 
 ## A task that calls a model
 
@@ -39,14 +39,14 @@ A task reaches a model only through a ModelProvider it asks for. Three things mu
 - The task's class lists the provider in `allowedProviders`.
 - The provider's `allowedNamespaces` admits the task's namespace.
 
-Without all three, the gateway answers the task's model calls with `403 access_denied` ([LLM call returns 403 access_denied](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/troubleshooting.md#llm-call-returns-403-access_denied)).
+Without all three, the gateway answers the task's model calls with `403 access_denied` ([LLM call returns 403 access_denied](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/reference/troubleshooting.md#llm-call-returns-403-access_denied)).
 
 ### Porting a script that calls a model directly
 
 A script that calls a provider with its own API key changes in four ways:
 
 1. Remove the key from the code, the environment, and the image. The gateway holds it ([add-a-model-key.md](add-a-model-key.md)).
-2. Send the call to the gateway, not to the provider. The Python base image gives the code a client that already carries the task's identity and trusts the cluster CA: `kaalm.http_client()` returns a standard `httpx.Client`, and `kaalm.gateway` is a preconfigured session ([The Python image](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-image)). An image built another way follows [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md).
+2. Send the call to the gateway, not to the provider. The Python base image gives the code a client that already carries the task's identity and trusts the cluster CA: `kaalm.http_client()` returns a standard `httpx.Client`, and `kaalm.gateway` is a preconfigured session ([The Python image](https://github.com/win07xp/kaalm/blob/v2.1.0/docs/src/runtime/base-images.md#the-python-image)). An image built another way follows [Running framework agents](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/framework-agents.md).
 3. Name the model with the provider prefix, `PROVIDER_NAME/MODEL_ID`. The gateway reads the provider from the prefix.
 4. Run blocking calls, such as `requests` or a synchronous client, with `asyncio.to_thread` inside `run_task`, so they do not block the event loop the runtime serves on:
 
@@ -90,7 +90,7 @@ env:
         key: token
 ```
 
-The Secret must be in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`, or the task reports `Ready=False` with `SecretNotOptedIn`. Create the Secret before the task, with the command in [add-a-secret.md](add-a-secret.md) ("Value a workload reads" column), so you never see the value. Model keys do not use this path: the gateway holds them. [Label the Secrets a workload reads](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/managing-access.md#label-the-secrets-a-workload-reads) has the rule.
+The Secret must be in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`, or the task reports `Ready=False` with `SecretNotOptedIn`. Create the Secret before the task, with the command in [add-a-secret.md](add-a-secret.md) ("Value a workload reads" column), so you never see the value. Model keys do not use this path: the gateway holds them. [Label the Secrets a workload reads](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/platform/managing-access.md#label-the-secrets-a-workload-reads) has the rule.
 
 ## Reaching outside the cluster
 
@@ -99,7 +99,7 @@ A task or agent reaches only the gateway and cluster DNS unless its class opens 
 - `allowedCIDRs` allows address ranges, on any CNI that enforces NetworkPolicy.
 - `allowedHosts` allows DNS names, on Cilium only. On another CNI it has no effect.
 
-See what the class allows with `kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.network.egress}'`. Changing it is a change to the class: decide first whether the class is shared, with [Change a class only if no one else uses it](change-safely.md#change-a-class-only-if-no-one-else-uses-it), and use [change-safely.md](change-safely.md), including its rule for when the user may not change classes. A running task keeps the egress it started with; only tasks whose Pod is created afterward see the edit. The field rules are in [Network egress: allowedCIDRs and allowedHosts](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts), and [Changing a class later](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/agent-classes.md#changing-a-class-later) covers when edits reach workloads.
+See what the class allows with `kubectl --context CONTEXT get agentclass CLASS_NAME -o jsonpath='{.spec.network.egress}'`. Changing it is a change to the class: decide first whether the class is shared, with [Change a class only if no one else uses it](change-safely.md#change-a-class-only-if-no-one-else-uses-it), and use [change-safely.md](change-safely.md), including its rule for when the user may not change classes. A running task keeps the egress it started with; only tasks whose Pod is created afterward see the edit. The field rules are in [Network egress: allowedCIDRs and allowedHosts](https://github.com/win07xp/kaalm/blob/v2.1.0/docs/src/resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts), and [Changing a class later](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/platform/agent-classes.md#changing-a-class-later) covers when edits reach workloads.
 
 ## Run it on a schedule
 

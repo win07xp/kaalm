@@ -33,7 +33,7 @@ helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
   --wait
 ```
 
-Replace `VERSION` with the release you are installing, for example `2.0.1`.
+Replace `VERSION` with the release you are installing, for example `2.1.0`.
 
 Releases are listed on the
 [Releases page](https://github.com/win07xp/kaalm/releases). The chart and the

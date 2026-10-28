@@ -149,7 +149,7 @@ each agent's PVC and the data on it, unless the agent's class sets
    - Remove each finished AgentTask you do not want to run again. Reapplying
      creates a new object, so the task runs again.
 
-7. Install 2.0.1 as described in [Installation](installation.md). If you reuse
+7. Install 2.1.0 as described in [Installation](installation.md). If you reuse
    values from 1.x, such as the output of `helm get values kaalm --all`,
    remove `controller.trustClusterCAForProbes` and `controller.probeCA` first.
    The install fails while either is set. Set `gateway.trustClusterCAForUpstream`
