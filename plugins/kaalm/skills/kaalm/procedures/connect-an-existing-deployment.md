@@ -55,7 +55,7 @@ Tell the user up front what it costs and what it does not give:
    - Trust: the client verifies the gateway with `/var/run/ca/ca.crt`.
    - Model: the qualified name `PROVIDER_NAME/MODEL_ID`, such as `openai-shared/gpt-5.2`. The gateway reads the provider from the prefix and injects the real key.
    - Credential: the projected token, sent as `Authorization: Bearer`.
-5. **Read the token file on every request.** The projected token expires after `expirationSeconds` (3600), and the kubelet replaces the file before then. A client that reads the file once at startup and passes it as a fixed `api_key` gets `401` after about an hour. [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion) says to pass the token as the `api_key`; use the hook below instead, with any placeholder as the `api_key`. For a Python client built on `httpx`, an auth hook rereads the file on each request and sets the header:
+5. **Read the token file on every request.** The projected token expires after `expirationSeconds` (3600), and the kubelet replaces the file before then. A client that reads the file once at startup and passes it as a fixed `api_key` gets `401` after about an hour. For a Python client built on `httpx`, an auth hook rereads the file on each request and sets the header (the same hook as in the Level 1 section of [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion)). Set any placeholder as the `api_key`:
 
    ```python
    import httpx

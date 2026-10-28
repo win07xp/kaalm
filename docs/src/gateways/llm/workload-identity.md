@@ -66,6 +66,8 @@ This mode yields a namespace only, not a workload identity. Provider routing for
 
 The workload sets the token audience with a `projected` volume carrying `audience: kaalm-gateway`. The explicit audience keeps generic `kubernetes.default.svc` tokens, such as a stolen kubelet token, from being accepted; a workload that skips the projection gets `401` on every call. The workload must also mount the `kaalm-ca` ConfigMap so its calls pass TLS verification. The controller injects nothing into gateway-only Pods, so both steps are manual; see [Tiered on-ramp](../../operations/deployment.md#tiered-on-ramp).
 
+The kubelet replaces the projected token file before the token expires, so the workload reads the file on every request rather than once at startup. A token read once is rejected with `401` after it expires.
+
 ## Source-IP cross-check (both modes)
 
 The cross-check runs after authentication, never instead of it. Once authentication has produced a namespace, the gateway looks up the source IP in its Pod informer cache and confirms the Pod is in that namespace; a mismatch is rejected with `401 unauthorized`. This catches a stolen client certificate or a stolen ServiceAccount token presented from a different Pod: the cryptographic attestation and the topological attestation must agree. See the [threat model](../../security/threat-model.md).

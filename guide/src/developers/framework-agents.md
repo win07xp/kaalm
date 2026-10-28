@@ -8,8 +8,9 @@ needs no conversion at all.
 
 ## Level 1: gateway only, zero conversion
 
-An existing framework deployment stays exactly as deployed. Three changes,
-all configuration:
+An existing framework deployment keeps its framework and its graph. Three
+changes: two are configuration, and the credential (step 2) needs a small
+change in the client code.
 
 1. **Repoint the model client.** Set its `base_url` to the gateway. For
    OpenAI-format clients that is
@@ -31,11 +32,42 @@ all configuration:
                path: token
    ```
 
-   The gateway reads it as a bearer token from the `Authorization` header,
-   which is exactly where an OpenAI-format client puts its API key: pass
-   the token as the `api_key`. The Anthropic SDK sends its key in a header
-   the gateway never reads, so use its `auth_token` parameter instead,
-   which also lands in `Authorization`.
+   The gateway reads the token as a bearer token from the `Authorization`
+   header. The kubelet replaces the token file before the token expires
+   (`expirationSeconds`), so the client must read the file on every
+   request. A client that takes the token once, when it is built, keeps
+   sending the first one and gets `401` on every call after it expires,
+   until the Pod restarts. The file is the volume's `mountPath` plus
+   `path`. With `mountPath: /var/run/token`, it is `/var/run/token/token`.
+   With the `kaalm-ca` ConfigMap mounted at `/var/run/ca`, the CA is
+   `/var/run/ca/ca.crt`.
+
+   In Python, an `httpx` auth hook reads the file for each request and sets
+   the header. Pass the client to the OpenAI or Anthropic SDK as
+   `http_client`:
+
+   ```python
+   import httpx
+
+   class GatewayToken(httpx.Auth):
+       def auth_flow(self, request):
+           with open("/var/run/token/token") as f:
+               request.headers["Authorization"] = "Bearer " + f.read().strip()
+           yield request
+
+   http_client = httpx.Client(verify="/var/run/ca/ca.crt", auth=GatewayToken())
+   ```
+
+   Set any placeholder as the client's `api_key`, for both SDKs: they fail
+   without a credential, and the hook sets the header the gateway reads.
+   Step 3 says the gateway strips the client's own key before forwarding.
+
+   For an async client, use `httpx.AsyncClient` with the same class, for
+   `AsyncOpenAI` and `AsyncAnthropic`. A framework client takes both
+   `http_client` and `http_async_client`: supply both, for the reason given
+   under [Level 2](#level-2-full-lifecycle-the-framework-inside-the-handler).
+   In another language, build the client so it reads the file for each
+   request's credential, or rebuild the client when the file changes.
 3. **Qualify the model name.** `openai-shared/gpt-5.2` instead of
    `gpt-5.2`: the gateway reads the provider from the prefix and injects the
    real credential. Whatever key your client was configured with is
