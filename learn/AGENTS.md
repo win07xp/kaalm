@@ -8,15 +8,13 @@ details. Build with `make books` (which runs `make docs-check` first);
 ## Status
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
-recently for 2.0.1.
+recently for 2.1.0 (pass one).
 
-Pass one for 2.0.1 (2026-10-21, against locally built artifacts) walked every
+Pass one for 2.1.0 (2026-10-28, against locally built artifacts) walked every
 chapter clean on a fresh k3d cluster, and every command and block of output
-now comes from that run, in order. The only real change was the wake time in
-the sleep chapter (about 3 seconds, was about 12), and the replacement in
-"Make it yours" delivers the message sent while it runs. A second walk against
-the same artifacts caught the "Make it yours" state after the patch, where a
-reader who waits a few seconds sees `Running`, now covered.
+matched the pages apart from pod hashes, ages, IPs, and timestamps. The wake in
+the sleep chapter took 2.47 seconds, so the page's "about 3 seconds" holds.
+Only the version pin changed.
 
 Pass two for 2.0.1 (2026-10-21, after the tag) walked every chapter clean on a
 fresh k3d cluster, with the chart from the OCI registry and every image pulled
@@ -39,7 +37,7 @@ passes, and [RELEASING.md](../RELEASING.md) lists where each pass falls in the
 release. The walk history (what each pass caught) is in issues #77, #99, #115,
 #130, and #143.
 
-The install is pinned to `--version 2.0.1` on purpose: the pin is what makes
+The install is pinned to `--version 2.1.0` on purpose: the pin is what makes
 the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 

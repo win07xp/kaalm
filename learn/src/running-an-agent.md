@@ -43,7 +43,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1
+  image: ghcr.io/win07xp/kaalm-agent-python:2.1.0
   persistence:
     enabled: true
   lifecycle:

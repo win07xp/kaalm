@@ -79,13 +79,13 @@ leaving credentials behind when you delete an agent.
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 2.0.1 \
+  --version 2.1.0 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager \
   --wait
 ```
 
-`2.0.1` is the release this book was walked against. Newer releases are on the
+`2.1.0` is the release this book was walked against. Newer releases are on the
 [releases page](https://github.com/win07xp/kaalm/releases) and install the same
 way.
 
