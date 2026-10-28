@@ -55,7 +55,7 @@ Tell the user up front what it costs and what it does not give:
    - Trust: the client verifies the gateway with `/var/run/ca/ca.crt`.
    - Model: the qualified name `PROVIDER_NAME/MODEL_ID`, such as `openai-shared/gpt-5.2`. The gateway reads the provider from the prefix and injects the real key.
    - Credential: the projected token, sent as `Authorization: Bearer`.
-5. **Read the token file on every request.** The projected token expires after `expirationSeconds` (3600), and the kubelet replaces the file before then. A client that reads the file once at startup and passes it as a fixed `api_key` gets `401` after about an hour. [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion) says to pass the token as the `api_key`; use the hook below instead, with any placeholder as the `api_key`. For a Python client built on `httpx`, an auth hook rereads the file on each request and sets the header:
+5. **Read the token file on every request.** The projected token expires after `expirationSeconds` (3600), and the kubelet replaces the file before then. A client that reads the file once at startup and passes it as a fixed `api_key` gets `401` after about an hour. For a Python client built on `httpx`, an auth hook rereads the file on each request and sets the header (the same hook as in the Level 1 section of [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion)). Set any placeholder as the `api_key`:
 
    ```python
    import httpx
@@ -69,7 +69,7 @@ Tell the user up front what it costs and what it does not give:
    http_client = httpx.Client(verify="/var/run/ca/ca.crt", auth=GatewayToken())
    ```
 
-   Pass `http_client` to the framework's model client (the OpenAI and Anthropic SDKs accept one), and use `httpx.AsyncClient` with the same class for an async client. For another language, build the client so its credential function reads the file each time.
+   Pass `http_client` to the framework's model client (the OpenAI and Anthropic SDKs accept one), and use `httpx.AsyncClient` with the same class for an async client. A framework client that takes both `http_client` and `http_async_client`, such as LangChain's `ChatOpenAI`, needs the hook on both. Anthropic SDK 2.0 and later uses the `httpx2` package, not `httpx`. For it, import `httpx2` and use `httpx2.Auth` and `httpx2.Client` (or `httpx2.AsyncClient`) with the same class body. Passing an `httpx.Client` to it raises a `TypeError` when you construct the SDK client. Earlier versions take the `httpx` client shown. For another language, build the client so its credential function reads the file each time.
 6. **Check it.** Send one request from the workload. A request from a new Pod can get `401` until the gateway has seen the Pod, so retry for a few seconds. Then read spend, which the provider's status syncs periodically:
 
    ```bash

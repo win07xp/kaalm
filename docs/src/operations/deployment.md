@@ -283,7 +283,7 @@ Install the chart, configure a [ModelProvider](../resources/modelprovider.md), a
 
 Existing workloads authenticate with a projected ServiceAccount token ([Mode 2](../gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token)). Kaalm does not mutate their Pods, so three things are on the workload owner:
 
-1. **Project the token** with a `serviceAccountToken` volume whose `audience` is `kaalm-gateway`. The default `kubernetes.default.svc` audience is rejected with `401`.
+1. **Project the token** with a `serviceAccountToken` volume whose `audience` is `kaalm-gateway`. The default `kubernetes.default.svc` audience is rejected with `401`. The workload reads the token file on every request; see [Caller-side setup](../gateways/llm/workload-identity.md#caller-side-setup).
 2. **Supply the gateway URL** in the manifest: `https://kaalm-gateway.kaalm-system.svc:8443`. The controller injects `$KAALM_GATEWAY_ENDPOINT` only into Pods it creates.
 3. **Trust the CA** by mounting the `kaalm-ca` ConfigMap trust-manager projects into the namespace and pointing the HTTP client at it.
 
