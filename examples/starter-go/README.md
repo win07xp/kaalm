@@ -40,9 +40,17 @@ changes.
 
 ```bash
 cp -r examples/starter-go my-agent && cd my-agent
-go mod tidy    # pins the published agentruntime/v2 version, writes go.sum
+go get github.com/win07xp/kaalm/agentruntime/v2@vX.Y.Z
+go mod tidy    # writes go.sum
 docker build -t registry.example/agents/my-agent:v1 .
 ```
+
+Replace `X.Y.Z` with the version of the Kaalm chart installed on your
+cluster. `helm list -n kaalm-system` shows it as the app version. Every
+release tags the runtime module with the same version, so the pinned runtime
+matches the controller and gateway you run. Without the `go get`, `go mod tidy`
+finds no `require` line and resolves the newest published module, which can be
+newer than your cluster.
 
 The [Dockerfile](Dockerfile) compiles your program and layers the binary onto
 the `kaalm-agent-go` base image, replacing its default-handler binary at

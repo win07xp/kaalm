@@ -58,7 +58,7 @@ make e2e                                # full k3d e2e suite
   run a bare `go work init`: it writes the local toolchain version into the file.
 - `examples/starter-go/go.mod` has no `require` line on purpose. The
   workspace resolves the `agentruntime` import, and a copy of the template
-  runs `go mod tidy`.
+  pins the module with `go get ...@vX.Y.Z`, then runs `go mod tidy`.
 - `make cover-check` runs with `GOWORK=off`. Workspace mode changes how
   `-coverpkg` attributes coverage, so the union reads about 75% instead of
   about 87% with the same tests. The target also deletes a stale `cover.out`
