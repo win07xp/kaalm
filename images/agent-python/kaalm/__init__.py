@@ -10,11 +10,13 @@ append-only within a minor release series:
   key prefix. Backed by the PVC when persistence is enabled, in-memory
   otherwise.
 - ``kaalm.http_client()`` / ``kaalm.http_async_client()``: factories for
-  httpx.Client / httpx.AsyncClient objects carrying the same mTLS identity
-  and CA trust, rebuilt internally on certificate rotation. Their names
-  mirror the ``http_client=`` / ``http_async_client=`` keyword arguments the
-  framework SDKs take; extra keyword arguments pass through to the httpx
-  constructor.
+  client objects carrying the same mTLS identity and CA trust, rebuilt
+  internally on certificate rotation. They return httpx.Client /
+  httpx.AsyncClient by default and httpx2.Client / httpx2.AsyncClient with
+  ``package="httpx2"`` (the Anthropic SDK 2.0 and later accepts only httpx2
+  clients). Their names mirror the ``http_client=`` / ``http_async_client=``
+  keyword arguments the framework SDKs take; extra keyword arguments pass
+  through to the chosen package's client constructor.
 - ``kaalm.trace_context()``: the W3C trace context of the message being
   handled, as a ``{"traceparent": ..., "tracestate": ...}`` dict (empty
   outside message handling). The runtime already forwards it on every

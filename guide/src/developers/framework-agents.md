@@ -113,9 +113,28 @@ model = ChatOpenAI(
 `kaalm.http_client()` and `kaalm.http_async_client()` mint standard httpx
 clients that carry the pod's mTLS identity and keep it current across
 certificate rotation. Pass both: a framework that touches the async path with
-only a sync client supplied would silently run without your identity. Write the handler as `async def` and use the framework's async
-invocation: the runtime executes sync handlers on a thread without an
-event loop.
+only a sync client supplied would silently run without your identity. Write
+the handler as `async def` and use the framework's async invocation: the
+runtime executes sync handlers on a thread without an event loop.
+
+The Anthropic SDK 2.0 and later accepts only httpx2 clients and raises a
+`TypeError` at client construction when given an httpx client. Pass
+`package="httpx2"` to either factory to mint httpx2 clients. The OpenAI SDK,
+and so LangChain's `ChatOpenAI`, accepts the default httpx client, so the
+example above needs no change. The Anthropic endpoint has no `/v1`:
+
+```python
+client = anthropic.AsyncAnthropic(
+    base_url=os.environ["KAALM_GATEWAY_ENDPOINT"],
+    api_key="managed-by-kaalm",
+    http_client=kaalm.http_async_client(package="httpx2"),
+)
+```
+
+Identity, rotation, and the arguments the factories reject are the same for
+either package. The design book's
+[Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-image)
+states the contract.
 
 Three worked examples live in the repository, each runnable and each proving a
 different combination:

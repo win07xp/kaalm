@@ -1,14 +1,16 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 """Trace-context propagation: the capture primitive, and the injection every
-ABI client performs (the gateway client and both httpx transports)."""
+ABI client performs (the gateway client and the httpx and httpx2
+transports)."""
 
 from __future__ import annotations
 
 import asyncio
 
-from aiohttp import web
-
 import httpx
+import httpx2
+import pytest
+from aiohttp import web
 
 from kaalm_agent import tracecontext
 from kaalm_agent.gateway import GatewayClient
@@ -105,9 +107,10 @@ async def test_gateway_client_caller_headers_win(aiohttp_server):
         await client.close()
 
 
-async def test_httpx_async_transport_injects(aiohttp_server):
+@pytest.mark.parametrize("package", ["httpx", "httpx2"])
+async def test_httpx_async_transport_injects(aiohttp_server, package):
     server = await _header_server(aiohttp_server)
-    client = make_http_async_client(HttpxFakeReloader())
+    client = make_http_async_client(HttpxFakeReloader(), package=package)
     try:
         tracecontext.set_from_headers({"traceparent": PARENT})
         resp = await client.get(str(server.make_url("/echo")))
@@ -120,17 +123,18 @@ async def test_httpx_async_transport_injects(aiohttp_server):
         await client.aclose()
 
 
-def test_httpx_sync_injection_primitive():
-    # The sync transport shares _apply_trace_context with the async one;
-    # exercise the primitive directly on a request object.
-    request = httpx.Request("GET", "http://gateway/echo")
+@pytest.mark.parametrize("lib", [httpx, httpx2], ids=["httpx", "httpx2"])
+def test_httpx_sync_injection_primitive(lib):
+    # The sync transports share _apply_trace_context with the async ones;
+    # exercise the primitive directly on a request object of each package.
+    request = lib.Request("GET", "http://gateway/echo")
     tracecontext.set_from_headers({"traceparent": PARENT, "tracestate": "kaalm=1"})
     try:
         _apply_trace_context(request)
         assert request.headers["traceparent"] == PARENT
         assert request.headers["tracestate"] == "kaalm=1"
 
-        held = httpx.Request("GET", "http://gateway/echo", headers={"traceparent": "00-caller"})
+        held = lib.Request("GET", "http://gateway/echo", headers={"traceparent": "00-caller"})
         _apply_trace_context(held)
         assert held.headers["traceparent"] == "00-caller"
     finally:
