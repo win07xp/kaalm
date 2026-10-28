@@ -7,6 +7,7 @@
 - [Installation](getting-started/installation.md)
 - [Verifying the install](getting-started/verifying.md)
 - [Upgrading Kaalm](getting-started/upgrading.md)
+- [Using the agent skill](getting-started/agent-skill.md)
 
 # For platform teams
 

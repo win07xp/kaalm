@@ -88,6 +88,9 @@ This chapter is a signpost, not a manual. The full versions:
 - The skill's entry point,
   [SKILL.md](https://github.com/win07xp/kaalm/blob/v2.1.0/plugins/kaalm/skills/kaalm/SKILL.md),
   lists every task it can do and the safety rules above.
+- [Using the agent skill](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/agent-skill.md)
+  in the user guide, for installing at your Kaalm version, upgrading, and the
+  config file.
 - The [Introduction](https://github.com/win07xp/kaalm/blob/main/guide/src/introduction.md)
   to the user guide, for the same work done by hand.
 

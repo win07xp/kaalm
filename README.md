@@ -86,7 +86,9 @@ know and asks before every change. You can ask it to:
 - Set Kaalm up for teams.
 - Find out why something is not Ready.
 
-For a beginner's walkthrough, see
+For installing at your version, upgrading, and the safety rules, see
+[Using the agent skill](guide/src/getting-started/agent-skill.md). For a
+beginner's walkthrough, see
 [Let a coding agent help](learn/src/let-a-coding-agent-help.md).
 
 In Claude Code, add the marketplace at the tag that matches the Kaalm release
