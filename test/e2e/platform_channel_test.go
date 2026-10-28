@@ -20,6 +20,7 @@ package e2e
 
 import (
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -64,7 +65,45 @@ func applyPlatformChannel(pc platformChannel) (stop func(), mockURL string) {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(names).To(ContainSubstring(pc.Secret))
 
+	By("the controller holds an open watch on a Secret in namespace e2e, so the channel's check Role grants list")
+	expectControllerWatchesSecrets()
+
 	port, stop, err := utils.PortForward("e2e", pc.Mock, "8080")
 	Expect(err).NotTo(HaveOccurred())
 	return stop, fmt.Sprintf("http://127.0.0.1:%d", port)
+}
+
+// expectControllerWatchesSecrets asserts that some controller replica holds
+// an open watch on a user-namespace Secret. The controller's Secret watcher
+// holds only user-namespace Secrets (kaalm-system ones come from the manager
+// cache), and a Role whose list is refused falls back to a get per read and
+// is not counted, so a value above zero shows a minted Role's name-selected
+// list passed RBAC. Only the leader reads Secrets and a standby reports 0, so
+// every controller Pod is scraped.
+func expectControllerWatchesSecrets() {
+	out, err := utils.Kubectl("get", "pods", "-n", "kaalm-system",
+		"-l", "app.kubernetes.io/component=controller", "-o", "jsonpath={.items[*].metadata.name}")
+	Expect(err).NotTo(HaveOccurred())
+	pods := strings.Fields(out)
+	Expect(pods).NotTo(BeEmpty())
+
+	var ports []int
+	for _, pod := range pods {
+		port, stop, err := utils.PortForwardTarget("kaalm-system", "pod/"+pod, "8080")
+		Expect(err).NotTo(HaveOccurred())
+		defer stop()
+		ports = append(ports, port)
+	}
+	Eventually(func() string {
+		var pages []string
+		for _, port := range ports {
+			// A replica that fails one scrape is read again on the next poll.
+			if page, err := scrape(fmt.Sprintf("http://127.0.0.1:%d/metrics", port)); err == nil {
+				pages = append(pages, page)
+			}
+		}
+		return strings.Join(pages, "\n")
+	}, "60s", "3s").Should(MatchRegexp(`(?m)^kaalm_watched_secrets [1-9]`),
+		"no controller replica holds an open watch on a user-namespace Secret: "+
+			"the leader read the channel's Secret with get only, so the check Role's list was refused")
 }
