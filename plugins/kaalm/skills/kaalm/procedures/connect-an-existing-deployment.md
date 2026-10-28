@@ -1,6 +1,6 @@
 # Connect an existing deployment to the gateway
 
-Use this when a workload stays a plain Deployment (or StatefulSet or Job) and only sends its model calls through Kaalm's gateway. This is the gateway-only tier, Level 1 in [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion). The workload keeps its image and its code. The model key leaves its Pods, and the namespace's budgets, rate limits, and fallback apply to every call. The tier is defined in [Tiered on-ramp](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#tiered-on-ramp), and the caller's side in [Workload identity](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/workload-identity.md#caller-side-setup).
+Use this when a workload stays a plain Deployment (or StatefulSet or Job) and only sends its model calls through Kaalm's gateway. This is the gateway-only tier, Level 1 in [Running framework agents](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion). The workload keeps its image and its code. The model key leaves its Pods, and the namespace's budgets, rate limits, and fallback apply to every call. The tier is defined in [Tiered on-ramp](https://github.com/win07xp/kaalm/blob/v2.1.0/docs/src/operations/deployment.md#tiered-on-ramp), and the caller's side in [Workload identity](https://github.com/win07xp/kaalm/blob/v2.1.0/docs/src/gateways/llm/workload-identity.md#caller-side-setup).
 
 Tell the user up front what it costs and what it does not give:
 
@@ -8,7 +8,7 @@ Tell the user up front what it costs and what it does not give:
 - The model key that the workload used sat in its Pods, so step 7 removes it and rotates it.
 
 - No Agent resource, so no lifecycle, no hibernation, no channels, and no per-agent identity. The namespace is the unit of tenancy.
-- No NetworkPolicy for the workload's Pods. Budgets and access checks hold only for traffic that goes through the gateway, so a direct call to the model provider is not blocked unless the platform team writes a policy that denies it. See [Adoption tiers](https://github.com/win07xp/kaalm/blob/main/docs/src/concepts/tenancy-and-tiers.md#adoption-tiers).
+- No NetworkPolicy for the workload's Pods. Budgets and access checks hold only for traffic that goes through the gateway, so a direct call to the model provider is not blocked unless the platform team writes a policy that denies it. See [Adoption tiers](https://github.com/win07xp/kaalm/blob/v2.1.0/docs/src/concepts/tenancy-and-tiers.md#adoption-tiers).
 
 ## Steps
 
@@ -19,8 +19,8 @@ Tell the user up front what it costs and what it does not give:
    kubectl --context CONTEXT get configmap kaalm-ca -n NAMESPACE
    ```
 
-   trust-manager projects it into every namespace unless the chart value `trustManager.bundleSelector` narrows it ([values.yaml](https://github.com/win07xp/kaalm/blob/main/charts/kaalm/values.yaml)). If the ConfigMap is missing, the selector excludes the namespace. Widening it is a Helm upgrade by the platform team: use [change-safely.md](change-safely.md), including its rule for when the user may not make the change.
-3. **Add the token and the CA to the workload's Pod template.** Kaalm does not change these Pods, so the owner does. The pattern is from [llm-caller.yaml](https://github.com/win07xp/kaalm/blob/main/test/e2e/testdata/llm-caller.yaml):
+   trust-manager projects it into every namespace unless the chart value `trustManager.bundleSelector` narrows it ([values.yaml](https://github.com/win07xp/kaalm/blob/v2.1.0/charts/kaalm/values.yaml)). If the ConfigMap is missing, the selector excludes the namespace. Widening it is a Helm upgrade by the platform team: use [change-safely.md](change-safely.md), including its rule for when the user may not make the change.
+3. **Add the token and the CA to the workload's Pod template.** Kaalm does not change these Pods, so the owner does. The pattern is from [llm-caller.yaml](https://github.com/win07xp/kaalm/blob/v2.1.0/test/e2e/testdata/llm-caller.yaml):
 
    ```yaml
    spec:
@@ -55,7 +55,7 @@ Tell the user up front what it costs and what it does not give:
    - Trust: the client verifies the gateway with `/var/run/ca/ca.crt`.
    - Model: the qualified name `PROVIDER_NAME/MODEL_ID`, such as `openai-shared/gpt-5.2`. The gateway reads the provider from the prefix and injects the real key.
    - Credential: the projected token, sent as `Authorization: Bearer`.
-5. **Read the token file on every request.** The projected token expires after `expirationSeconds` (3600), and the kubelet replaces the file before then. A client that reads the file once at startup and passes it as a fixed `api_key` gets `401` after about an hour. For a Python client built on `httpx`, an auth hook rereads the file on each request and sets the header (the same hook as in the Level 1 section of [Running framework agents](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion)). Set any placeholder as the `api_key`:
+5. **Read the token file on every request.** The projected token expires after `expirationSeconds` (3600), and the kubelet replaces the file before then. A client that reads the file once at startup and passes it as a fixed `api_key` gets `401` after about an hour. For a Python client built on `httpx`, an auth hook rereads the file on each request and sets the header (the same hook as in the Level 1 section of [Running framework agents](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/developers/framework-agents.md#level-1-gateway-only-zero-conversion)). Set any placeholder as the `api_key`:
 
    ```python
    import httpx
@@ -76,7 +76,7 @@ Tell the user up front what it costs and what it does not give:
    kubectl --context CONTEXT get modelprovider PROVIDER_NAME -o jsonpath='{.status.budgetUsage}'
    ```
 
-   A `403` with `access_denied` means a provider check failed: [LLM call returns 403 access_denied](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/troubleshooting.md#llm-call-returns-403-access_denied). A `401` has the causes listed under [Mode 2](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token): a token with the wrong audience, a token the apiserver rejects, or a Pod that Kaalm manages. Use [diagnose.md](diagnose.md) for the provider's own status.
+   A `403` with `access_denied` means a provider check failed: [LLM call returns 403 access_denied](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/reference/troubleshooting.md#llm-call-returns-403-access_denied). A `401` has the causes listed under [Mode 2](https://github.com/win07xp/kaalm/blob/v2.1.0/docs/src/gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token): a token with the wrong audience, a token the apiserver rejects, or a Pod that Kaalm manages. Use [diagnose.md](diagnose.md) for the provider's own status.
 
 7. **Remove the old key and rotate it.** The workload's own copy of the provider key sat in its Pods, in an environment variable or a Secret, so anyone who could read those had it. Start only after step 6's check succeeds, because until then the old key lets a failed check roll back to the old setup. Do these in order, each with the user's OK:
    1. Edit the workload to drop the key: remove the environment variable or mount from the Pod template, through [change-safely.md](change-safely.md).

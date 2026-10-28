@@ -34,7 +34,7 @@ metadata:
 spec:
   agentClassRef:
     name: starter
-  image: ghcr.io/win07xp/kaalm-agent-python:2.0.1
+  image: ghcr.io/win07xp/kaalm-agent-python:2.1.0
 ```
 
 It reaches `Running` and answers every message with `echo: ` plus the

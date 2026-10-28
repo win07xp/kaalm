@@ -2,7 +2,7 @@
 
 Check these in order. Stop at the first piece that is missing. Check each piece before you change anything, say in a sentence what the piece is for, and fix it only with the user's OK, using [change-safely.md](change-safely.md). A piece that passes gets one line.
 
-The full list of what Kaalm expects is in [What you need before starting](https://github.com/win07xp/kaalm/blob/main/guide/src/introduction.md#what-you-need-before-starting) and [Prerequisites](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/installation.md#prerequisites).
+The full list of what Kaalm expects is in [What you need before starting](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/introduction.md#what-you-need-before-starting) and [Prerequisites](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/getting-started/installation.md#prerequisites).
 
 ## 1. kubectl and helm
 
@@ -11,7 +11,7 @@ kubectl version --client
 helm version --short
 ```
 
-*kubectl* is the remote control for a cluster. *Helm* is the installer that puts Kaalm on it. Helm must be 3.8 or newer, as the learn book says in [Check they worked](https://github.com/win07xp/kaalm/blob/main/learn/src/setting-up.md#check-they-worked), because Kaalm's chart comes from a container registry.
+*kubectl* is the remote control for a cluster. *Helm* is the installer that puts Kaalm on it. Helm must be 3.8 or newer, as the learn book says in [Check they worked](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/setting-up.md#check-they-worked), because Kaalm's chart comes from a container registry.
 
 The channel steps ([connect-a-channel.md](connect-a-channel.md)) also use `curl`, `base64`, `head`, `od`, and `tr`. They come with macOS and most Linux systems; on Windows the user runs them in WSL or Git Bash. Check with `command -v curl base64 od`.
 
@@ -37,11 +37,11 @@ kubectl --context CONTEXT get pods -n cert-manager
 
 *cert-manager* issues each agent its own TLS certificate, which is its identity. *trust-manager* shares the certificate authority, so the parts can check each other's identity. Both must be running before Kaalm is installed, and cert-manager needs `--enable-certificate-owner-ref=true`. Every Pod in the namespace must be `Running` with all its containers ready (`READY` such as `1/1`). That covers cert-manager's controller, webhook, and cainjector Pods and trust-manager's Pod. Use the namespace cert-manager is installed in, `cert-manager` by default. A *namespace* is a named folder for objects inside the cluster, and each add-on keeps its parts in its own.
 
-If either is missing, read the "The prerequisites" section of [A cluster in one command](https://github.com/win07xp/kaalm/blob/main/learn/src/a-cluster-in-one-command.md#the-prerequisites) and run its Helm commands for the user. Keep its `--set` values, and note the namespace you install into, which Kaalm's install needs as `certManager.clusterResourceNamespace`.
+If either is missing, read the "The prerequisites" section of [A cluster in one command](https://github.com/win07xp/kaalm/blob/v2.1.0/learn/src/a-cluster-in-one-command.md#the-prerequisites) and run its Helm commands for the user. Keep its `--set` values, and note the namespace you install into, which Kaalm's install needs as `certManager.clusterResourceNamespace`.
 
 ## 4. Kaalm and its version
 
-Run the version check in the skill's [SKILL.md](../SKILL.md#the-version-check). If Kaalm is missing, use [install-kaalm.md](install-kaalm.md). If it is installed, check it as [Verifying the install](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/verifying.md) describes.
+Run the version check in the skill's [SKILL.md](../SKILL.md#the-version-check). If Kaalm is missing, use [install-kaalm.md](install-kaalm.md). If it is installed, check it as [Verifying the install](https://github.com/win07xp/kaalm/blob/v2.1.0/guide/src/getting-started/verifying.md) describes.
 
 ## 5. A model provider key
 

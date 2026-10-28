@@ -1,6 +1,6 @@
 {
   "name": "kaalm",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Install Kaalm and run AI agents on Kubernetes with it: set up a cluster, deploy and fix Agents and AgentTasks, and read their status.",
   "homepage": "https://github.com/win07xp/kaalm",
   "repository": "https://github.com/win07xp/kaalm",
