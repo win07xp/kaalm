@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -37,6 +39,40 @@ func withReferrerIndexes(b *fake.ClientBuilder) *fake.ClientBuilder {
 		b = b.WithIndex(r.obj, r.f.key, r.f.extract)
 	}
 	return b
+}
+
+// withPodControllerIndex registers IndexPodController. A fake whose
+// reconcile reaches the Pod step (ownedPod or ownedTaskPod) must register
+// it: the fake client refuses a list by an unregistered index.
+func withPodControllerIndex(b *fake.ClientBuilder) *fake.ClientBuilder {
+	return b.WithIndex(&corev1.Pod{}, IndexPodController, podControllerIndex)
+}
+
+// TestPodControllerIndex: a Pod is indexed by its controller ownerRef's UID
+// only; a non-controller ownerRef or no ownerRef indexes nothing.
+func TestPodControllerIndex(t *testing.T) {
+	isController := true
+	ref := func(uid string, controller *bool) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{
+			APIVersion: kaalmv1beta1.GroupVersion.String(), Kind: "Agent",
+			Name: "a", UID: types.UID(uid), Controller: controller,
+		}}
+	}
+	cases := []struct {
+		name string
+		obj  client.Object
+		want []string
+	}{
+		{"controller ownerRef", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{OwnerReferences: ref("u-a", &isController)}}, []string{"u-a"}},
+		{"non-controller ownerRef", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{OwnerReferences: ref("u-a", nil)}}, nil},
+		{"no ownerRefs", &corev1.Pod{}, nil},
+		{"non-Pod object", &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{OwnerReferences: ref("u-t", &isController)}}, []string{"u-t"}},
+	}
+	for _, tc := range cases {
+		if got := podControllerIndex(tc.obj); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: podControllerIndex = %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
 
 func TestEnvSecretRefIndex(t *testing.T) {

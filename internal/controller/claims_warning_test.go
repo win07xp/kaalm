@@ -177,7 +177,7 @@ func TestAgentTask_TerminalTaskDoesNotWarnAboutClaims(t *testing.T) {
 		},
 		Status: kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.TaskSucceeded, CompletionTime: &done},
 	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).WithStatusSubresource(task).Build()
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task).WithStatusSubresource(task).Build()
 	rec := events.NewFakeRecorder(8)
 	r := &AgentTaskReconciler{Client: c, Recorder: rec}
 	r.claimsWarned.sent = map[types.UID]string{task.UID: "earlier"}

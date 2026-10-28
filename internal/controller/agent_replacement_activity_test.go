@@ -384,7 +384,7 @@ func TestConvergePod_MarksInvoluntaryReplacement(t *testing.T) {
 // the retry still floors the activity of the Pod it creates.
 func TestConvergePod_PersistsDisruptionBeforeCreate(t *testing.T) {
 	agent := disruptedAgent(kaalmv1beta1.AgentRunning, kaalmv1beta1.ReasonPodCurrent)
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).
 		WithStatusSubresource(&kaalmv1beta1.Agent{}).
 		WithObjects(agent).
 		WithInterceptorFuncs(interceptor.Funcs{

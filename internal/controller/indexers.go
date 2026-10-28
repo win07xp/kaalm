@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,7 +30,8 @@ import (
 )
 
 // Field index keys. Cross-resource lookups (usage counts, reference tracking,
-// re-enqueue on a referenced object's change) go through these indexes rather
+// re-enqueue on a referenced object's change, a workload's lookup of its own
+// Pod) go through these indexes rather
 // than full list scans, so the controller stays cheap at the 1000-workload target
 // (docs/src/controller/overview.md). The check that releases a delete also
 // lists from the API server when the cache shows no referrer (deleteReferrers
@@ -72,6 +74,11 @@ const (
 	// IndexClassPullSecret indexes AgentClasses by each
 	// spec.image.imagePullSecrets[].name (a multi-value index).
 	IndexClassPullSecret = "spec.image.imagePullSecrets.name"
+	// IndexPodController indexes Pods by the UID of their controller
+	// ownerRef (the Agent or AgentTask that owns them), so a workload's
+	// lookup of its own Pod reads only its Pods, not every Pod in the
+	// namespace.
+	IndexPodController = "metadata.controller.uid"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -103,6 +110,9 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 		return err
 	}
 	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentClass{}, IndexClassPullSecret, classPullSecretIndex); err != nil {
+		return err
+	}
+	if err := idx.IndexField(ctx, &corev1.Pod{}, IndexPodController, podControllerIndex); err != nil {
 		return err
 	}
 	return nil
@@ -247,6 +257,19 @@ func asyncChannelIndex(o client.Object) []string {
 		return nil
 	}
 	return []string{ns + "/" + name}
+}
+
+// podControllerIndex is the IndexPodController extractor. An object with no
+// controller ownerRef is not indexed. The UID is indexed as the ownerRef
+// carries it, an empty one included: the key is whatever UID the owner had
+// when the Pod was made, and a fake client assigns no UIDs, so owners and
+// Pods made in a fake carry "" and still match.
+func podControllerIndex(o client.Object) []string {
+	ref := metav1.GetControllerOf(o)
+	if ref == nil {
+		return nil
+	}
+	return []string{string(ref.UID)}
 }
 
 // channelPathIndex is the IndexChannelPath extractor.

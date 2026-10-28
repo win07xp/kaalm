@@ -846,7 +846,7 @@ func newErrListClient(t *testing.T) client.Client {
 // error, to exercise the Get error branches.
 func newErrGetClient(t *testing.T) client.Client {
 	t.Helper()
-	return fake.NewClientBuilder().WithScheme(testScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+	return withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithInterceptorFuncs(interceptor.Funcs{
 		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
 			return fmt.Errorf("injected get failure")
 		},
@@ -857,7 +857,7 @@ func newErrGetClient(t *testing.T) client.Client {
 // non-AlreadyExists error, to exercise the child-convergence error branches.
 func newErrCreateClient(t *testing.T) client.Client {
 	t.Helper()
-	return fake.NewClientBuilder().WithScheme(testScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+	return withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithInterceptorFuncs(interceptor.Funcs{
 		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 			return fmt.Errorf("injected create failure")
 		},

@@ -1447,7 +1447,7 @@ func TestEnsureCertificate_KeepsExistingSecretName(t *testing.T) {
 	if err := controllerutil.SetControllerReference(agent, cert, scheme); err != nil {
 		t.Fatal(err)
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cert).WithStatusSubresource(cert).Build()
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(scheme)).WithObjects(cert).WithStatusSubresource(cert).Build()
 	key := client.ObjectKeyFromObject(cert)
 	var before cmapi.Certificate
 	if err := c.Get(ctx, key, &before); err != nil {

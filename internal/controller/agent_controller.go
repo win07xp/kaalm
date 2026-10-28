@@ -1437,11 +1437,13 @@ func podPendingPhase(agent *kaalmv1beta1.Agent) kaalmv1beta1.AgentPhase {
 }
 
 // ownedPod returns the Agent's live Pod, preferring a non-terminating one when
-// a replacement overlaps a termination.
+// a replacement overlaps a termination. The list goes through
+// IndexPodController, so a pass reads only this Agent's Pods, not every Pod
+// in the namespace.
 func (r *AgentReconciler) ownedPod(ctx context.Context, agent *kaalmv1beta1.Agent) (*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(agent.Namespace),
-		client.MatchingLabels(agentPodLabels(agent))); err != nil {
+		client.MatchingFields{IndexPodController: string(agent.UID)}); err != nil {
 		return nil, err
 	}
 	var candidate *corev1.Pod

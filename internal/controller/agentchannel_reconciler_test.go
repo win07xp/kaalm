@@ -239,6 +239,34 @@ func TestChannel_ServiceDisabled(t *testing.T) {
 	expectChannelReady(t, "ch-svc", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentServiceDisabled)
 }
 
+// A change to the bound Agent's service.enabled reaches the channel through
+// the Agent watch, well inside the one-minute requeue: the channel turns
+// AgentServiceDisabled when the service goes off and Ready again when it
+// comes back.
+func TestChannel_AgentServiceToggleWakesChannel(t *testing.T) {
+	mkWorkloadClass(t, "chc-svc-toggle", nil)
+	mkWorkloadAgent(t, "ch-agent-svc-toggle", "chc-svc-toggle", nil)
+	mkChannelSecret(t, "ch-svc-toggle-secret")
+	mkChannel(t, "ch-svc-toggle", "ch-agent-svc-toggle", "/channels/default/ch-svc-toggle", nil)
+	expectChannelReady(t, "ch-svc-toggle", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	setService := func(enabled bool) {
+		eventually(t, func() error {
+			var ag kaalmv1beta1.Agent
+			if err := testAPIReader.Get(ctxT(),
+				types.NamespacedName{Namespace: "default", Name: "ch-agent-svc-toggle"}, &ag); err != nil {
+				return err
+			}
+			ag.Spec.Service = &kaalmv1beta1.AgentService{Enabled: enabled}
+			return testClient.Update(ctxT(), &ag)
+		})
+	}
+	setService(false)
+	expectChannelReady(t, "ch-svc-toggle", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentServiceDisabled)
+	setService(true)
+	expectChannelReady(t, "ch-svc-toggle", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+}
+
 func TestChannel_InvalidPathPrefix(t *testing.T) {
 	mkWorkloadClass(t, "chc-path", nil)
 	mkWorkloadAgent(t, "ch-agent-path", "chc-path", nil)
@@ -658,23 +686,11 @@ func TestChannel_UnresolvableCallbackHostWarns(t *testing.T) {
 		return nil
 	})
 
-	// More passes through the Agent watch must not repeat the Warning.
-	var agent kaalmv1beta1.Agent
-	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
-		t.Fatal(err)
-	}
+	// More passes through the Agent watch must not repeat the Warning. Each
+	// Agent phase write re-enqueues the channel.
 	for i := 0; i < 2; i++ {
-		if agent.Labels == nil {
-			agent.Labels = map[string]string{}
-		}
-		agent.Labels["touch"] = fmt.Sprint(i)
-		if err := testClient.Update(ctxT(), &agent); err != nil {
-			t.Fatal(err)
-		}
+		flipAgentPhase(t, "ch-agent-nxcb")
 		time.Sleep(time.Second)
-		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
-			t.Fatal(err)
-		}
 	}
 	time.Sleep(time.Second)
 	evs, err := unresolvedEvents()
@@ -1783,19 +1799,9 @@ func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Touching the Agent re-enqueues the channel through the Agent watch;
-	// the pass finds nothing to change.
-	var agent kaalmv1beta1.Agent
-	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-quiet"}, &agent); err != nil {
-		t.Fatal(err)
-	}
-	if agent.Labels == nil {
-		agent.Labels = map[string]string{}
-	}
-	agent.Labels["touch"] = "1"
-	if err := testClient.Update(ctxT(), &agent); err != nil {
-		t.Fatal(err)
-	}
+	// An Agent phase write re-enqueues the channel through the Agent watch;
+	// both phases reduce to Active, so the pass finds nothing to change.
+	flipAgentPhase(t, "ch-agent-quiet")
 	time.Sleep(3 * time.Second)
 	var after kaalmv1beta1.AgentChannel
 	if err := testAPIReader.Get(ctxT(), key, &after); err != nil {
@@ -1804,6 +1810,26 @@ func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 	if after.ResourceVersion != settled.ResourceVersion {
 		t.Errorf("an unchanged pass rewrote the channel: resourceVersion %s -> %s", settled.ResourceVersion, after.ResourceVersion)
 	}
+}
+
+// flipAgentPhase writes the Agent's status.phase to the other of Pending and
+// Provisioning, a change the channel's Agent watch admits. Both reduce to
+// the Active channel phase, so the channel pass it starts finds nothing to
+// change. The Agent reconciler also writes the phase, so a conflict retries.
+func flipAgentPhase(t *testing.T, name string) {
+	t.Helper()
+	eventually(t, func() error {
+		var agent kaalmv1beta1.Agent
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &agent); err != nil {
+			return err
+		}
+		if agent.Status.Phase == kaalmv1beta1.AgentProvisioning {
+			agent.Status.Phase = kaalmv1beta1.AgentPending
+		} else {
+			agent.Status.Phase = kaalmv1beta1.AgentProvisioning
+		}
+		return testClient.Status().Update(ctxT(), &agent)
+	})
 }
 
 // A Role with the channel's credential Role name that the channel does not

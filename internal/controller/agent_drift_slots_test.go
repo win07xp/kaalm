@@ -69,7 +69,7 @@ func slotClient(t *testing.T, agents ...*kaalmv1beta1.Agent) client.Client {
 	for _, a := range agents {
 		objs = append(objs, a)
 	}
-	return withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t))).
+	return withPodControllerIndex(withReferrerIndexes(fake.NewClientBuilder().WithScheme(testScheme(t)))).
 		WithStatusSubresource(&kaalmv1beta1.Agent{}).
 		WithObjects(objs...).Build()
 }

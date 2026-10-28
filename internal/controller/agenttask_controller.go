@@ -1031,10 +1031,14 @@ func (r *AgentTaskReconciler) readMailbox(ctx context.Context, task *kaalmv1beta
 	return parseCompletion(cm.Data), nil
 }
 
+// ownedTaskPod returns the AgentTask's Pod, preferring a non-terminating one
+// when a retry's Pod overlaps a termination. The list goes through
+// IndexPodController, so a pass reads only this task's Pods, not every Pod
+// in the namespace.
 func (r *AgentTaskReconciler) ownedTaskPod(ctx context.Context, task *kaalmv1beta1.AgentTask) (*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(task.Namespace),
-		client.MatchingLabels(taskPodLabels(task))); err != nil {
+		client.MatchingFields{IndexPodController: string(task.UID)}); err != nil {
 		return nil, err
 	}
 	var candidate *corev1.Pod

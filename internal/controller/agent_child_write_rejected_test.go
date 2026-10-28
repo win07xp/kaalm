@@ -192,7 +192,7 @@ func TestAgent_ChildWriteRejectedKeepsRunningPod(t *testing.T) {
 // Warning carries the same text.
 func TestAgent_ChildWriteRejectedCutsLongDenial(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "long-denial", Namespace: "default"}}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(agent).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(agent).
 		WithStatusSubresource(&kaalmv1beta1.Agent{}).Build()
 	rec := events.NewFakeRecorder(4)
 	r := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}

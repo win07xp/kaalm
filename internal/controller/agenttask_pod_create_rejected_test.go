@@ -358,7 +358,7 @@ func TestTask_PodCreateRejectedCutsLongDenial(t *testing.T) {
 	ctx := context.Background()
 	task := restoreTask("long-denial", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
 	task.Status.PodName, task.Status.StartTime = "", nil
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, readyTaskCert(t, task)).
+	c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task, readyTaskCert(t, task)).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
@@ -412,7 +412,7 @@ func TestTask_PodCreateRejectedDeadlineCutsOnce(t *testing.T) {
 		task.Spec.Completion.BackoffLimit = backoffLimit
 		rejected := metav1.NewTime(time.Now().Add(-10 * time.Minute))
 		task.Status.CreateRejectedTime = &rejected
-		c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, readyTaskCert(t, task)).
+		c := withPodControllerIndex(fake.NewClientBuilder().WithScheme(testScheme(t))).WithObjects(task, readyTaskCert(t, task)).
 			WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
 			WithInterceptorFuncs(interceptor.Funcs{
 				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
