@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -326,6 +327,98 @@ func TestServe_BadEnvelopeAndHandlerError(t *testing.T) {
 	resp, _ = postMessage(t, gateway, addr, Envelope{MessageID: "m1"})
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("retry after handler error must reach the handler, got %d", resp.StatusCode)
+	}
+}
+
+// postRaw delivers env and returns the status and the raw body, so a test can
+// tell an empty 200 from a real reply.
+func postRaw(t *testing.T, client *http.Client, addr string, env Envelope) (int, string) {
+	t.Helper()
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Post(addr+"/v1/message", "application/json", strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(body)
+}
+
+// A reply JSON cannot encode is a handler failure: the gateway gets a 500,
+// the reply is never cached, a redelivery reaches the handler again, and
+// compaction at shutdown is not blocked by it.
+func TestServe_UnencodableReplyIsRefused(t *testing.T) {
+	pki := newTestPKI(t)
+	memDir := t.TempDir()
+	var calls atomic.Int32
+	h := func(_ context.Context, env Envelope) (Response, error) {
+		switch env.Content {
+		case "nan":
+			return Response{Content: "x", Metadata: map[string]any{"score": math.NaN()}}, nil
+		case "inf":
+			return Response{Content: "x", Metadata: map[string]any{"score": math.Inf(1)}}, nil
+		case "attachment":
+			return Response{Content: "x", Attachments: []json.RawMessage{json.RawMessage("{not json")}}, nil
+		}
+		return Response{Content: fmt.Sprintf("call %d", calls.Add(1))}, nil
+	}
+	a, addr, stop := startAgent(t, pki, agentSANs, memDir, "", h)
+	gateway := pki.clientFor(t, "gateway", gatewaySANLocal)
+
+	for _, env := range []Envelope{
+		{MessageID: "m-nan", Content: "nan"},
+		{MessageID: "m-inf", Content: "inf"},
+		{MessageID: "m-attachment", Content: "attachment"},
+		{Content: "nan"}, // id-less: never cached, still never an empty 200
+	} {
+		status, body := postRaw(t, gateway, addr, env)
+		if status != http.StatusInternalServerError || !strings.Contains(body, "handler error") {
+			t.Errorf("%q reply: want 500 \"handler error\", got %d with body %q", env.Content, status, body)
+		}
+	}
+
+	if _, ok := a.store.recall("m-nan"); ok {
+		t.Error("an unencodable reply must not be cached")
+	}
+	status, body := postRaw(t, gateway, addr, Envelope{MessageID: "m-nan", Content: "ok"})
+	if status != http.StatusOK || !strings.Contains(body, "call 1") {
+		t.Errorf("redelivery after a refused reply must reach the handler: got %d with body %q", status, body)
+	}
+
+	postMessage(t, gateway, addr, Envelope{MessageID: "m-good", Content: "ok"})
+	stop()
+
+	if got := readLog(t, memDir); got != "" {
+		t.Errorf("log must be empty after a clean shutdown, holds %q", got)
+	}
+	dedup := readSnapshot(t, memDir).Dedup
+	if _, ok := dedup["m-good"]; !ok {
+		t.Error("state.json must hold the good id after a clean shutdown")
+	}
+	for _, id := range []string{"m-inf", "m-attachment"} {
+		if _, ok := dedup[id]; ok {
+			t.Errorf("state.json must not hold the refused id %q", id)
+		}
+	}
+}
+
+// The recall path keeps the same invariant: a cached reply that cannot be
+// encoded answers 500, never a 200 with an empty body.
+func TestServe_CachedReplyThatCannotBeEncodedIsNot200(t *testing.T) {
+	pki := newTestPKI(t)
+	a, addr, _ := startAgent(t, pki, agentSANs, t.TempDir(), "", nil)
+	a.store.remember("m-bad", Response{Content: "x", Metadata: map[string]any{"score": math.NaN()}}, dedupBufferSize)
+	gateway := pki.clientFor(t, "gateway", gatewaySANLocal)
+
+	status, body := postRaw(t, gateway, addr, Envelope{MessageID: "m-bad", Content: "x"})
+	if status != http.StatusInternalServerError || body == "" {
+		t.Errorf("want 500 with a body, got %d with body %q", status, body)
 	}
 }
 

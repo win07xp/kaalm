@@ -161,7 +161,9 @@ func (a *Agent) readyz(h Handler) http.HandlerFunc {
 }
 
 // messageHandler enforces the per-path mTLS contract (item 4), deduplicates
-// on messageId (item 7), and delegates to the Handler.
+// on messageId (item 7), and delegates to the Handler. A handler error and a
+// reply JSON cannot encode both answer 500, and neither is cached, so the
+// gateway's redelivery reaches the handler again.
 func (a *Agent) messageHandler(h Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
@@ -188,7 +190,14 @@ func (a *Agent) messageHandler(h Handler) http.HandlerFunc {
 		// together.
 		if env.MessageID != "" {
 			if cached, ok := a.store.recall(env.MessageID); ok {
-				writeJSON(w, cached)
+				// A cached reply was checked at delivery or decoded from the
+				// volume, so this guard only keeps a 200 from ever being empty.
+				raw, ok := encodeReply(env.MessageID, cached)
+				if !ok {
+					http.Error(w, "handler error", http.StatusInternalServerError)
+					return
+				}
+				writeJSON(w, raw)
 				return
 			}
 		}
@@ -205,10 +214,15 @@ func (a *Agent) messageHandler(h Handler) http.HandlerFunc {
 			http.Error(w, "handler error", http.StatusInternalServerError)
 			return
 		}
+		raw, ok := encodeReply(env.MessageID, resp)
+		if !ok {
+			http.Error(w, "handler error", http.StatusInternalServerError)
+			return
+		}
 		if env.MessageID != "" {
 			a.store.remember(env.MessageID, resp, dedupBufferSize)
 		}
-		writeJSON(w, resp)
+		writeJSON(w, raw)
 	}
 }
 
@@ -327,9 +341,23 @@ func taskAutocompleteStatus(isTask bool, env string) string {
 	return env
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+// encodeReply encodes a handler reply for the wire. The reply goes to the
+// state log and to the gateway, so a value JSON cannot carry (NaN or Infinity
+// in Metadata, bytes that are not JSON in Attachments) is refused before it
+// is cached or sent; the Python runtime applies the same check.
+func encodeReply(messageID string, resp Response) ([]byte, bool) {
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("handler reply for messageId %q cannot be encoded as JSON: %v", messageID, err)
+		return nil, false
+	}
+	return raw, true
+}
+
+// writeJSON writes an already-encoded reply, so a 200 always carries a body.
+func writeJSON(w http.ResponseWriter, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(raw)
 }
 
 func envOr(key, def string) string {

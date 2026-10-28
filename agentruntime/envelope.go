@@ -31,7 +31,9 @@ type Response struct {
 // one Response out. The runtime has already authenticated the caller as the
 // gateway and deduplicated redeliveries before a Handler runs, and it caches
 // the returned Response against the messageId afterward. A returned error
-// becomes a 500 to the gateway, which retries delivery on its own schedule.
+// becomes a 500 to the gateway, which retries delivery on its own schedule;
+// so does a Response JSON cannot encode (NaN or Infinity in Metadata, bytes
+// that are not JSON in Attachments), which is refused before it is cached.
 type Handler func(ctx context.Context, env Envelope) (Response, error)
 
 // echoHandler is the built-in default (docs/src/runtime/base-images.md): it
