@@ -5,6 +5,10 @@ built-in echo handler's contract."""
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
+
 import pytest
 
 from kaalm_agent import echo
@@ -122,3 +126,59 @@ async def test_unserializable_reply_leaves_the_window_untouched(tmp_path):
     store.put("user/k", 1)
     store.close()
     assert Store(str(d)).get("user/k") == 1
+
+
+async def test_respond_yields_to_the_loop_while_the_store_writes(tmp_path):
+    """The store write runs off the loop thread, so other coroutines (probes,
+    heartbeat, other deliveries) keep running during its fsync. The write here
+    blocks until a coroutine on the loop runs; on the loop thread it would wait
+    out the full timeout instead. Only ticks after the write starts count, so
+    a tick while respond awaits the recall cannot release the write."""
+    writing = threading.Event()
+    loop_ran = threading.Event()
+
+    class SlowStore(Store):
+        def remember(self, message_id, reply):
+            writing.set()
+            loop_ran.wait(timeout=5)
+            super().remember(message_id, reply)
+
+    agent, _ = mk_agent(SlowStore(str(tmp_path / "mem")))
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            if writing.is_set():
+                ticks += 1
+                loop_ran.set()
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(ticker())
+    start = time.monotonic()
+    await agent.respond({"messageId": "m1", "content": "hi"})
+    elapsed = time.monotonic() - start
+    task.cancel()
+    assert ticks >= 1
+    assert elapsed < 4
+
+
+async def test_store_calls_run_off_the_loop_thread(tmp_path):
+    """recall and remember share the Store's lock, so a recall on the loop
+    thread would wait out another delivery's in-flight fsync."""
+    seen: dict[str, int] = {}
+
+    class RecordingStore(Store):
+        def recall(self, message_id):
+            seen["recall"] = threading.get_ident()
+            return super().recall(message_id)
+
+        def remember(self, message_id, reply):
+            seen["remember"] = threading.get_ident()
+            super().remember(message_id, reply)
+
+    agent, _ = mk_agent(RecordingStore(str(tmp_path / "mem")))
+    loop_thread = threading.get_ident()
+    await agent.respond({"messageId": "m1", "content": "hi"})
+    assert seen["recall"] != loop_thread
+    assert seen["remember"] != loop_thread

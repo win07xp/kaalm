@@ -165,6 +165,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Helm 3 and Helm 4 validate values.schema.json with different JSON
+      # Schema libraries, so lint runs on the Helm the e2e and release jobs
+      # install, not on the runner image's.
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
       - name: Lint and package the Helm chart with synced CRDs
         run: |
           make chart-sync

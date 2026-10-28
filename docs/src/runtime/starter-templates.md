@@ -54,7 +54,7 @@ No value forces heartbeats on in task mode, because the endpoint rejects task ca
 
 Each template directory holds a `Dockerfile` and a `README.md` beside the files listed above.
 
-Inside the repository the Go template resolves the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`) through the repository's `go.work`, so its `go.mod` carries no `require` line; a copy outside the repository runs `go mod tidy` once to pin the published version. The Python base image's source is in `images/agent-python/`.
+Inside the repository the Go template resolves the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`) through the repository's `go.work`, so its `go.mod` carries no `require` line; a copy outside the repository pins the module to the installed chart's version with `go get` (the [starter-go README](https://github.com/win07xp/kaalm/blob/main/examples/starter-go/README.md#building-a-copy-of-this-template) has the command). The Python base image's source is in `images/agent-python/`.
 
 Each README has a `kubectl apply` manifest to deploy a test Agent from the template image and a "What you change" section pointing at the handler.
 
