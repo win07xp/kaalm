@@ -13,7 +13,7 @@ FROM python:3.14.8-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 WORKDIR /app
-RUN pip install --no-cache-dir "aiohttp>=3.10,<4" "httpx>=0.28,<1" "watchdog>=4.0"
+RUN pip install --no-cache-dir "aiohttp>=3.10,<4" "httpx>=0.28,<1" "httpx2>=2.0,<3" "watchdog>=4.0"
 COPY pyproject.toml ./
 COPY kaalm_agent/ ./kaalm_agent/
 COPY kaalm/ ./kaalm/
