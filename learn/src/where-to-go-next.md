@@ -37,7 +37,7 @@ And you watched the behavior that is hard to build yourself: an
 agent shutting down when nobody needs it, and coming back with its memory
 intact when somebody does.
 
-## Three doors onward
+## Four doors onward
 
 **Do real work.** The user guide, starting at its
 [Introduction](https://github.com/win07xp/kaalm/blob/main/guide/src/introduction.md), is
@@ -50,6 +50,10 @@ organized by the symptom you see.
 controller reconciles, how the gateway routes and bills, how every workload
 gets its certificate, and the twenty-five acceptance scenarios the whole
 system is tested against. Start with its System architecture chapter.
+
+**Let a coding agent do it.** A coding agent with the Kaalm skill can repeat
+this journey for you, and go on to real work, while you ask in plain words.
+[Let a coding agent help](let-a-coding-agent-help.md) shows how.
 
 **Write a bigger agent.** You already write handlers; that is the whole
 programming model. When one outgrows a ConfigMap, usually the day it needs a

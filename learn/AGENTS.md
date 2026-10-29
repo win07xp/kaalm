@@ -49,8 +49,8 @@ against the published artifacts.
 
 Chapters 1 to 9 use no ModelProvider, so the tutorial needs no API key and
 cannot fail on a reader's billing. "Give it a real brain" is the single paid
-chapter and the only one not walked end to end; it is written as a signpost
-to the guide and says so.
+chapter. It and "Let a coding agent help" are the only ones not walked end to
+end; each is written as a signpost and says so.
 
 ## Charter (the rules that make this book work)
 

@@ -45,6 +45,9 @@ egress for the traffic that does not go through the gateway.
 - **Agent developer** (someone already runs Kaalm for you; you deploy agents):
   skim the mental model in the preceding section, then start at [Your first agent](developers/first-agent.md).
 
+A coding agent can do the tasks in this guide for you if you give it the Kaalm
+skill. See [Using the agent skill](getting-started/agent-skill.md).
+
 ## What you need before starting
 
 - A Kubernetes cluster (v1.35 or newer) with a CNI that enforces NetworkPolicy.

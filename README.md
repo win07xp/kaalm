@@ -73,11 +73,23 @@ Three books, each with a different job. Build them with `make books`.
 
 ## Agent skill
 
-The `kaalm` skill teaches a coding agent how to use Kaalm. It checks what your
-setup is missing, gets you a cluster, installs Kaalm, adds a model key without
-the agent seeing it, deploys agents and tasks, and explains why a resource is
-not Ready. It adapts to how much Kubernetes you know and asks before every
-change.
+The [`kaalm` skill](plugins/kaalm/skills/kaalm/SKILL.md) teaches a coding agent
+such as Claude Code to use Kaalm for you. It adapts to how much Kubernetes you
+know and asks before every change. You can ask it to:
+
+- Try Kaalm with no cluster yet.
+- Check what is missing, get a cluster, and install or upgrade Kaalm.
+- Add a model key without the agent seeing it.
+- Run an agent or a task, and choose its image.
+- Connect a channel or tools.
+- Put an existing Deployment's model calls behind the gateway.
+- Set Kaalm up for teams.
+- Find out why something is not Ready.
+
+For installing at your version, upgrading, and the safety rules, see
+[Using the agent skill](guide/src/getting-started/agent-skill.md). For a
+beginner's walkthrough, see
+[Let a coding agent help](learn/src/let-a-coding-agent-help.md).
 
 In Claude Code, add the marketplace at the tag that matches the Kaalm release
 you run, then install the plugin:

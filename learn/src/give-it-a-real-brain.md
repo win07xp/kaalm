@@ -150,4 +150,4 @@ This chapter is a signpost, not a manual. The full versions:
   [Building your own agent image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/building-your-own-image.md), for the
   day your handler outgrows a ConfigMap.
 
-Next: [Where to go next](where-to-go-next.md).
+Next: [Let a coding agent help](let-a-coding-agent-help.md).
