@@ -17,99 +17,258 @@ limitations under the License.
 package gateway
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
-	"strings"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
-	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/gcpauth"
 )
 
-// TestVertexPathsNotServed locks the reserved status: google-vertex
-// has no inbound surface, so Vertex-shaped paths resolve no adapter, exactly
-// like any unrecognized path.
-func TestVertexPathsNotServed(t *testing.T) {
-	base := "/v1/projects/p/locations/us/publishers/google/models/gw-vertex%2Fgemini-2:generateContent"
-	if _, ok := adapterForPath(base); ok {
-		t.Fatal("generateContent path must not resolve: google-vertex is reserved")
+// The Vertex path carries the qualified model as its publisher and model
+// segments; only generateContent and streamGenerateContent under v1 and
+// v1beta1 resolve.
+func TestVertexPathsServed(t *testing.T) {
+	served := []string{
+		"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent",
+		"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:streamGenerateContent",
+		"/v1beta1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent",
+		"/v1beta1/projects/p/locations/global/publishers/prov/models/gemini-2.5-flash:streamGenerateContent",
 	}
-	stream := "/v1/projects/p/locations/us/publishers/google/models/gw-vertex%2Fgemini-2:streamGenerateContent"
-	if _, ok := adapterForPath(stream); ok {
-		t.Fatal("streamGenerateContent path must not resolve: google-vertex is reserved")
+	for _, path := range served {
+		a, ok := adapterForPath(path)
+		if !ok || a.formatName() != providerTypeVertex {
+			t.Errorf("%s: adapter %v, %v; want the Vertex adapter", path, a, ok)
+			continue
+		}
+		if got := a.modelFromPath(path); got != "prov/gemini-2.5-flash" {
+			t.Errorf("%s: modelFromPath = %q, want prov/gemini-2.5-flash", path, got)
+		}
 	}
-	if _, ok := adapterForPath("/v1/nonsense"); ok {
-		t.Error("an unrecognized path must not resolve")
+	notServed := []string{
+		// %2F decoded by the mux: one segment too many.
+		"/v1/projects/p/locations/l/publishers/google/models/prov/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:countTokens",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:rawPredict",
+		"/v1/projects/p/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers//models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini",
+		"/v2/projects/p/locations/l/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:generateContent/extra",
+		"/v1/projects/nonsense",
+		"/v1/nonsense",
 	}
-	// The outbound half stays: the type still has its adapter.
-	if _, ok := adapterForProviderType(providerTypeVertex); !ok {
-		t.Error("the reserved type keeps its outbound adapter")
+	for _, path := range notServed {
+		if a, ok := adapterForPath(path); ok {
+			t.Errorf("%s resolved to %v, want no adapter", path, a)
+		}
+	}
+	for _, a := range []providerAdapter{anthropicAdapter{}, openaiAdapter{}} {
+		if got := a.modelFromPath(served[0]); got != "" {
+			t.Errorf("%s modelFromPath = %q, want empty: the model travels in the body", a.formatName(), got)
+		}
 	}
 }
 
-// A google-vertex primary on a served path is refused with 400 before it is
-// admitted, rate limited, or forwarded.
-func TestLLMProxy_VertexPrimaryIsRefused(t *testing.T) {
-	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	h.seedRoute()
-	h.server.RateLimiter = NewRateLimiter(func() int { return 1 })
-	h.store.providers["prov"].Spec.Type = providerTypeVertex
-	h.store.providers["prov"].Spec.RateLimits = kaalmv1beta1.ModelProviderRateLimits{RequestsPerMinute: 1}
-	cert := agentCert(t, h.ca)
-
-	calls := []struct {
-		path string
-		body map[string]any
-	}{
-		{"/v1/chat/completions", map[string]any{"model": "prov/m1"}},
-		// A second call is still 400, not 429: the first took no token.
-		{"/v1/chat/completions", map[string]any{"model": "prov/m1"}},
-		{"/v1/messages", map[string]any{"model": "prov/m1", "max_tokens": 1,
-			"messages": []any{map[string]any{"role": "user", "content": "hi"}}}},
-	}
-	for i, c := range calls {
-		resp := postJSON(t, h.client(&cert), h.url(c.path), c.body, nil)
-		var envelope struct {
-			Error errorBody `json:"error"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-			t.Fatalf("call %d: decoding error envelope: %v", i, err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest || envelope.Error.Type != errInvalidRequest {
-			t.Errorf("call %d on %s = %d %q, want 400 %q", i, c.path, resp.StatusCode, envelope.Error.Type, errInvalidRequest)
-		}
-		if !strings.Contains(envelope.Error.Message, "reserved") || envelope.Error.Provider != "prov" {
-			t.Errorf("call %d: error %+v does not say the provider type is reserved", i, envelope.Error)
-		}
-	}
-	if n := len(h.upreqs); n != 0 {
-		t.Errorf("%d requests reached the upstream, want 0", n)
-	}
-	if u := h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
-		t.Errorf("spend for team-a = %+v, want none", u)
-	}
-}
-
-func TestVertexUpstreamPath_ModelRewriteAndAltSSE(t *testing.T) {
+// upstreamPath points the publisher at google, writes the raw model id, and
+// sets alt=sse on streamGenerateContent only.
+func TestVertexUpstreamPath(t *testing.T) {
 	v := vertexAdapter{}
-	// The qualified {providerRef}/{modelId} in the URL is rewritten to the raw
-	// model ID (URL-encoded).
-	in := "/v1/projects/p/locations/us/publishers/google/models/prov%2Fgemini-2:generateContent"
-	got := v.upstreamPath(in, "gemini-2")
-	if got != "/v1/projects/p/locations/us/publishers/google/models/gemini-2:generateContent" {
-		t.Errorf("model not rewritten: %q", got)
+	cases := []struct{ in, model, want string }{
+		{"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent", "gemini-2.5-flash",
+			"/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"},
+		// A fallback edge's mapped model replaces the inbound one.
+		{"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent", "gemini-2.0-flash",
+			"/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
+		{"/v1beta1/projects/p/locations/global/publishers/prov/models/gemini-2.5-flash:streamGenerateContent", "gemini-2.5-flash",
+			"/v1beta1/projects/p/locations/global/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse"},
+		// Project and location survive, escaped for the URL.
+		{"/v1/projects/my proj/locations/l?x/publishers/prov/models/m:generateContent", "m",
+			"/v1/projects/my%20proj/locations/l%3Fx/publishers/google/models/m:generateContent"},
+		// A path that is not a Vertex path passes through.
+		{"/v1/chat/completions", "m", "/v1/chat/completions"},
 	}
-	// Streaming gets ?alt=sse appended when absent.
-	streamIn := "/v1/projects/p/locations/us/publishers/google/models/prov%2Fgemini-2:streamGenerateContent"
-	gotStream := v.upstreamPath(streamIn, "gemini-2")
-	if gotStream != "/v1/projects/p/locations/us/publishers/google/models/gemini-2:streamGenerateContent?alt=sse" {
-		t.Errorf("alt=sse not injected: %q", gotStream)
+	for _, c := range cases {
+		if got := v.upstreamPath(c.in, c.model); got != c.want {
+			t.Errorf("upstreamPath(%q, %q) = %q, want %q", c.in, c.model, got, c.want)
+		}
 	}
-	// An existing alt= is preserved (not doubled).
-	withAlt := streamIn + "?alt=sse"
-	if got := v.upstreamPath(withAlt, "gemini-2"); got != gotStream {
-		t.Errorf("alt=sse should not be doubled: %q", got)
+}
+
+// tokenEndpoint is a fake token endpoint that counts mints and answers
+// with expiresIn (omitted when zero). A blocking endpoint holds each mint
+// until release closes.
+type tokenEndpoint struct {
+	srv     *httptest.Server
+	mints   atomic.Int64
+	status  atomic.Int64
+	release chan struct{} // when set, each mint waits for it to close
+}
+
+func newTokenEndpoint(t *testing.T, expiresIn int, blocking bool) *tokenEndpoint {
+	t.Helper()
+	e := &tokenEndpoint{}
+	if blocking {
+		e.release = make(chan struct{})
 	}
+	e.status.Store(http.StatusOK)
+	e.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := e.mints.Add(1)
+		if e.release != nil {
+			<-e.release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if status := int(e.status.Load()); status != http.StatusOK {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+			return
+		}
+		body := fmt.Sprintf(`{"access_token":"tok-%d","token_type":"Bearer"`, n)
+		if expiresIn > 0 {
+			body += fmt.Sprintf(`,"expires_in":%d`, expiresIn)
+		}
+		_, _ = w.Write([]byte(body + "}"))
+	}))
+	t.Cleanup(e.srv.Close)
+	return e
+}
+
+// The token cache reuses a token until five minutes before it expires,
+// re-mints on a rotated key, treats a token without expires_in as an hour
+// long, and coalesces a burst into one mint.
+func TestVertexTokenCache(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Now()
+	newCache := func() *vertexTokenCache {
+		return &vertexTokenCache{now: func() time.Time { return clock }}
+	}
+
+	t.Run("expiry and rotation", func(t *testing.T) {
+		e := newTokenEndpoint(t, 3600, false)
+		c := newCache()
+		key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+		get := func(credential string) string {
+			t.Helper()
+			tok, err := c.token(ctx, e.srv.Client(), "prov", credential, 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return tok
+		}
+		start := clock
+		first := get(key)
+		if got := get(key); got != first || e.mints.Load() != 1 {
+			t.Errorf("second read = %q after %d mints, want the cached %q", got, e.mints.Load(), first)
+		}
+		// Within the refresh margin of an hour-long token: still cached at
+		// 54 minutes, re-minted at 56.
+		clock = start.Add(54 * time.Minute)
+		_ = get(key)
+		if e.mints.Load() != 1 {
+			t.Errorf("mints at 54m = %d, want 1", e.mints.Load())
+		}
+		clock = start.Add(56 * time.Minute)
+		if got := get(key); got == first || e.mints.Load() != 2 {
+			t.Errorf("at 56m got %q after %d mints, want a fresh token", got, e.mints.Load())
+		}
+		// A rotated Secret (a different key value) re-mints at once.
+		rotated := vertexServiceAccountJSON(t, e.srv.URL+"/token?rotated")
+		_ = get(rotated)
+		if e.mints.Load() != 3 {
+			t.Errorf("mints after rotation = %d, want 3", e.mints.Load())
+		}
+		clock = start
+	})
+
+	t.Run("no expires_in", func(t *testing.T) {
+		e := newTokenEndpoint(t, 0, false)
+		c := newCache()
+		key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+		start := clock
+		for _, at := range []time.Duration{0, 54 * time.Minute, 56 * time.Minute} {
+			clock = start.Add(at)
+			if _, err := c.token(ctx, e.srv.Client(), "prov", key, 5*time.Second); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if e.mints.Load() != 2 {
+			t.Errorf("mints = %d, want 2: an hour-long token refreshed once", e.mints.Load())
+		}
+		clock = start
+	})
+
+	t.Run("burst shares one mint", func(t *testing.T) {
+		e := newTokenEndpoint(t, 3600, true)
+		c := newCache()
+		key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+		var wg sync.WaitGroup
+		tokens := make([]string, 20)
+		errs := make([]error, 20)
+		for i := range tokens {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				tokens[i], errs[i] = c.token(ctx, e.srv.Client(), "prov", key, 5*time.Second)
+			}()
+		}
+		for e.mints.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond) // let the burst join the flight
+		close(e.release)
+		wg.Wait()
+		for i := range tokens {
+			if errs[i] != nil || tokens[i] != tokens[0] {
+				t.Errorf("caller %d got %q, %v; want %q", i, tokens[i], errs[i], tokens[0])
+			}
+		}
+		if e.mints.Load() != 1 {
+			t.Errorf("mints = %d, want 1", e.mints.Load())
+		}
+	})
+
+	t.Run("burst shares a refusal", func(t *testing.T) {
+		e := newTokenEndpoint(t, 3600, true)
+		e.status.Store(http.StatusUnauthorized)
+		c := newCache()
+		key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+		var wg sync.WaitGroup
+		errs := make([]error, 20)
+		for i := range errs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = c.token(ctx, e.srv.Client(), "prov", key, 5*time.Second)
+			}()
+		}
+		for e.mints.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond)
+		close(e.release)
+		wg.Wait()
+		for i, err := range errs {
+			if !errors.Is(err, gcpauth.ErrRejected) {
+				t.Errorf("caller %d: err = %v, want ErrRejected", i, err)
+			}
+		}
+		if e.mints.Load() != 1 {
+			t.Errorf("mints = %d, want 1", e.mints.Load())
+		}
+	})
+
+	t.Run("invalid key", func(t *testing.T) {
+		_, err := newCache().token(ctx, nil, "prov", "not-a-key", time.Second)
+		if !errors.Is(err, gcpauth.ErrInvalidKey) {
+			t.Errorf("err = %v, want ErrInvalidKey", err)
+		}
+	})
 }
 
 func TestVertexUsageExtraction(t *testing.T) {

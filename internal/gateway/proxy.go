@@ -35,6 +35,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/gcpauth"
 	"github.com/win07xp/kaalm/internal/llmtranslate"
 )
 
@@ -105,7 +106,9 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r.Context())
 	adapter, ok := adapterForPath(r.URL.Path)
 	if !ok {
-		badRequest(w, "unrecognized LLM path "+r.URL.Path)
+		// Constant, like the mux's catch-all: the answer never echoes the
+		// caller's path (the Vertex prefixes route any path here).
+		badRequest(w, "unrecognized path")
 		return
 	}
 
@@ -141,7 +144,11 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "request body is not valid JSON")
 		return
 	}
-	qualified := fields.model(body)
+	// The Vertex format carries the model in the URL; the others in the body.
+	qualified := adapter.modelFromPath(r.URL.Path)
+	if qualified == "" {
+		qualified = fields.model(body)
+	}
 	providerName, modelID, ok := splitQualifiedModel(qualified)
 	if !ok {
 		badRequest(w, `model must be a qualified "{providerRef}/{modelId}" name`)
@@ -165,13 +172,6 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		attribute.String("kaalm.namespace", c.Namespace),
 		attribute.String("kaalm.workload", workloadKey(c)))
 	defer endSpan(nil)
-	if provider.Spec.Type == providerTypeVertex {
-		spanError(ctx, errInvalidRequest)
-		writeError(w, http.StatusBadRequest, errorBody{
-			Type: errInvalidRequest, Provider: providerName,
-			Message: fmt.Sprintf("provider type %q is reserved and not served by this gateway", provider.Spec.Type)}, 0)
-		return
-	}
 	typeAdapter, ok := adapterForProviderType(provider.Spec.Type)
 	if !ok {
 		writeError(w, http.StatusBadRequest, errorBody{
@@ -477,6 +477,8 @@ func (s *Server) candidateRequest(
 // releases the watchdog once read; a streaming 2xx hands it to the relay
 // through the wrapped body, whose Close releases it. A credential the store
 // refuses is a connect-class failure, logged at most once a minute per provider.
+// For google-vertex the credential is a service-account key, exchanged for
+// an access token first (see vertexCredential).
 func (s *Server) forwardOnce(
 	ctx context.Context, r *http.Request, provider *kaalmv1beta1.ModelProvider,
 	outBody []byte, inboundPath string, adapter, typeAdapter providerAdapter, modelID string,
@@ -488,6 +490,13 @@ func (s *Server) forwardOnce(
 			slog.Warn("llm credential unavailable", "provider", provider.Name, "error", err)
 		}
 		return forwardResult{fallilable: true, class: classConnect, err: err}
+	}
+	if provider.Spec.Type == providerTypeVertex {
+		token, fr, ok := s.vertexCredential(ctx, provider, credential)
+		if !ok {
+			return fr
+		}
+		credential = token
 	}
 	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + adapter.upstreamPath(inboundPath, modelID)
 	actx, dog := newAttemptWatchdog(ctx, s.Config.UpstreamTimeout)
@@ -541,6 +550,41 @@ func (s *Server) forwardOnce(
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	fr.body = body
 	return fr
+}
+
+// vertexCredential exchanges a google-vertex provider's service-account key
+// for an access token, from the cache or a mint over the upstream client (so
+// the upstream trust pool, proxy settings, and redirect refusal apply to the
+// token endpoint too). On failure it returns the attempt's result: a key
+// that does not parse is refused like a credential the store refuses; a
+// token endpoint that refuses the key is a credential failure with no
+// upstream response, like an upstream 401; anything else is a connect or
+// timeout failure, logged at most once a minute per provider.
+func (s *Server) vertexCredential(
+	ctx context.Context, provider *kaalmv1beta1.ModelProvider, key string,
+) (string, forwardResult, bool) {
+	token, err := s.vertexTokens.token(ctx, s.upstream(), provider.Name, key, s.Config.UpstreamTimeout)
+	if err == nil {
+		return token, forwardResult{}, true
+	}
+	switch {
+	case errors.Is(err, gcpauth.ErrInvalidKey):
+		if ctx.Err() == nil && s.credentialLog.allow(provider.Name, credentialLogInterval) {
+			slog.Warn("llm credential unavailable", "provider", provider.Name, "error", err)
+		}
+		return "", forwardResult{fallilable: true, class: classConnect, err: err}, false
+	case errors.Is(err, gcpauth.ErrRejected):
+		return "", forwardResult{fallilable: true, class: classUpstream, err: err, credentialRejected: true}, false
+	}
+	class := classConnect
+	if errors.Is(err, context.DeadlineExceeded) {
+		class = classTimeout
+	}
+	// A done context means the caller left; the error is not the provider's.
+	if ctx.Err() == nil && s.credentialLog.allow(provider.Name+"/token", credentialLogInterval) {
+		slog.Warn("llm access token unavailable", "provider", provider.Name, "error", err)
+	}
+	return "", forwardResult{fallilable: true, class: class, err: err}, false
 }
 
 // applyBudgetDecision renders a budget admission outcome: it writes the

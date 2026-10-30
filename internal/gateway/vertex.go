@@ -23,23 +23,21 @@ import (
 	"strings"
 )
 
-// The adapter for the RESERVED google-vertex type: no inbound path is
-// routed and the OAuth2 token minting the platform requires is not
-// implemented, so the type is not servable in this release. The outbound
-// pieces below (usage extraction, URL-path model rewriting, the ?alt=sse
-// fixup) stay for the finished feature; the proxy refuses a request whose
-// primary has this type. The platform's product name is now the Gemini
-// Enterprise Agent Platform; the wire API and the enum value are unchanged.
-// See
-// docs/src/gateways/llm/request-handling.md#the-google-vertex-type-is-reserved.
+// The adapter for the google-vertex type, in Google's native Gemini format
+// (generateContent and streamGenerateContent). The model travels in the URL
+// path, not the body: the caller writes the qualified name as the publisher
+// and model segments, and upstreamPath points the publisher back at google
+// with the raw model id. The bearer credential is an access token the
+// gateway mints from the provider's service-account key (vertex_token.go).
+// The platform's product name is now the Gemini Enterprise Agent Platform;
+// the wire API and the enum value are unchanged.
 
 type vertexAdapter struct{}
 
 func (vertexAdapter) formatName() string { return providerTypeVertex }
 
-// injectCredential attaches a bearer token. Serving the type requires an
-// OAuth2 access token minted from a GCP service-account key, which this
-// release does not implement; the Store hands over the raw Secret value.
+// injectCredential attaches the bearer token forwardOnce minted from the
+// provider's service-account key.
 func (vertexAdapter) injectCredential(h http.Header, credential string) {
 	h.Set("Authorization", "Bearer "+credential)
 }
@@ -116,30 +114,68 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 // the streaming toggle is a query parameter (see upstreamPath).
 func (vertexAdapter) streamUsageOption() bool { return false }
 
-// upstreamPath rewrites the {model} URL segment from the qualified name to the
-// raw model ID and appends ?alt=sse to streaming requests when absent, so the
-// SSE relay engages.
+// vertexPath is a parsed Vertex call path:
+// /{version}/projects/{project}/locations/{location}/publishers/{providerRef}/models/{model}:{method}.
+type vertexPath struct {
+	version, project, location, providerRef, model, method string
+}
+
+// parseVertexPath parses a decoded request path in the Vertex shape. Only
+// the v1 and v1beta1 versions (the google-genai SDK defaults to v1beta1)
+// and the generateContent and streamGenerateContent methods are served;
+// every segment must be present and non-empty, so a %2F the mux decoded
+// into an extra segment does not parse.
+func parseVertexPath(path string) (vertexPath, bool) {
+	seg := strings.Split(path, "/")
+	// "", version, projects, p, locations, l, publishers, ref, models, model:method
+	if len(seg) != 10 || seg[0] != "" ||
+		seg[2] != "projects" || seg[4] != "locations" || seg[6] != "publishers" || seg[8] != "models" {
+		return vertexPath{}, false
+	}
+	if seg[1] != "v1" && seg[1] != "v1beta1" {
+		return vertexPath{}, false
+	}
+	model, method, ok := strings.Cut(seg[9], ":")
+	if !ok || (method != "generateContent" && method != "streamGenerateContent") {
+		return vertexPath{}, false
+	}
+	p := vertexPath{
+		version: seg[1], project: seg[3], location: seg[5],
+		providerRef: seg[7], model: model, method: method,
+	}
+	if p.project == "" || p.location == "" || p.providerRef == "" || p.model == "" {
+		return vertexPath{}, false
+	}
+	return p, true
+}
+
+// qualified is the {providerRef}/{modelId} name the path carries.
+func (p vertexPath) qualified() string { return p.providerRef + "/" + p.model }
+
+// modelFromPath returns the qualified model of a Vertex path.
+func (vertexAdapter) modelFromPath(path string) string {
+	if p, ok := parseVertexPath(path); ok {
+		return p.qualified()
+	}
+	return ""
+}
+
+// upstreamPath rebuilds a Vertex path for the upstream: the publisher is
+// google (the type serves Google's Gemini models) and the model the raw id
+// the request resolved to (degraded or mapped by a fallback edge). Project,
+// location, and version pass through. streamGenerateContent gets ?alt=sse
+// so the answer is an SSE stream the relay can meter. A path that is not a
+// Vertex path passes through unchanged.
 func (vertexAdapter) upstreamPath(inboundPath, modelID string) string {
-	path, query, hasQuery := strings.Cut(inboundPath, "?")
-	// Rewrite the {model}:method segment: everything after the last '/' up to
-	// the ':' is the (URL-encoded) qualified model name.
-	if slash := strings.LastIndex(path, "/models/"); slash >= 0 {
-		rest := path[slash+len("/models/"):]
-		if colon := strings.Index(rest, ":"); colon >= 0 {
-			method := rest[colon:]
-			path = path[:slash+len("/models/")] + url.PathEscape(modelID) + method
-		}
+	p, ok := parseVertexPath(inboundPath)
+	if !ok {
+		return inboundPath
 	}
-	if strings.HasSuffix(path, ":streamGenerateContent") {
-		if !hasQuery {
-			return path + "?alt=sse"
-		}
-		if !strings.Contains(query, "alt=") {
-			return path + "?" + query + "&alt=sse"
-		}
+	out := "/" + p.version + "/projects/" + url.PathEscape(p.project) +
+		"/locations/" + url.PathEscape(p.location) +
+		"/publishers/google/models/" + url.PathEscape(modelID) + ":" + p.method
+	if p.method == "streamGenerateContent" {
+		out += "?alt=sse"
 	}
-	if hasQuery {
-		return path + "?" + query
-	}
-	return path
+	return out
 }

@@ -260,6 +260,8 @@ type capturedRequest struct {
 	header http.Header
 	body   map[string]any
 	raw    []byte
+	path   string // the upstream request's path
+	query  string // its raw query string
 }
 
 // newHarness starts a real TLS gateway listener and a TLS upstream. upstreamFn
@@ -288,7 +290,7 @@ func newHarness(t testing.TB, upstreamFn http.HandlerFunc) *harness {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
-		h.upreqs <- &capturedRequest{header: r.Header.Clone(), body: body, raw: raw}
+		h.upreqs <- &capturedRequest{header: r.Header.Clone(), body: body, raw: raw, path: r.URL.Path, query: r.URL.RawQuery}
 		upstreamFn(w, r)
 	}))
 	t.Cleanup(h.upstream.Close)
@@ -632,6 +634,10 @@ func TestAuthMatrix(t *testing.T) {
 		{"task cert on task-complete reaches handler", &taskCert, "/v1/task/complete", 403, false},
 		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200, false},
 		{"unknown path", &agentC, "/v2/other", 400, false},
+		// The Vertex path prefixes are on the dual-mode profile.
+		{"no cert no token on Vertex path", nil, "/v1/projects/p/locations/l/publishers/prov/models/m1:generateContent", 401, false},
+		{"no cert no token on v1beta1 Vertex path", nil, "/v1beta1/projects/p/locations/l/publishers/prov/models/m1:streamGenerateContent", 401, false},
+		{"agent cert on a non-Vertex path under the prefix", &agentC, "/v1/projects/nonsense", 400, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
