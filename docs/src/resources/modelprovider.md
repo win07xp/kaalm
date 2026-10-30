@@ -15,11 +15,8 @@ metadata:
   name: anthropic-shared
 spec:
   # Required. "anthropic" | "openai" | "google-vertex" | "openai-compatible".
-  # The gateway routes no inbound path for google-vertex and refuses a
-  # request that names a google-vertex provider (see The google-vertex
-  # type is reserved on Request handling); only the
-  # controller's liveness probe mints Vertex tokens (see The google-vertex
-  # probe on ModelProviderReconciler).
+  # google-vertex serves Google's Gemini models in their native format (see
+  # Request format detection on Request handling).
   type: anthropic
 
   # Required. The schema pattern ^https:// rejects any other scheme: the
@@ -28,7 +25,9 @@ spec:
   endpoint: "https://api.anthropic.com"
 
   # Required. A Secret key in the operator namespace. For google-vertex the
-  # value is a GCP service-account JSON key, not a static API key (see The
+  # value is a GCP service-account JSON key, not a static API key. The
+  # gateway mints its access tokens from it (see Vertex access tokens on
+  # Provider routing and adapters), and so does the liveness probe (see The
   # google-vertex probe on ModelProviderReconciler). The Secret must carry
   # the label kaalm.io/provider-credential: "true" (rule 49) and list the
   # endpoint host in its kaalm.io/provider-hosts annotation (rule 50).

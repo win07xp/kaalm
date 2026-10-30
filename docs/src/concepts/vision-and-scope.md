@@ -80,7 +80,7 @@ Kaalm's differentiator is the combination none of its neighbors has: dollar-deno
 - Cost analytics and chargeback reporting
 - Multi-cluster federation
 - Advanced scheduling (GPU awareness, priority classes, preemption policies specific to agents)
-- Serving the `google-vertex` provider type (the enum is reserved, no inbound path is routed) and any cross-format fallback involving it
+- Claude models on Vertex (`rawPredict`), `google-vertex` credentials from workload identity or the metadata server, and any cross-format fallback involving `google-vertex`
 - Agent Sandbox integration (an `agentSandbox` runtime backend); gVisor and Kata run through RuntimeClass
 - The Discord Gateway WebSocket adapter for free-text message bots (a persistent connection per bot); the Discord adapter covers slash commands over HTTP
 

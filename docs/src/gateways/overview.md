@@ -42,7 +42,7 @@ All paths on `:8443` share one TLS socket. The handshake accepts a client certif
 
 | Regime | Paths | Client auth |
 |---|---|---|
-| Dual mode | `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, `/v1/mcp/*` | mTLS with an Agent or AgentTask SAN, or a `TokenReview`-validated ServiceAccount bearer token (gateway-only tier), then the source-IP cross-check |
+| Dual mode | `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, the Vertex paths under `/v1/projects/` and `/v1beta1/projects/` ([Request format detection](llm/request-handling.md#request-format-detection)), `/v1/mcp/*` | mTLS with an Agent or AgentTask SAN, or a `TokenReview`-validated ServiceAccount bearer token (gateway-only tier), then the source-IP cross-check |
 | Agent report | `/v1/agent/heartbeat` (Agent only), `/v1/task/complete` (AgentTask only) | mTLS with an Agent or AgentTask SAN, the kind checked against the path, then the source-IP cross-check. No bearer fallback. |
 | Controller only | `/v1/activity`, `/v1/channels/health` | mTLS with the controller Service SAN, then the source-IP cross-check against the operator namespace |
 | Console only | `/v1/test-chat`, `/v1/spend` | mTLS with the console Service SAN, then the source-IP cross-check against the operator namespace |

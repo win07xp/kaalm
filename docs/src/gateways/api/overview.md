@@ -19,7 +19,7 @@ The gateway serves two TLS listeners. Which listener a path lives on decides who
 
 | Listener | Path | Caller | Client auth |
 |---|---|---|---|
-| `:8443` | `/v1/messages`, `/v1/chat/completions`, `/v1/completions` | Agent and AgentTask Pods, gateway-only-tier workloads | mTLS SAN or bearer token |
+| `:8443` | `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, and the Vertex paths under `/v1/projects/` and `/v1beta1/projects/` | Agent and AgentTask Pods, gateway-only-tier workloads | mTLS SAN or bearer token |
 | `:8443` | `/v1/mcp/{toolProvider}` | The same callers | mTLS SAN or bearer token |
 | `:8443` | `/v1/agent/heartbeat` | Agent Pods | mTLS, Agent SAN |
 | `:8443` | `/v1/task/complete` | AgentTask Pods | mTLS, AgentTask SAN |
@@ -47,18 +47,19 @@ The controller's activator, `POST /v1/activate/{namespace}/{agentName}`, is serv
 
 ## LLM proxy endpoints
 
-The proxy accepts requests on three paths and forwards each to the resolved ModelProvider in that provider's native format:
+The proxy accepts requests in four formats and forwards each to the resolved ModelProvider in that provider's native format:
 
 | Path | Request format |
 |---|---|
 | `/v1/messages` | Anthropic Messages |
 | `/v1/chat/completions` | OpenAI chat completions, also served by vLLM, Ollama, and LiteLLM |
 | `/v1/completions` | OpenAI completions |
+| `/v1/projects/{project}/locations/{location}/publishers/{providerRef}/models/{modelId}:generateContent` and `:streamGenerateContent`, also under `/v1beta1/` | Vertex, Google's native Gemini format |
 
-The path names the inbound format; the provider's type names the outbound one. When the two differ, the gateway translates ([Request format detection](../llm/request-handling.md#request-format-detection)). Bodies pass through otherwise unchanged: the gateway adds no envelope of its own. It replaces the caller's credentials with the provider credential, strips the `{providerRef}/` prefix from the model name, and relays the response, including SSE streams ([Request flow](../llm/request-handling.md#request-flow), steps 7 to 9).
+In the Vertex format the provider name is the publisher segment of the path, not a body field ([Model identification](../llm/request-handling.md#model-identification)). The path names the inbound format ([Request format detection](../llm/request-handling.md#request-format-detection)). The primary always gets the caller's path and body in the caller's format. The gateway translates only for a fallback candidate whose type differs from the caller's format, and never for `google-vertex`, which stays same-type ([rule 12](../../resources/validation-and-defaulting.md#cross-resource-validation); [Crossing formats](../llm/fallback.md#crossing-formats)). Bodies pass through otherwise unchanged: the gateway adds no envelope of its own. It replaces the caller's credentials with the provider credential, strips the `{providerRef}/` prefix from the model name, and relays the response, including SSE streams ([Request flow](../llm/request-handling.md#request-flow), steps 7 to 9).
 
 Errors the gateway raises itself use the envelope in [LLM Gateway error responses](errors.md#llm-gateway-error-responses).
 
-**Request body size.** Each of the three paths reads at most `gateway.maxLLMRequestBodyBytes` (default 4 MiB) and answers `413 request_too_large` above that. The gateway buffers the body before forwarding, so the cap bounds per-request gateway memory. The tool broker reads its body under a separate cap ([The tool plane](../tool-plane.md)).
+**Request body size.** Each of these paths reads at most `gateway.maxLLMRequestBodyBytes` (default 4 MiB) and answers `413 request_too_large` above that. The gateway buffers the body before forwarding, so the cap bounds per-request gateway memory. The tool broker reads its body under a separate cap ([The tool plane](../tool-plane.md)).
 
 Auth, provider routing, budgets, fallback, and streaming are specified in [LLM Gateway](../llm/overview.md).

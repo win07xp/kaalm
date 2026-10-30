@@ -75,7 +75,7 @@ The probe mints an OAuth2 access token (scope `https://www.googleapis.com/auth/c
 
 `CredentialsInvalid` covers a `401` or `403` from Vertex, a token endpoint that refuses the key (HTTP `401`, `403`, or a `400` carrying OAuth2 error `invalid_grant` or `invalid_client`), and a Secret value that is not a usable service-account key. Any other failure (a network error, a `5xx`, or another token-endpoint error) sets `ProviderUnhealthy`. Under `ProviderUnhealthy`, a token-endpoint error can include the endpoint's response body; [the `Healthy` condition](../../resources/modelprovider.md#status) states how the message is cut.
 
-Only this probe mints Vertex tokens; the gateway does not serve the type ([The google-vertex type is reserved](../../gateways/llm/request-handling.md#the-google-vertex-type-is-reserved)).
+The gateway mints its own tokens for requests ([Vertex access tokens](../../gateways/llm/provider-routing.md#vertex-access-tokens)); the probe's mint is separate.
 
 ### Probe TLS trust
 
