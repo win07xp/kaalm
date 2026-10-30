@@ -108,6 +108,22 @@ func TestVertexUsageExtraction(t *testing.T) {
 	}
 }
 
+// Gemini reports thinking tokens in thoughtsTokenCount, outside
+// candidatesTokenCount, and bills them as output; both count as output.
+func TestVertexUsageExtraction_Thoughts(t *testing.T) {
+	v := vertexAdapter{}
+	u, ok := v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12,"thoughtsTokenCount":40}}`))
+	if !ok || u.InputTokens != 88 || u.OutputTokens != 52 {
+		t.Errorf("buffered usage = %+v ok=%v, want input 88, output 52", u, ok)
+	}
+	var acc Usage
+	v.accumulateStreamUsage([]byte(`{"candidates":[{"content":{}}]}`), &acc)
+	v.accumulateStreamUsage([]byte(`{"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3,"thoughtsTokenCount":7}}`), &acc)
+	if acc.InputTokens != 5 || acc.OutputTokens != 10 {
+		t.Errorf("stream usage = %+v, want input 5, output 10", acc)
+	}
+}
+
 // Grounding with Google Search reports executed queries in
 // groundingMetadata.webSearchQueries; the adapter counts them as the
 // "google_search" server tool.

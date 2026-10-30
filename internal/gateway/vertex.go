@@ -47,6 +47,7 @@ func (vertexAdapter) extractUsage(body []byte) (Usage, bool) {
 		UsageMetadata struct {
 			PromptTokenCount     int64 `json:"promptTokenCount"`
 			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
+			ThoughtsTokenCount   int64 `json:"thoughtsTokenCount"`
 		} `json:"usageMetadata"`
 		Candidates []vertexCandidate `json:"candidates"`
 	}
@@ -54,8 +55,10 @@ func (vertexAdapter) extractUsage(body []byte) (Usage, bool) {
 		return Usage{}, false
 	}
 	u := Usage{
-		InputTokens:  resp.UsageMetadata.PromptTokenCount,
-		OutputTokens: resp.UsageMetadata.CandidatesTokenCount,
+		InputTokens: resp.UsageMetadata.PromptTokenCount,
+		// Thinking tokens are reported apart from the candidates and billed
+		// as output.
+		OutputTokens: resp.UsageMetadata.CandidatesTokenCount + resp.UsageMetadata.ThoughtsTokenCount,
 		ServerTools:  vertexServerTools(resp.Candidates),
 	}
 	if u.isZero() {
@@ -94,6 +97,7 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 		UsageMetadata *struct {
 			PromptTokenCount     int64 `json:"promptTokenCount"`
 			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
+			ThoughtsTokenCount   int64 `json:"thoughtsTokenCount"`
 		} `json:"usageMetadata"`
 		Candidates []vertexCandidate `json:"candidates"`
 	}
@@ -107,7 +111,7 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 		return
 	}
 	u.InputTokens = chunk.UsageMetadata.PromptTokenCount
-	u.OutputTokens = chunk.UsageMetadata.CandidatesTokenCount
+	u.OutputTokens = chunk.UsageMetadata.CandidatesTokenCount + chunk.UsageMetadata.ThoughtsTokenCount
 }
 
 // streamUsageOption is false: a Vertex request needs no body change, since
