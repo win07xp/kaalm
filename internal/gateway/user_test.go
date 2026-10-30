@@ -1094,6 +1094,51 @@ func TestWaitAgentReachable_ConnectsWhenThePodTurnsReady(t *testing.T) {
 	}
 }
 
+// A Ready Pod that carries the Agent labels but is not controlled by the
+// Agent neither triggers a connect nor ends the wait; the wait ends when the
+// Agent's own Pod turns Ready.
+func TestWaitAgentReachable_IgnoresAPodThatOnlyCopiesTheLabels(t *testing.T) {
+	tr := syncedTracker()
+	h := tr.Handler()
+	pod := agentPod("team-a", "sup", "sup-0", false)
+	h.OnAdd(pod, false)
+	dial := &countingDial{result: func(int, context.Context) (net.Conn, error) { return pipeConn(), nil }}
+	s := podWaitServer(tr, dial)
+
+	done := make(chan error, 1)
+	go func() { done <- s.waitAgentReachable(context.Background(), podWaitAgent(5*time.Second), nil) }()
+	time.Sleep(300 * time.Millisecond)
+	if n := len(dial.calls()); n != 0 {
+		t.Fatalf("made %d connects before any Pod was Ready, want 0", n)
+	}
+
+	copied := agentPod("team-a", "sup", "sup-copy", true)
+	copied.OwnerReferences = nil
+	h.OnAdd(copied, false)
+	time.Sleep(300 * time.Millisecond)
+	if n := len(dial.calls()); n != 0 {
+		t.Fatalf("made %d connects after a label-only Pod turned Ready, want 0", n)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("wait ended (%v) on a Pod that only copies the Agent labels", err)
+	default:
+	}
+
+	h.OnUpdate(pod, agentPod("team-a", "sup", "sup-0", true))
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("wait = %v, want reachable", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait did not end after the Agent's Pod turned Ready")
+	}
+	if n := len(dial.calls()); n != 1 {
+		t.Errorf("made %d connects, want 1", n)
+	}
+}
+
 // With a synced watch that shows no Pod for the Agent (the Pod is not
 // created yet), the wait connects on the poll schedule as it does without a
 // watch.

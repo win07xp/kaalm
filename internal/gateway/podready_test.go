@@ -26,12 +26,14 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// agentPod is a Pod labeled the way the controller labels an Agent's Pod.
+// agentPod is a Pod built the way the controller builds an Agent's Pod: the
+// Agent labels and a controller owner reference to the Agent.
 func agentPod(namespace, agent, name string, ready bool) *corev1.Pod {
 	status := corev1.ConditionFalse
 	if ready {
 		status = corev1.ConditionTrue
 	}
+	controller := true
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace, Name: name,
@@ -39,6 +41,12 @@ func agentPod(namespace, agent, name string, ready bool) *corev1.Pod {
 				kaalmv1beta1.LabelAgent:    agent,
 				kaalmv1beta1.LabelWorkload: kaalmv1beta1.WorkloadAgent,
 			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: kaalmv1beta1.GroupVersion.String(),
+				Kind:       "Agent",
+				Name:       agent,
+				Controller: &controller,
+			}},
 		},
 		Status: corev1.PodStatus{
 			Phase:      corev1.PodRunning,
@@ -118,6 +126,47 @@ func TestPodReadyTracker_IgnoresOtherPods(t *testing.T) {
 
 	if len(tr.pods) != 0 {
 		t.Errorf("tracker holds %v, want no Pods", tr.pods)
+	}
+}
+
+// A Pod is an Agent's only when the Agent controls it. Anyone who can create
+// Pods in the namespace can copy the Agent labels, so a Pod with the labels
+// but no controller reference of kind Agent is not recorded and wakes no
+// waiter. The reference is matched by API group, so any version counts.
+func TestPodReadyTracker_RequiresTheAgentControllerReference(t *testing.T) {
+	tr := syncedTracker()
+	h := tr.Handler()
+	w := tr.Wait("team-a", "sup")
+	defer w.release()
+
+	noOwner := agentPod("team-a", "sup", "copy-0", true)
+	noOwner.OwnerReferences = nil
+	notController := agentPod("team-a", "sup", "copy-1", true)
+	notController.OwnerReferences[0].Controller = nil
+	replicaSet := agentPod("team-a", "sup", "copy-2", true)
+	replicaSet.OwnerReferences[0].APIVersion = "apps/v1"
+	replicaSet.OwnerReferences[0].Kind = "ReplicaSet"
+	otherName := agentPod("team-a", "sup", "copy-3", true)
+	otherName.OwnerReferences[0].Name = "other"
+	for _, pod := range []*corev1.Pod{noOwner, notController, replicaSet, otherName} {
+		h.OnAdd(pod, false)
+	}
+	if len(tr.pods) != 0 {
+		t.Errorf("tracker holds %v, want no Pods", tr.pods)
+	}
+	if w.seen() {
+		t.Error("waiter saw a Pod that only copies the Agent labels")
+	}
+	if fired(w) {
+		t.Error("waiter fired on a Pod that only copies the Agent labels")
+	}
+
+	otherVersion := agentPod("team-a", "sup", "sup-0", true)
+	otherVersion.OwnerReferences[0].APIVersion = kaalmv1beta1.GroupVersion.Group + "/v1"
+	h.OnAdd(otherVersion, false)
+	if !w.seen() || !fired(w) {
+		t.Errorf("Pod controlled through %s: seen %v, fired %v; want both",
+			otherVersion.OwnerReferences[0].APIVersion, w.seen(), fired(w))
 	}
 }
 
