@@ -50,8 +50,8 @@
 4.4 internal/gateway/discord.go internal/gateway/whatsapp.go internal/gateway/platform.go
 4.5 internal/gateway/tracing.go cmd/gateway/main.go internal/gateway/baseurl.go
 4.6 internal/gateway/user.go internal/gateway/pipeline_bound.go internal/gateway/podready.go
-4.7 internal/gateway/user.go internal/controller/agent_activity.go internal/controller/agentchannel_health.go internal/controller/health.go internal/controller/toolprovider_health.go internal/controller/health_vertex.go internal/gcpauth/ internal/controller/agent_controller.go
-4.8 internal/controller/ownership.go internal/controller/fqdn_policy.go internal/controller/secret_access.go internal/controller/dns_selector.go internal/secretwatch/
+4.7 internal/gateway/user.go internal/controller/agent_activity.go internal/controller/agentchannel_health.go internal/controller/health.go internal/controller/toolprovider_health.go internal/controller/health_vertex.go internal/gcpauth/ internal/controller/agent_controller.go internal/gateway/podready.go
+4.8 internal/controller/ownership.go internal/controller/fqdn_policy.go internal/controller/secret_access.go internal/controller/dns_selector.go internal/secretwatch/ internal/controller/cni.go charts/kaalm/templates/rbac.yaml
 5.1 internal/gateway/channelauth.go internal/gateway/whatsapp.go internal/gateway/mcpsession.go
 5.2 internal/gateway/server.go internal/tlsutil/loader.go internal/gateway/async.go internal/gateway/platform.go
 5.3 internal/gateway/fallback.go internal/gateway/platform.go internal/eventrec/eventrec.go internal/controller/problem_list.go internal/controller/status_write_bound.go internal/controller/write_rejection.go internal/gateway/channelhealth.go internal/controller/agentchannel_controller.go internal/gateway/user.go internal/controller/agent_controller.go

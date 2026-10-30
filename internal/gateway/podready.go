@@ -20,6 +20,8 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	toolscache "k8s.io/client-go/tools/cache"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -32,7 +34,9 @@ import (
 // starts serving wakes every wait for its Agent. The per-Agent cap on Pod
 // waits is not counted here but in Server.podWaits (awaitPod): a wait that
 // polls without the tracker (no Pod watch, or one not synced) registers no
-// waiter here.
+// waiter here. An Agent's Pod is one the Agent controls (see agentPodKey);
+// a Pod that only copies the Agent labels is ignored, because anyone who can
+// create Pods in the namespace can copy labels.
 type PodReadyTracker struct {
 	// Synced reports whether the Pod watch has delivered its initial list.
 	// nil or false means the tracker is not used and waits poll.
@@ -88,10 +92,22 @@ func (t *PodReadyTracker) Handler() toolscache.ResourceEventHandlerFuncs {
 }
 
 // agentPodKey returns the Agent a Pod belongs to, or false for a Pod that is
-// not an Agent's (an AgentTask's Pod, or any other).
+// not an Agent's (an AgentTask's Pod, or any other). An Agent's Pod carries
+// the Agent labels and a controller owner reference to that Agent, as the
+// controller sets both when it creates the Pod. Labels alone are not enough:
+// anyone who can create Pods in the namespace can copy them. The reference
+// is matched by API group, not group and version, so a Pod controlled
+// through any version of the kaalm.io API counts.
 func agentPodKey(pod *corev1.Pod) (agentKey, bool) {
 	name := pod.Labels[kaalmv1beta1.LabelAgent]
 	if pod.Labels[kaalmv1beta1.LabelWorkload] != kaalmv1beta1.WorkloadAgent || name == "" {
+		return agentKey{}, false
+	}
+	ref := metav1.GetControllerOf(pod)
+	if ref == nil || ref.Kind != "Agent" || ref.Name != name {
+		return agentKey{}, false
+	}
+	if gv, err := schema.ParseGroupVersion(ref.APIVersion); err != nil || gv.Group != kaalmv1beta1.GroupVersion.Group {
 		return agentKey{}, false
 	}
 	return agentKey{namespace: pod.Namespace, name: name}, true
