@@ -172,7 +172,8 @@
           "$ref": "#/definitions/duration"
         },
         "maxPodWaitsPerAgent": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1
         },
         "providerFirstByteTimeout": {
           "$ref": "#/definitions/duration"
