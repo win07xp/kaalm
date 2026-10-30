@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/jwt"
@@ -117,11 +118,26 @@ func checkRSAKey(pemBytes []byte) error {
 	return errors.New("not an RSA private key")
 }
 
+// Token is a minted access token and the time it expires.
+type Token struct {
+	AccessToken string
+	// Expiry is when the token stops working, read from the endpoint's
+	// expires_in; zero when the endpoint sent none.
+	Expiry time.Time
+}
+
 // AccessToken exchanges a JWT bearer assertion signed with the key for an
 // access token at the key's token endpoint, over hc (http.DefaultClient
-// when nil). A refusal of the key wraps ErrRejected; a network error or any
-// other non-2xx is returned as is.
+// when nil). Errors are those of Token.
 func (k *ServiceAccountKey) AccessToken(ctx context.Context, hc *http.Client) (string, error) {
+	tok, err := k.Token(ctx, hc)
+	return tok.AccessToken, err
+}
+
+// Token is AccessToken with the token's expiry, for a caller that caches
+// it. A refusal of the key wraps ErrRejected; a network error or any other
+// non-2xx is returned as is.
+func (k *ServiceAccountKey) Token(ctx context.Context, hc *http.Client) (Token, error) {
 	if hc != nil {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, hc)
 	}
@@ -136,14 +152,14 @@ func (k *ServiceAccountKey) AccessToken(ctx context.Context, hc *http.Client) (s
 	if err != nil {
 		var re *oauth2.RetrieveError
 		if errors.As(err, &re) && re.Response != nil && rejected(re.Response.StatusCode, re.Body) {
-			return "", fmt.Errorf("%w: HTTP %d", ErrRejected, re.Response.StatusCode)
+			return Token{}, fmt.Errorf("%w: HTTP %d", ErrRejected, re.Response.StatusCode)
 		}
-		return "", err
+		return Token{}, err
 	}
 	if tok.AccessToken == "" {
-		return "", errors.New("token endpoint returned no access_token")
+		return Token{}, errors.New("token endpoint returned no access_token")
 	}
-	return tok.AccessToken, nil
+	return Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
 }
 
 // rejected classifies a token endpoint error: 401 and 403 always refuse the

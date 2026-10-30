@@ -31,6 +31,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testKeyPEM(t *testing.T) (*rsa.PrivateKey, string) {
@@ -202,5 +203,39 @@ func TestAccessToken(t *testing.T) {
 	status, body = http.StatusOK, `{"token_type":"Bearer"}`
 	if _, err := k.AccessToken(ctx, srv.Client()); err == nil {
 		t.Error("a response with no access_token must be an error")
+	}
+}
+
+// Token returns the access token with its expiry, read from expires_in, so
+// a caller can cache it; a response without expires_in leaves Expiry zero.
+func TestToken_Expiry(t *testing.T) {
+	_, pemKey := testKeyPEM(t)
+	body := `{"access_token":"ya29.test","token_type":"Bearer","expires_in":3600}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	k, err := ParseServiceAccountKey(keyJSON(t, map[string]string{
+		"type": "service_account", "project_id": "proj", "private_key": pemKey,
+		"client_email": "sa@proj.iam.gserviceaccount.com", "token_uri": srv.URL + "/token",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now()
+	tok, err := k.Token(context.Background(), srv.Client())
+	if err != nil || tok.AccessToken != "ya29.test" {
+		t.Fatalf("Token = %+v, %v; want ya29.test", tok, err)
+	}
+	if lo, hi := before.Add(59*time.Minute), time.Now().Add(61*time.Minute); tok.Expiry.Before(lo) || tok.Expiry.After(hi) {
+		t.Errorf("Expiry = %v, want about an hour after %v", tok.Expiry, before)
+	}
+
+	body = `{"access_token":"ya29.other","token_type":"Bearer"}`
+	tok, err = k.Token(context.Background(), srv.Client())
+	if err != nil || tok.AccessToken != "ya29.other" || !tok.Expiry.IsZero() {
+		t.Errorf("Token without expires_in = %+v, %v; want ya29.other with a zero Expiry", tok, err)
 	}
 }
