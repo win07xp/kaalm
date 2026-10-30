@@ -134,10 +134,124 @@ to set instead.
 The same choice exists for async webhook callbacks to receivers under a
 private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.
 
+## 5. Serve Gemini models through Vertex
+
+A `google-vertex` provider serves Google's Gemini models in Google's native
+API. Its credential is a service-account JSON key, not an API key. The gateway
+exchanges the key for short-lived access tokens, so the key file never reaches
+an agent.
+
+Create the Secret from the key file, in `kaalm-system`. Then set the label and
+the annotation from step 1. The annotation lists the host of the endpoint you
+will set: `LOCATION-aiplatform.googleapis.com` for a regional endpoint, or
+`aiplatform.googleapis.com` for the global one.
+
+```bash
+kubectl create secret generic vertex-key -n kaalm-system \
+  --from-file=key=SERVICE_ACCOUNT_KEY.json
+kubectl label secret vertex-key -n kaalm-system \
+  kaalm.io/provider-credential=true
+kubectl annotate secret vertex-key -n kaalm-system \
+  kaalm.io/provider-hosts=LOCATION-aiplatform.googleapis.com
+```
+
+Replace `SERVICE_ACCOUNT_KEY.json` with the path of the key file, and
+`LOCATION` with the Google Cloud location of your endpoint, such as
+`us-central1`.
+
+Then create the provider. The key in `credentialsRef` is the `key=` name you
+gave `--from-file`:
+
+```yaml
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: vertex-shared
+spec:
+  type: google-vertex
+  endpoint: https://LOCATION-aiplatform.googleapis.com
+  credentialsRef:
+    name: vertex-key
+    key: key
+  models:
+    - id: gemini-2.5-flash
+      costPer1MInputTokens: "0.30"
+      costPer1MOutputTokens: "2.50"
+  allowedNamespaces: ["team-*"]
+```
+
+`Ready` and `Healthy` read as in step 3, with one addition: the probe mints an
+access token from the key before it lists the publisher models, so
+`Healthy=True` shows that both the key and the endpoint work. A Secret value
+that is not a service-account key, or a key that Google's token endpoint
+refuses, reports `Ready=False` with reason `CredentialsInvalid`.
+
+An agent calls the provider in Google's format, with the Gemini model id
+qualified by the provider name, `vertex-shared/gemini-2.5-flash`. With the
+`google-genai` SDK:
+
+- Set `vertexai=True`, and `project` and `location` to a project and location
+  the service account can use. The gateway passes both through.
+- Set the HTTP options' `base_url` to `$KAALM_GATEWAY_ENDPOINT`.
+- Pass `model="vertex-shared/gemini-2.5-flash"`. The SDK writes the part
+  before the slash into the request path as the publisher, and the gateway
+  finds the provider there.
+- Pass a placeholder credentials object. With `vertexai=True` and no
+  credentials, the SDK looks for Application Default Credentials and raises
+  `google.auth.exceptions.DefaultCredentialsError` before it sends anything.
+  The SDK sends the placeholder as `Authorization: Bearer`, and the gateway
+  strips it before forwarding, so it plays the role of
+  `api_key="managed-by-kaalm"` in the Anthropic and OpenAI examples.
+- Pass the Kaalm HTTP client in the HTTP options, so the request carries the
+  Pod's identity. [Framework agents](../developers/framework-agents.md)
+  explains `kaalm.http_client()`.
+
+```python
+import os
+
+import kaalm
+from google import genai
+from google.genai import types
+from google.oauth2 import credentials
+
+client = genai.Client(
+    vertexai=True,
+    project="PROJECT",
+    location="LOCATION",
+    credentials=credentials.Credentials(token="managed-by-kaalm"),
+    http_options=types.HttpOptions(
+        base_url=os.environ["KAALM_GATEWAY_ENDPOINT"],
+        httpx_client=kaalm.http_client(),
+    ),
+)
+```
+
+Replace `PROJECT` and `LOCATION` with the project and location you chose above.
+
+Any other client sends the same request to this path, with the usual
+`generateContent` body:
+
+```text
+POST $KAALM_GATEWAY_ENDPOINT/v1beta1/projects/PROJECT/locations/LOCATION/publishers/vertex-shared/models/gemini-2.5-flash:generateContent
+```
+
+Use the same `PROJECT` and `LOCATION` as in the SDK settings.
+
+`/v1/projects/...` works too. For a stream, end the path with
+`:streamGenerateContent`; the gateway adds `alt=sse` itself, so the stream is
+metered like any other. Budgets and rate limits apply as they do for any
+provider, and a fallback for a `google-vertex` provider must be another
+`google-vertex` provider. The design book's
+[Provider routing and adapters](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/provider-routing.md#vertex-access-tokens)
+covers the token mint, and
+[Request handling](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/request-handling.md#streaming-responses)
+covers streaming and metering.
+
 ---
 
 *How this works: design book pages Resources, ModelProvider (every field and
 the status fields), Resources, Validation and defaulting (rules 49 and 50,
 the label and the host annotation), Security, Credential handling (why keys live only in
-kaalm-system), Gateways, LLM Gateway (how the proxy injects the credential),
-and Controller, Reconcilers (the probe backoff and the google-vertex probe).*
+kaalm-system), Gateways, LLM Gateway (how the proxy injects the credential and
+mints the google-vertex token), and Controller, Reconcilers (the probe backoff
+and the google-vertex probe).*

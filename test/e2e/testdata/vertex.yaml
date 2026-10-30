@@ -1,0 +1,88 @@
+# A google-vertex ModelProvider served through the gateway against the mock
+# provider, which stands in for both Google's token endpoint and Vertex. The
+# credential Secret (e2e-vertex-mock-key) is not here: the spec generates a
+# fresh service-account key at run time so no private key is committed.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: e2e-vertex-mock
+spec:
+  type: google-vertex
+  endpoint: https://mock-provider.e2e.svc:8443/vertex
+  credentialsRef:
+    name: e2e-vertex-mock-key
+    key: key
+  healthCheck:
+    enabled: true
+    intervalSeconds: 15
+  allowedNamespaces:
+    - e2e
+  models:
+    - id: gemini-mock
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+# A token-authenticated caller that speaks the Vertex format: the qualified
+# model is the path's publisher and model segments. The streaming call omits
+# alt=sse; the gateway adds it upstream.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vertex-caller
+  namespace: e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vertex-caller
+  namespace: e2e
+spec:
+  serviceAccountName: vertex-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.23.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # Retry through the gateway's source-IP startup race, as llm-caller
+        # does: the gateway answers 401 until its Pod informer sees this Pod.
+        - |
+          token=$(cat /var/run/token/token)
+          base=https://kaalm-gateway.kaalm-system.svc:8443/v1beta1/projects/e2e-project/locations/global/publishers/e2e-vertex-mock/models/gemini-mock
+          call() {
+            for i in $(seq 1 20); do
+              code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+                --cacert /var/run/ca/ca.crt \
+                -H "Authorization: Bearer $token" \
+                -H "Content-Type: application/json" \
+                -d '{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}' \
+                "$base:$1") || true
+              echo "$1 attempt $i: HTTP $code"; cat /tmp/resp; echo
+              if [ "$code" = "200" ]; then echo "$1 HTTP 200"; cat /tmp/resp; echo; return 0; fi
+              sleep 3
+            done
+            echo "$1 gave up after retries"; return 1
+          }
+          call generateContent && call streamGenerateContent
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt

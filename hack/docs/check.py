@@ -165,6 +165,9 @@ NON_SCENARIO_SPECS = {
         "the child-ownership check against real cert-manager, not an acceptance scenario"
     ),
     "Agent and AgentTask with the same name": "the task child-name qualifier, not an acceptance scenario",
+    "google-vertex through the gateway": (
+        "served-type coverage of the Vertex path and token mint against the mock, not an acceptance scenario"
+    ),
 }
 SPEC_NODE = re.compile(
     r'\b[FPX]?(Describe|Context|When|It|Specify|DescribeTable)\(\s*(?:"((?:[^"\\]|\\.)*)"|`([^`]*)`)'

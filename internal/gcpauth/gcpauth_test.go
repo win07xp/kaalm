@@ -31,6 +31,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testKeyPEM(t *testing.T) (*rsa.PrivateKey, string) {
@@ -202,5 +203,83 @@ func TestAccessToken(t *testing.T) {
 	status, body = http.StatusOK, `{"token_type":"Bearer"}`
 	if _, err := k.AccessToken(ctx, srv.Client()); err == nil {
 		t.Error("a response with no access_token must be an error")
+	}
+}
+
+// Token returns the access token with its expiry, read from expires_in, so
+// a caller can cache it; a response without expires_in leaves Expiry zero.
+func TestToken_Expiry(t *testing.T) {
+	_, pemKey := testKeyPEM(t)
+	body := `{"access_token":"ya29.test","token_type":"Bearer","expires_in":3600}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	k, err := ParseServiceAccountKey(keyJSON(t, map[string]string{
+		"type": "service_account", "project_id": "proj", "private_key": pemKey,
+		"client_email": "sa@proj.iam.gserviceaccount.com", "token_uri": srv.URL + "/token",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now()
+	tok, err := k.Token(context.Background(), srv.Client())
+	if err != nil || tok.AccessToken != "ya29.test" {
+		t.Fatalf("Token = %+v, %v; want ya29.test", tok, err)
+	}
+	if lo, hi := before.Add(59*time.Minute), time.Now().Add(61*time.Minute); tok.Expiry.Before(lo) || tok.Expiry.After(hi) {
+		t.Errorf("Expiry = %v, want about an hour after %v", tok.Expiry, before)
+	}
+
+	body = `{"access_token":"ya29.other","token_type":"Bearer"}`
+	tok, err = k.Token(context.Background(), srv.Client())
+	if err != nil || tok.AccessToken != "ya29.other" || !tok.Expiry.IsZero() {
+		t.Errorf("Token without expires_in = %+v, %v; want ya29.other with a zero Expiry", tok, err)
+	}
+}
+
+// The token request honors the context's deadline even though the oauth2
+// jwt package sends it without one: a silent token endpoint ends the mint at
+// the deadline, and the error says so.
+func TestToken_Deadline(t *testing.T) {
+	_, pemKey := testKeyPEM(t)
+	stop := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select { // accept the request and never answer
+		case <-r.Context().Done():
+		case <-stop:
+		}
+	}))
+	defer srv.Close()
+	defer close(stop)
+	k, err := ParseServiceAccountKey(keyJSON(t, map[string]string{
+		"type": "service_account", "project_id": "proj", "private_key": pemKey,
+		"client_email": "sa@proj.iam.gserviceaccount.com", "token_uri": srv.URL + "/token",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The client has no Timeout of its own, like the gateway's upstream client.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := k.Token(ctx, srv.Client())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("Token returned after %v, want about 200ms", elapsed)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("err = %v, want one wrapping context.DeadlineExceeded", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Token ignored the context deadline")
 	}
 }
