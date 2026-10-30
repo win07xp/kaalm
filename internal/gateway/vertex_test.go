@@ -54,6 +54,8 @@ func TestVertexPathsServed(t *testing.T) {
 		"/v1/projects/p/locations/l/publishers/prov/models/gemini:generateContent/extra",
 		"/v1/projects/nonsense",
 		"/v1/nonsense",
+		// %3F decoded by the mux: a '?' inside the method segment.
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:streamGenerateContent?alt=json",
 	}
 	for _, path := range notServed {
 		if a, ok := adapterForPath(path); ok {

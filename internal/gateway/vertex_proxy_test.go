@@ -386,6 +386,32 @@ func TestLLMProxy_VertexTokenEndpointUnreachable(t *testing.T) {
 	}
 }
 
+// An escaped '?' (%3F) in the method segment is not a Vertex path, even
+// with a qualified model in the body: the request gets the constant 400 and
+// nothing is forwarded, so no query reaches the upstream and the body's
+// model is never what a call to another model is priced as.
+func TestLLMProxy_VertexEscapedQueryInPath(t *testing.T) {
+	h, cert := vertexHarness(t, vertexJSON)
+	body := vertexRequestBody()
+	body["model"] = "prov/gemini"
+	resp := postJSON(t, h.client(cert),
+		h.url("/v1/projects/p/locations/l/publishers/google/models/unlisted-pro:streamGenerateContent%3Falt=json"), body, nil)
+	defer func() { _ = resp.Body.Close() }()
+	var envelope struct {
+		Error errorBody `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest || envelope.Error.Type != errInvalidRequest ||
+		envelope.Error.Message != "unrecognized path" {
+		t.Errorf("got %d %+v, want 400 invalid_request \"unrecognized path\"", resp.StatusCode, envelope.Error)
+	}
+	if n := len(capturedUpstream(h)); n != 0 {
+		t.Errorf("%d requests reached the upstream, want 0", n)
+	}
+}
+
 // A token endpoint that accepts the request and stays silent is bounded by
 // the upstream timeout: the caller gets 504 provider_timeout and the gateway
 // logs llm access token unavailable once a minute.

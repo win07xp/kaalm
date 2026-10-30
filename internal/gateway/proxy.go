@@ -105,6 +105,11 @@ func workloadKey(c *caller) string {
 func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r.Context())
 	adapter, ok := adapterForPath(r.URL.Path)
+	if _, isVertex := adapter.(vertexAdapter); isVertex && adapter.modelFromPath(r.URL.Path) == "" {
+		// A Vertex request names its model only in the path; one whose path
+		// yields none is never served on the body's model instead.
+		ok = false
+	}
 	if !ok {
 		// Constant, like the mux's catch-all: the answer never echoes the
 		// caller's path (the Vertex prefixes route any path here).

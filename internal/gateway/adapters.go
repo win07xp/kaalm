@@ -76,7 +76,10 @@ func adapterForPath(urlPath string) (providerAdapter, bool) {
 	case "/v1/chat/completions", "/v1/completions":
 		return openaiAdapter{}, true
 	}
-	if _, ok := parseVertexPath(path); ok {
+	// The Vertex parse reads the whole path, the same string modelFromPath
+	// and upstreamPath read, so a '?' the mux decoded from %3F inside the
+	// method segment fails all three alike instead of only here.
+	if _, ok := parseVertexPath(urlPath); ok {
 		return vertexAdapter{}, true
 	}
 	// The mux routes the Vertex prefixes here whole, so a path under them
