@@ -192,6 +192,36 @@ func TestVertexTokenCache(t *testing.T) {
 		}
 	})
 
+	t.Run("silent endpoint ends at the bound", func(t *testing.T) {
+		e := newTokenEndpoint(t, 3600, true)
+		t.Cleanup(func() { close(e.release) }) // runs before the server closes
+		c := newCache()
+		key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+		for i := 1; i <= 2; i++ {
+			done := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := c.token(ctx, e.srv.Client(), "prov", key, 200*time.Millisecond)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if elapsed := time.Since(start); elapsed > time.Second {
+					t.Errorf("call %d returned after %v, want about 200ms", i, elapsed)
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("call %d: err = %v, want context.DeadlineExceeded", i, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("call %d: the mint ignored its bound", i)
+			}
+			// The timed-out flight is over, so each call starts its own mint.
+			if got := e.mints.Load(); got != int64(i) {
+				t.Errorf("mints after call %d = %d, want %d", i, got, i)
+			}
+		}
+	})
+
 	t.Run("invalid key", func(t *testing.T) {
 		_, err := newCache().token(ctx, nil, "prov", "not-a-key", time.Second)
 		if !errors.Is(err, gcpauth.ErrInvalidKey) {

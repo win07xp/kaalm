@@ -75,8 +75,9 @@ const (
 		`"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":22,"totalTokenCount":33}}`
 )
 
-// vertexUpstream answers the token endpoint on /token (a token) and
-// /token-reject (a refusal of the key), and hands every other path to gen.
+// vertexUpstream answers the token endpoint on /token (a token),
+// /token-reject (a refusal of the key), and /token-silent (no answer for 3s,
+// or until the caller hangs up), and hands every other path to gen.
 func vertexUpstream(gen http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -87,6 +88,11 @@ func vertexUpstream(gen http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+		case "/token-silent":
+			select {
+			case <-r.Context().Done():
+			case <-time.After(3 * time.Second):
+			}
 		default:
 			gen(w, r)
 		}
@@ -377,6 +383,39 @@ func TestLLMProxy_VertexTokenEndpointUnreachable(t *testing.T) {
 	}
 	if n := len(capturedUpstream(h)); n != 0 {
 		t.Errorf("%d requests reached the upstream, want 0", n)
+	}
+}
+
+// A token endpoint that accepts the request and stays silent is bounded by
+// the upstream timeout: the caller gets 504 provider_timeout and the gateway
+// logs llm access token unavailable once a minute.
+func TestLLMProxy_VertexTokenEndpointSilent(t *testing.T) {
+	buf := captureSlog(t)
+	h, cert := vertexHarness(t, vertexJSON)
+	h.server.Config.UpstreamTimeout = 200 * time.Millisecond
+	h.store.creds["prov"] = vertexServiceAccountJSON(t, h.upstream.URL+"/token-silent")
+	clock := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	h.server.credentialLog.now = func() time.Time { return clock }
+
+	for i := 0; i < 2; i++ {
+		start := time.Now()
+		resp := postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(), nil)
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("call %d took %v, want about the 200ms upstream timeout", i, elapsed)
+		}
+		if resp.StatusCode != http.StatusGatewayTimeout {
+			t.Errorf("call %d: status %d, want 504", i, resp.StatusCode)
+		}
+		if got := errType(t, resp); got != errProviderTimeout {
+			t.Errorf("call %d: error type %q, want %q", i, got, errProviderTimeout)
+		}
+	}
+	if recs := logRecords(t, buf, "llm access token unavailable"); len(recs) != 1 || recs[0]["provider"] != "prov" {
+		t.Errorf("want one access-token warning naming prov, got %v", recs)
+	}
+	_, calls := vertexCalls(capturedUpstream(h))
+	if len(calls) != 0 {
+		t.Errorf("%d Vertex calls reached the upstream, want 0", len(calls))
 	}
 }
 

@@ -135,9 +135,29 @@ func (k *ServiceAccountKey) AccessToken(ctx context.Context, hc *http.Client) (s
 }
 
 // Token is AccessToken with the token's expiry, for a caller that caches
-// it. A refusal of the key wraps ErrRejected; a network error or any other
+// it. A refusal of the key wraps ErrRejected; a mint that runs past ctx's
+// deadline wraps context.DeadlineExceeded; a network error or any other
 // non-2xx is returned as is.
 func (k *ServiceAccountKey) Token(ctx context.Context, hc *http.Client) (Token, error) {
+	deadline, hasDeadline := ctx.Deadline()
+	if hasDeadline {
+		// The jwt package sends the token request without ctx, so its
+		// deadline would not bound a token endpoint that never answers. A
+		// copy of the client with a Timeout no later than the deadline
+		// bounds it instead.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return Token{}, fmt.Errorf("minting an access token: %w", context.DeadlineExceeded)
+		}
+		bounded := http.Client{}
+		if hc != nil {
+			bounded = *hc
+		}
+		if bounded.Timeout == 0 || remaining < bounded.Timeout {
+			bounded.Timeout = remaining
+		}
+		hc = &bounded
+	}
 	if hc != nil {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, hc)
 	}
@@ -153,6 +173,11 @@ func (k *ServiceAccountKey) Token(ctx context.Context, hc *http.Client) (Token, 
 		var re *oauth2.RetrieveError
 		if errors.As(err, &re) && re.Response != nil && rejected(re.Response.StatusCode, re.Body) {
 			return Token{}, fmt.Errorf("%w: HTTP %d", ErrRejected, re.Response.StatusCode)
+		}
+		// jwt formats transport errors with %v, so a timeout no longer
+		// matches context.DeadlineExceeded; restore it for the caller.
+		if hasDeadline && (errors.Is(ctx.Err(), context.DeadlineExceeded) || !time.Now().Before(deadline)) {
+			return Token{}, fmt.Errorf("%w: %v", context.DeadlineExceeded, err)
 		}
 		return Token{}, err
 	}
