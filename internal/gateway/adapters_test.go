@@ -150,15 +150,15 @@ func TestAdapterForProviderType(t *testing.T) {
 func TestExtractUsage_MalformedAndZero(t *testing.T) {
 	adapters := []providerAdapter{anthropicAdapter{}, openaiAdapter{}, vertexAdapter{}}
 	for _, a := range adapters {
-		if _, ok := a.extractUsage([]byte("not json")); ok {
+		if _, ok := usageOf(a, []byte("not json")); ok {
 			t.Errorf("%s: malformed body must not yield usage", a.formatName())
 		}
-		if _, ok := a.extractUsage([]byte(`{}`)); ok {
+		if _, ok := usageOf(a, []byte(`{}`)); ok {
 			t.Errorf("%s: zero usage must not yield usage", a.formatName())
 		}
 	}
 	// OpenAI-shaped zero usage.
-	if _, ok := (openaiAdapter{}).extractUsage([]byte(`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`)); ok {
+	if _, ok := usageOf(openaiAdapter{}, []byte(`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`)); ok {
 		t.Error("openai zero usage must be false")
 	}
 }
@@ -168,7 +168,7 @@ func TestExtractUsage_MalformedAndZero(t *testing.T) {
 func TestAnthropicExtractUsage_ServerToolUse(t *testing.T) {
 	body := []byte(`{"usage":{"input_tokens":6039,"output_tokens":931,` +
 		`"server_tool_use":{"web_search_requests":2}}}`)
-	u, ok := anthropicAdapter{}.extractUsage(body)
+	u, ok := usageOf(anthropicAdapter{}, body)
 	if !ok {
 		t.Fatal("usage with server tools must extract")
 	}
@@ -183,7 +183,7 @@ func TestAnthropicExtractUsage_ServerToolUse(t *testing.T) {
 	// the tokens (the facets decode separately).
 	body = []byte(`{"usage":{"input_tokens":5,"output_tokens":2,` +
 		`"server_tool_use":{"web_search_requests":"three"}}}`)
-	u, ok = anthropicAdapter{}.extractUsage(body)
+	u, ok = usageOf(anthropicAdapter{}, body)
 	if !ok || u.InputTokens != 5 || u.OutputTokens != 2 {
 		t.Fatalf("tokens must survive a malformed server_tool_use: %+v ok=%v", u, ok)
 	}
@@ -224,7 +224,7 @@ func TestAnthropicStream_ServerToolUseCumulative(t *testing.T) {
 // The OpenAI chat-completions format carries no usage-level server-tool
 // counts on the paths the gateway proxies; the adapter extracts none.
 func TestOpenAIExtractUsage_NoServerTools(t *testing.T) {
-	u, ok := openaiAdapter{}.extractUsage([]byte(`{"usage":{"prompt_tokens":9,"completion_tokens":4}}`))
+	u, ok := usageOf(openaiAdapter{}, []byte(`{"usage":{"prompt_tokens":9,"completion_tokens":4}}`))
 	if !ok || u.ServerTools != nil {
 		t.Errorf("openai must extract tokens only: %+v ok=%v", u, ok)
 	}

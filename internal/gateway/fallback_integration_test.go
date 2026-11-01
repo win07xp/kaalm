@@ -107,7 +107,7 @@ func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
 		t.Fatalf("fallback chain should yield 200 from the backup, got %d", resp.StatusCode)
 	}
 	// The backup's spend was recorded, not the primary's.
-	if u := h.spend.Total("team-a", "backup", "m1"); u.InputTokens != 3 {
+	if u := waitUsage(t, h, "backup", "m1"); u.InputTokens != 3 {
 		t.Errorf("backup usage not recorded: %+v", u)
 	}
 }
@@ -270,7 +270,7 @@ func TestIntegration_CrossFormatFallback_AnthropicCallerOpenAIBackup(t *testing.
 		t.Errorf("backup messages wrong: %v", msgs)
 	}
 	// Spend landed on the backup for the mapped model, read with its adapter.
-	if u := h.spend.Total("team-a", "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
+	if u := waitUsage(t, h, "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
 		t.Errorf("backup usage not recorded for the mapped model: %+v", u)
 	}
 	if u := h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
@@ -387,7 +387,7 @@ func TestIntegration_CrossFormatFallback_OpenAICallerAnthropicBackup(t *testing.
 	if gotBody["max_tokens"] != float64(4096) || gotBody["model"] != "claude-sonnet-4-6" {
 		t.Errorf("backup request wrong: %v", gotBody)
 	}
-	if u := h.spend.Total("team-a", "backup", "claude-sonnet-4-6"); u.InputTokens != 4 {
+	if u := waitUsage(t, h, "backup", "claude-sonnet-4-6"); u.InputTokens != 4 {
 		t.Errorf("spend wrong: %+v", u)
 	}
 }
@@ -482,7 +482,7 @@ func TestIntegration_PreHeaderStallFallsBackAsATimeout(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d, want the backup's 200", resp.StatusCode)
 	}
-	if u := h.spend.Total("team-a", "backup", "m1"); u.InputTokens != 3 {
+	if u := waitUsage(t, h, "backup", "m1"); u.InputTokens != 3 {
 		t.Errorf("backup usage not recorded: %+v", u)
 	}
 	if got := testutil.ToFloat64(h.server.Metrics.llmFallback.WithLabelValues("prov", "backup", "success")); got != 1 {
@@ -606,5 +606,82 @@ func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
 	}
 	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 0 || u.OutputTokens != 0 {
 		t.Errorf("spend settled for a cut-off answer: %+v", u)
+	}
+}
+
+func TestIntegration_CrossFormatFallback_OverLimitAnswerIs502(t *testing.T) {
+	// The Anthropic caller allows 16 output tokens; the OpenAI backup sends
+	// an answer far past what 16 tokens can render, usage last.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"role":"assistant","content":"`)
+		_, _ = io.WriteString(w, strings.Repeat("z", int(crossingHoldLimit(16))+256))
+		_, _ = io.WriteString(w, `"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
+	})
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 16,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 502", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderError {
+		t.Errorf("error type %q, want %s", got, errProviderError)
+	}
+	if u := waitUsage(t, h, "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
+		t.Errorf("backup spend %+v, want the usage read while draining", u)
+	}
+	waitFor(t, func() bool { _, slots := boundarySlots(h); return slots == 0 })
+}
+
+func TestIntegration_CrossFormatFallback_CutOffAnswerDoesNotFallBack(t *testing.T) {
+	// The crossing backup cuts its 2xx partway; its own fallback is never
+	// tried, since the 2xx had started.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"content":"half`)
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	})
+	var childCalls atomic.Int64
+	childSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		childCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"from-child","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},` +
+			`"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`))
+	}))
+	t.Cleanup(childSrv.Close)
+	h.server.Config.UpstreamCAs.AddCert(childSrv.Certificate())
+	h.server.upstreamOnce = onceReset()
+	h.store.providers["child"] = &kaalmv1beta1.ModelProvider{
+		ObjectMeta: metav1ObjectMeta("child"),
+		Spec: kaalmv1beta1.ModelProviderSpec{
+			Type: "openai", Endpoint: childSrv.URL, AllowedNamespaces: []string{"team-*"},
+			Models: []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}},
+		},
+	}
+	h.store.creds["child"] = "sk-child"
+	h.store.providers["backup"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "child"}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "child"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "child"})
+
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 502", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderError {
+		t.Errorf("error type %q, want %s", got, errProviderError)
+	}
+	if got := childCalls.Load(); got != 0 {
+		t.Errorf("the backup's fallback was called %d times after the 2xx started", got)
 	}
 }

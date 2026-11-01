@@ -29,9 +29,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// A request whose caller left settles what the gateway can read and counts
-// as client_closed: a 2xx answer read in full settles its usage, a cut-off
-// one counts as usage missing, and anything else settles zero.
+// A request whose caller left before the relay started counts as
+// client_closed: a 2xx answer, which arrives unread and can no longer be
+// read, counts as usage missing, and every outcome settles zero.
 func TestSettleCallerLeft(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -43,9 +43,8 @@ func TestSettleCallerLeft(t *testing.T) {
 		// zeroSettle: the admission slot is freed with a zero cost.
 		zeroSettle bool
 	}{
-		{name: "full answer", status: 200, body: `{"id":"x","usage":{"prompt_tokens":7,"completion_tokens":2}}`,
-			wantInput: 7},
-		{name: "cut-off answer", status: 200, body: `{"id":"x","choices":[`, wantMissing: 1, zeroSettle: true},
+		{name: "2xx answer", status: 200, body: `{"id":"x","usage":{"prompt_tokens":7,"completion_tokens":2}}`,
+			wantMissing: 1, zeroSettle: true},
 		{name: "provider error", status: 400, body: `{"error":{}}`, zeroSettle: true},
 		{name: "no response", noResponse: true, zeroSettle: true},
 	}
@@ -58,13 +57,15 @@ func TestSettleCallerLeft(t *testing.T) {
 			res := forwardResult{provider: "prov", model: "m1", chosen: prov,
 				settle: func(cost float64) { settled = cost }}
 			if !tc.noResponse {
-				res.resp = &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(""))}
-				res.body = []byte(tc.body)
+				res.resp = &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}
+				if tc.status >= 300 {
+					res.body = []byte(tc.body)
+				}
 			}
 			gone, cancel := context.WithCancel(context.Background())
 			cancel()
 			model, answered := "m1", "prov"
-			h.server.settleCallerLeft(gone, res, openaiAdapter{}, "team-a", "agent/sup", &model, &answered, nil)
+			h.server.settleCallerLeft(gone, res, "team-a", &model, &answered)
 
 			if got := testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "m1", "team-a", outcomeClientClosed)); got != 1 {
 				t.Errorf("client_closed requests = %v, want 1", got)
@@ -82,58 +83,75 @@ func TestSettleCallerLeft(t *testing.T) {
 	}
 }
 
-// cancelingBody returns data on the first read, then cancels the caller and
-// fails the next read, as a transport does when the caller leaves mid-read.
-type cancelingBody struct {
-	data   string
-	read   bool
-	cancel context.CancelFunc
-}
-
-func (b *cancelingBody) Read(p []byte) (int, error) {
-	if !b.read {
-		b.read = true
-		return copy(p, b.data), nil
-	}
-	b.cancel()
-	return 0, context.Canceled
-}
-
-func (*cancelingBody) Close() error { return nil }
-
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// A caller that leaves while a 2xx answer is read hands the answer read so
-// far to the handler, so a cut-off answer settles the same whether the read
-// failed or ended cleanly.
-func TestForwardOnce_CallerLeftMidReadKeepsTheAnswer(t *testing.T) {
+// errBody fails every read and records that the body was closed.
+type errBody struct{ closed bool }
+
+func (*errBody) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+func (b *errBody) Close() error { b.closed = true; return nil }
+
+// forwardOnceHarness points the upstream client at answer and returns what
+// forwardOnce needs to call it.
+func forwardOnceHarness(t *testing.T, answer func(*http.Request) *http.Response) func(context.Context) forwardResult {
+	t.Helper()
 	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
 	h.seedRoute()
 	provider := h.store.providers["prov"]
 	adapter, _ := adapterForPath("/v1/chat/completions")
 	typeAdapter, _ := adapterForProviderType(provider.Spec.Type)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	const partial = `{"id":"x","choices":[`
-	h.server.upstream().Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
-			Body: &cancelingBody{data: partial, cancel: cancel}, Request: r}, nil
-	})
+	h.server.upstream().Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) { return answer(r), nil })
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	res := h.server.forwardOnce(ctx, r, provider, []byte(`{"model":"m1"}`), "/v1/chat/completions", adapter, typeAdapter, "m1")
-	if res.resp == nil || res.resp.StatusCode != http.StatusOK || res.err != nil || string(res.body) != partial {
-		t.Fatalf("forwardOnce = %+v, want the 200 with the partial body and no error", res)
+	return func(ctx context.Context) forwardResult {
+		return h.server.forwardOnce(ctx, r, provider, []byte(`{"model":"m1"}`), "/v1/chat/completions", adapter, typeAdapter, "m1")
+	}
+}
+
+// A 2xx answer comes back unread, still watched: the walk never abandons a
+// 2xx, and the relay reads it.
+func TestForwardOnce_SuccessIsReturnedUnread(t *testing.T) {
+	body := &errBody{}
+	forward := forwardOnceHarness(t, func(r *http.Request) *http.Response {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: body, Request: r}
+	})
+	res := forward(context.Background())
+	if res.resp == nil || res.resp.StatusCode != http.StatusOK || res.err != nil || res.body != nil || res.class != classNone {
+		t.Fatalf("forwardOnce = %+v, want the unread 200", res)
+	}
+	if _, ok := res.resp.Body.(*watchedBody); !ok {
+		t.Errorf("body %T, want the watched body", res.resp.Body)
+	}
+	if body.closed {
+		t.Error("the 2xx body was closed before the relay")
+	}
+	_ = res.resp.Body.Close()
+}
+
+// A non-2xx body is read up to errorBodyLimit and the rest dropped. A failed
+// read is a connect-class failure the walk falls back from.
+func TestForwardOnce_ErrorBodyIsReadUpToTheLimit(t *testing.T) {
+	big := strings.Repeat("e", 1<<20)
+	failRead := false
+	forward := forwardOnceHarness(t, func(r *http.Request) *http.Response {
+		if failRead {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{},
+				Body: io.NopCloser(iotest.ErrReader(errors.New("connection reset"))), Request: r}
+		}
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader(big)), Request: r}
+	})
+	res := forward(context.Background())
+	if len(res.body) != errorBodyLimit || res.class != classUpstream || !res.fallilable {
+		t.Fatalf("forwardOnce = body %d bytes, class %v, fallbackable %v; want %d, upstream, true",
+			len(res.body), res.class, res.fallilable, errorBodyLimit)
 	}
 
-	// Without the caller leaving, a failed read is still a connect-class
-	// failure the walk falls back from.
-	h.server.upstream().Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
-			Body: io.NopCloser(iotest.ErrReader(errors.New("connection reset"))), Request: r}, nil
-	})
-	res = h.server.forwardOnce(context.Background(), r, provider, []byte(`{"model":"m1"}`), "/v1/chat/completions", adapter, typeAdapter, "m1")
+	failRead = true
+	res = forward(context.Background())
 	if !res.fallilable || res.class != classConnect || res.err == nil {
 		t.Errorf("read failure = %+v, want a fallilable connect-class error", res)
 	}

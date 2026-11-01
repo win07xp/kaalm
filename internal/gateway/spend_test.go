@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -232,6 +233,10 @@ func TestSpendEndpoint_EndToEnd(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("LLM call = %d", resp.StatusCode)
 	}
+	// The relay settles when it ends, then counts the request.
+	waitFor(t, func() bool {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "m1", "team-a", outcomeOK)) == 1
+	})
 
 	consoleCert := h.ca.issue(t, "kaalm-console.kaalm-system.svc.cluster.local")
 	// The console calls from an operator-namespace Pod.

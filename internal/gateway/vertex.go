@@ -42,33 +42,10 @@ func (vertexAdapter) injectCredential(h http.Header, credential string) {
 	h.Set("Authorization", "Bearer "+credential)
 }
 
-func (vertexAdapter) extractUsage(body []byte) (Usage, bool) {
-	var resp struct {
-		UsageMetadata struct {
-			PromptTokenCount     int64 `json:"promptTokenCount"`
-			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
-			ThoughtsTokenCount   int64 `json:"thoughtsTokenCount"`
-		} `json:"usageMetadata"`
-		Candidates []vertexCandidate `json:"candidates"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return Usage{}, false
-	}
-	u := Usage{
-		InputTokens: resp.UsageMetadata.PromptTokenCount,
-		// Thinking tokens are reported apart from the candidates and billed
-		// as output.
-		OutputTokens: resp.UsageMetadata.CandidatesTokenCount + resp.UsageMetadata.ThoughtsTokenCount,
-		ServerTools:  vertexServerTools(resp.Candidates),
-	}
-	if u.isZero() {
-		return Usage{}, false
-	}
-	return u, true
-}
+func (vertexAdapter) usageReader() *usageReader { return newVertexUsageReader() }
 
-// vertexCandidate is the slice of a Vertex candidate the usage extraction
-// reads: grounding with Google Search reports its executed queries in
+// vertexCandidate is the slice of a Vertex stream chunk's candidate the
+// stream usage reads: grounding with Google Search reports its executed queries in
 // groundingMetadata.webSearchQueries.
 type vertexCandidate struct {
 	GroundingMetadata struct {

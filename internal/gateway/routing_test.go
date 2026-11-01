@@ -48,16 +48,16 @@ func TestSplitQualifiedModel(t *testing.T) {
 
 func TestAdapterUsageExtraction(t *testing.T) {
 	a := anthropicAdapter{}
-	u, ok := a.extractUsage([]byte(`{"usage":{"input_tokens":100,"output_tokens":25}}`))
+	u, ok := usageOf(a, []byte(`{"usage":{"input_tokens":100,"output_tokens":25}}`))
 	if !ok || u.InputTokens != 100 || u.OutputTokens != 25 {
 		t.Errorf("anthropic buffered usage wrong: %+v ok=%v", u, ok)
 	}
 	o := openaiAdapter{}
-	u, ok = o.extractUsage([]byte(`{"usage":{"prompt_tokens":50,"completion_tokens":10}}`))
+	u, ok = usageOf(o, []byte(`{"usage":{"prompt_tokens":50,"completion_tokens":10}}`))
 	if !ok || u.InputTokens != 50 || u.OutputTokens != 10 {
 		t.Errorf("openai buffered usage wrong: %+v ok=%v", u, ok)
 	}
-	if _, ok := o.extractUsage([]byte(`{"choices":[]}`)); ok {
+	if _, ok := usageOf(o, []byte(`{"choices":[]}`)); ok {
 		t.Error("no usage object must report ok=false")
 	}
 }

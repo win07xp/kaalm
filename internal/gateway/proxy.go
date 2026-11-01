@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -99,7 +100,7 @@ func workloadKey(c *caller) string {
 }
 
 // handleLLMProxy is the LLM proxy happy path: parse, authorize, inject the
-// credential under the forwarded-header contract, relay (buffered or SSE),
+// credential under the forwarded-header contract, relay (JSON or SSE),
 // and account for usage. Before forwarding it admits the call against the
 // primary provider's budget and rate limits, then walks the fallback chain.
 func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
@@ -266,6 +267,13 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		body, inboundPath, pathAdapter, candAdapter, model := s.candidateRequest(st, cand, outBody, r.URL.Path, adapter, typeAdapter)
 		fr := s.forwardOnce(fctx, r, cand, body, inboundPath, pathAdapter, candAdapter, model)
 		fr.model, fr.format = model, formatForType(cand.Spec.Type)
+		if st.crosses(cand) {
+			mt, ok := llmtranslate.MaxTokens(st.translated[cand.Name])
+			if !ok {
+				mt = maxOutputTokensOf(cand, model)
+			}
+			fr.holdLimit = crossingHoldLimit(mt)
+		}
 		// A caller that left fails the attempt's read; that is not the
 		// candidate's failure.
 		callerLeft := ctx.Err() != nil
@@ -293,7 +301,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return fr
 	})
 	if ctx.Err() != nil {
-		s.settleCallerLeft(ctx, res, adapter, c.Namespace, workload, &modelID, &answered, debitTokens)
+		s.settleCallerLeft(ctx, res, c.Namespace, &modelID, &answered)
 		return
 	}
 	if !ok {
@@ -307,14 +315,13 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // settleCallerLeft ends a request whose caller left before the gateway
-// answered, and writes nothing. A 2xx answer read in full settles its usage,
-// since the provider did the work. A cut-off or streaming 2xx answer, whose
-// usage the gateway cannot read, counts as usage missing and settles zero, as
-// the stream relay does for a caller that left. Any other attempt settles
-// zero. The request counts as client_closed.
+// answered, and writes nothing. A 2xx answer arrives unread and can no
+// longer be read, since its read derives from the caller's context, so it
+// counts as usage missing and settles zero. Any other attempt settles zero.
+// A relay that had started settles what it read itself. The request counts
+// as client_closed.
 func (s *Server) settleCallerLeft(
-	ctx context.Context, res forwardResult, adapter providerAdapter, namespace, workload string,
-	modelID, answered *string, debitTokens func(Usage),
+	ctx context.Context, res forwardResult, namespace string, modelID, answered *string,
 ) {
 	if res.resp != nil {
 		defer func() { _ = res.resp.Body.Close() }()
@@ -325,26 +332,11 @@ func (s *Server) settleCallerLeft(
 	if res.model != "" {
 		*modelID = res.model
 	}
-	settleZero := func() {
-		if res.settle != nil {
-			res.settle(0)
-		}
+	if res.resp != nil && res.resp.StatusCode >= 200 && res.resp.StatusCode <= 299 {
+		s.usageMissing(namespace, *answered, *modelID)
 	}
-	if res.resp == nil || res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {
-		settleZero()
-	} else {
-		servingAdapter := adapter
-		if res.chosen != nil {
-			if a, ok := adapterForProviderType(res.chosen.Spec.Type); ok {
-				servingAdapter = a
-			}
-		}
-		if usage, ok := servingAdapter.extractUsage(res.body); ok {
-			s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle, debitTokens)
-		} else {
-			s.usageMissing(namespace, *answered, *modelID)
-			settleZero()
-		}
+	if res.settle != nil {
+		res.settle(0)
 	}
 	s.Metrics.LLMRequest(*answered, *modelID, namespace, outcomeClientClosed)
 	spanError(ctx, outcomeClientClosed)
@@ -352,12 +344,13 @@ func (s *Server) settleCallerLeft(
 
 // writeWalkResult relays the winning attempt: a non-fallbackable failure
 // verbatim (in the caller's envelope shape when the candidate crossed
-// formats), a stream through the relay (translated event by event when it
-// crossed), or a buffered body with usage read by the serving candidate's
-// adapter and, when it crossed, the body translated back. debitTokens takes
-// the settled usage off the token rate limit that admitted the request. A
-// stream is counted on kaalm_llm_requests_total when its relay ends, so the
-// status says how it ended.
+// formats), a stream through the stream relay (translated event by event
+// when it crossed), a JSON answer through the JSON relay, or, when it
+// crossed, a JSON answer held whole and translated back. Usage is read by
+// the serving candidate's adapter from the untranslated bytes as they pass.
+// debitTokens takes the settled usage off the token rate limit that
+// admitted the request. A 2xx is counted on kaalm_llm_requests_total when
+// its relay ends, so the status says how it ended.
 func (s *Server) writeWalkResult(
 	ctx context.Context, w http.ResponseWriter, res forwardResult, adapter providerAdapter,
 	inboundFormat llmtranslate.Format, namespace, workload string, modelID, answered *string,
@@ -395,6 +388,9 @@ func (s *Server) writeWalkResult(
 		if crossing {
 			respBody = llmtranslate.Error(res.format, inboundFormat, res.body)
 			w.Header().Del("Content-Length")
+		} else if int64(len(res.body)) != res.resp.ContentLength {
+			// The body was cut at errorBodyLimit, or its length was unknown.
+			w.Header().Del("Content-Length")
 		}
 		w.WriteHeader(res.resp.StatusCode)
 		_, _ = w.Write(respBody)
@@ -411,33 +407,24 @@ func (s *Server) writeWalkResult(
 		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 		return
 	}
-	if usage, ok := servingAdapter.extractUsage(res.body); ok {
-		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle, debitTokens)
-	} else {
-		s.usageMissing(namespace, res.provider, *modelID)
-		if res.settle != nil {
-			res.settle(0)
-		}
-	}
-	bodyLog("llm response", res.body)
-	copyDownstreamHeaders(w.Header(), res.resp.Header)
-	respBody := res.body
 	if crossing {
-		translated, err := llmtranslate.Response(res.format, inboundFormat, res.body)
-		if err != nil {
-			s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeError)
-			spanError(ctx, errProviderError)
-			writeError(w, http.StatusBadGateway, errorBody{
-				Type: errProviderError, Provider: res.provider,
-				Message: "the fallback provider's response could not be translated: " + err.Error()}, 0)
-			return
-		}
-		respBody = translated
-		w.Header().Del("Content-Length")
+		outcome := s.relayCrossing(ctx, w, res.resp, servingAdapter, res.format, inboundFormat, res.holdLimit,
+			namespace, workload, res.chosen, *modelID, res.settle, debitTokens)
+		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
+		return
 	}
-	s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeOK)
-	w.WriteHeader(res.resp.StatusCode)
-	_, _ = w.Write(respBody)
+	outcome, cut := s.relayJSON(ctx, w, res.resp, servingAdapter, namespace, workload, res.chosen, *modelID,
+		res.settle, debitTokens)
+	s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
+	if cut {
+		// The status is sent and JSON has no in-band error event, so the
+		// response ends without its final bytes (the chunk terminator, or
+		// the rest of the Content-Length): the agent's client reports an
+		// incomplete body instead of a clean end. net/http logs nothing for
+		// this value, and the deferred Body.Close and settles run on the way
+		// out.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // candidateRequest builds what one candidate is forwarded: the prepared
@@ -478,9 +465,10 @@ func (s *Server) candidateRequest(
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 // The attempt runs under an attemptWatchdog: UpstreamTimeout bounds the wait
-// for response headers, then each gap between body reads. A buffered body
-// releases the watchdog once read; a streaming 2xx hands it to the relay
-// through the wrapped body, whose Close releases it. A credential the store
+// for response headers, then each gap between body reads. A 2xx, JSON or
+// SSE, is returned unread and hands the watchdog to the relay through the
+// wrapped body, whose Close releases it. Any other status is read up to
+// errorBodyLimit and closed, which releases the watchdog. A credential the store
 // refuses is a connect-class failure, logged at most once a minute per provider.
 // For google-vertex the credential is a service-account key, exchanged for
 // an access token first (see vertexCredential).
@@ -528,18 +516,19 @@ func (s *Server) forwardOnce(
 
 	fallback, class := isFallbackable(resp.StatusCode)
 	fr := forwardResult{resp: resp, fallilable: fallback, class: class, provider: provider.Name, chosen: provider}
-	if isSSE(resp) && class == classNone {
-		// A streaming 2xx: relay begins after the walk; no body buffering.
+	if class == classNone {
+		// A 2xx goes to the relay unread: the walk never abandons a 2xx
+		// (tryWithFallbacks returns it), and the handler closes the body.
 		return fr
 	}
-	// Every other response is buffered, so an attempt the walk abandons
-	// holds no connection and no timer.
-	body, err := io.ReadAll(resp.Body)
+	// Any other status is read up to errorBodyLimit and closed, so an
+	// attempt the walk abandons holds no connection and no timer. Providers
+	// do not bill errors, so the dropped rest is nothing paid for.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 	_ = resp.Body.Close()
 	if err != nil && ctx.Err() != nil {
 		// The caller left mid-read. The answer goes to the handler as read
-		// so far, the same as when the cancel ends the read cleanly, so a
-		// cut-off answer settles alike however the read ended.
+		// so far, the same as when the cancel ends the read cleanly.
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		fr.body = body
 		return fr
@@ -551,10 +540,35 @@ func (s *Server) forwardOnce(
 		}
 		return forwardResult{fallilable: true, class: class, err: err}
 	}
-	// Re-wrap the buffered body so downstream reads still work.
+	// Re-wrap the read body so downstream reads still work.
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	fr.body = body
 	return fr
+}
+
+// errorBodyLimit bounds how much of a non-2xx answer the gateway reads.
+// Error bodies are short; the rest of a longer one is dropped.
+const errorBodyLimit = 64 << 10
+
+// The hold of a cross-format answer, which translation needs whole, is
+// bounded by the output the request allows: crossingHoldFloor plus
+// crossingHoldBytesPerToken for each max_tokens. A token renders to about 4
+// bytes of text, and to at most 12 when every character is a \u-escaped
+// surrogate pair, so 16 exceeds any honest rendering. The floor covers what
+// max_tokens does not count: ids, tool-call structure, thinking signatures,
+// and server tool results. Only a provider breaking its contract passes it.
+const (
+	crossingHoldFloor         = 1 << 20
+	crossingHoldBytesPerToken = 16
+)
+
+// crossingHoldLimit is the most bytes the translation hold keeps for an
+// answer whose request allows maxTokens output tokens.
+func crossingHoldLimit(maxTokens int64) int64 {
+	if maxTokens > (math.MaxInt64-crossingHoldFloor)/crossingHoldBytesPerToken {
+		return math.MaxInt64 // a caller's max_tokens never overflows the bound
+	}
+	return crossingHoldFloor + max(maxTokens, 0)*crossingHoldBytesPerToken
 }
 
 // vertexCredential exchanges a google-vertex provider's service-account key
@@ -736,16 +750,7 @@ func (s *Server) relayStream(
 	// write error: near a hard ceiling, dropping accumulated usage would
 	// under-settle exactly where undercounting voids the cap, and a held
 	// admission slot must always free.
-	defer func() {
-		if !usage.isZero() {
-			s.settleUsage(provider, namespace, workload, modelID, usage, settle, debitTokens)
-			return
-		}
-		s.usageMissing(namespace, provider.Name, modelID)
-		if settle != nil {
-			settle(0)
-		}
-	}()
+	defer func() { s.settleRelay(usage, provider, namespace, workload, modelID, settle, debitTokens) }()
 
 	ef := &eventFlusher{r: resp.Body, f: flusher}
 	scanner := bufio.NewScanner(ef)
@@ -813,6 +818,200 @@ func (s *Server) relayStream(
 		}
 	}
 	ef.end()
+	return outcomeOK
+}
+
+// settleRelay settles a relay when it ends, on every exit: the usage it
+// read, or, when it read none, zero spend reported by usageMissing. A held
+// admission slot always frees.
+func (s *Server) settleRelay(
+	usage Usage, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
+	settle func(float64), debitTokens func(Usage),
+) {
+	if !usage.isZero() {
+		s.settleUsage(provider, namespace, workload, modelID, usage, settle, debitTokens)
+		return
+	}
+	s.usageMissing(namespace, provider.Name, modelID)
+	if settle != nil {
+		settle(0)
+	}
+}
+
+// relayBody copies body to sink through buf, feeding every byte to reader
+// first. It stops at the body's end (readErr nil), a read error, or a write
+// error.
+func relayBody(body io.Reader, sink io.Writer, reader *usageReader, buf []byte) (readErr, writeErr error) {
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			_, _ = reader.Write(buf[:n])
+			if _, werr := sink.Write(buf[:n]); werr != nil {
+				return nil, werr
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		if err != nil {
+			return err, nil
+		}
+	}
+}
+
+// bodyLogPrefixBytes is how much of a relayed answer the debug build logs:
+// the gateway does not hold the answer, so it logs only its start.
+const bodyLogPrefixBytes = 64 << 10
+
+// logPrefix keeps the first bodyLogPrefixBytes written through it for one
+// debug log line. It keeps nothing in the default build.
+type logPrefix []byte
+
+func (l *logPrefix) add(p []byte) {
+	if DebugBodyLogging && len(*l) < bodyLogPrefixBytes {
+		*l = append(*l, p[:min(len(p), bodyLogPrefixBytes-len(*l))]...)
+	}
+}
+
+// flushWriter writes a relayed answer to the agent, flushing each write so
+// the bytes leave as they arrive.
+type flushWriter struct {
+	w      http.ResponseWriter
+	f      http.Flusher // nil when the writer cannot flush
+	logged logPrefix
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	fw.logged.add(p)
+	n, err := fw.w.Write(p)
+	if err == nil && fw.f != nil {
+		fw.f.Flush()
+	}
+	return n, err
+}
+
+// relayJSON relays a non-streamed 2xx answer to the agent as its bytes
+// arrive, so the gateway's memory per request does not grow with the
+// answer's size. Usage is read from the same bytes by the adapter's usage
+// reader, and spend settles when the relay ends, on every exit, as in
+// relayStream. The upstream Content-Length passes through. It returns the
+// outcome for kaalm_llm_requests_total and marks the llm.request span (ctx)
+// the same way: ok, client_closed for a caller that left, or error for an
+// answer the provider broke or let go idle after the status was sent. cut
+// reports that last case: the caller must end the response without its
+// final bytes, since JSON has no in-band error event.
+func (s *Server) relayJSON(
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
+	namespace, workload string, provider *kaalmv1beta1.ModelProvider, modelID string,
+	settle func(float64), debitTokens func(Usage),
+) (outcome string, cut bool) {
+	copyDownstreamHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	reader := adapter.usageReader()
+	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, debitTokens) }()
+
+	sink := &flushWriter{w: w}
+	sink.f, _ = w.(http.Flusher)
+	buf := getScanBuf()
+	defer putScanBuf(buf)
+	readErr, writeErr := relayBody(resp.Body, sink, reader, *buf)
+	bodyLog("llm response", sink.logged)
+	switch {
+	// The upstream read derives from the caller's context, as in
+	// relayStream: ctx.Err() is set only when the caller left. A failed
+	// write to the agent is the caller leaving too, except ErrContentLength:
+	// the provider sent more than the length it declared.
+	case ctx.Err() != nil, writeErr != nil && !errors.Is(writeErr, http.ErrContentLength):
+		spanError(ctx, outcomeClientClosed)
+		return outcomeClientClosed, false
+	case readErr != nil, writeErr != nil:
+		err := readErr
+		if err == nil {
+			err = writeErr
+		}
+		slog.Warn("JSON relay read error", "namespace", namespace,
+			"provider", provider.Name, "model", modelID, "err", err)
+		spanError(ctx, streamErrorType(err))
+		return outcomeError, true
+	}
+	return outcomeOK, false
+}
+
+// holdBuffer holds a crossing answer for translation, up to limit bytes.
+// Past the limit it drops what it holds and keeps accepting bytes, so the
+// relay drains the answer through the usage reader to its end.
+type holdBuffer struct {
+	limit  int64
+	buf    []byte
+	over   bool
+	logged logPrefix
+}
+
+func (h *holdBuffer) Write(p []byte) (int, error) {
+	h.logged.add(p)
+	if h.over {
+		return len(p), nil
+	}
+	if int64(len(h.buf))+int64(len(p)) > h.limit {
+		h.over, h.buf = true, nil
+		return len(p), nil
+	}
+	h.buf = append(h.buf, p...)
+	return len(p), nil
+}
+
+// relayCrossing answers with a non-streamed 2xx from a candidate of
+// another format. Translation needs the whole answer, so this is the one
+// relay that holds it, bounded by limit (see crossingHoldLimit). Usage is
+// read from the untranslated bytes as they arrive and settles on every
+// exit, as in relayJSON. Nothing is sent before the hold ends, so a failure
+// gets a whole error response: 502 provider_error for an answer over the
+// limit, cut off, or untranslatable, 504 provider_timeout for one that went
+// idle. None of them continues the walk: the provider's 2xx had started.
+// It returns the outcome for kaalm_llm_requests_total.
+func (s *Server) relayCrossing(
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, servingAdapter providerAdapter,
+	from, to llmtranslate.Format, limit int64, namespace, workload string,
+	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), debitTokens func(Usage),
+) string {
+	reader := servingAdapter.usageReader()
+	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, debitTokens) }()
+
+	hold := &holdBuffer{limit: limit}
+	buf := getScanBuf()
+	defer putScanBuf(buf)
+	readErr, _ := relayBody(resp.Body, hold, reader, *buf)
+	bodyLog("llm response", hold.logged)
+	fail := func(status int, errType, message string) string {
+		spanError(ctx, errType)
+		writeError(w, status, errorBody{Type: errType, Provider: provider.Name, Message: message}, 0)
+		return outcomeError
+	}
+	switch {
+	case ctx.Err() != nil:
+		spanError(ctx, outcomeClientClosed)
+		return outcomeClientClosed
+	case readErr != nil:
+		slog.Warn("JSON relay read error", "namespace", namespace,
+			"provider", provider.Name, "model", modelID, "err", readErr)
+		status := http.StatusBadGateway
+		if streamErrorType(readErr) == errProviderTimeout {
+			status = http.StatusGatewayTimeout
+		}
+		return fail(status, streamErrorType(readErr), "the fallback provider's response ended before it completed")
+	case hold.over:
+		return fail(http.StatusBadGateway, errProviderError,
+			"the fallback provider's response exceeded the size its max_tokens allows")
+	}
+	translated, err := llmtranslate.Response(from, to, hold.buf)
+	if err != nil {
+		return fail(http.StatusBadGateway, errProviderError,
+			"the fallback provider's response could not be translated: "+err.Error())
+	}
+	copyDownstreamHeaders(w.Header(), resp.Header)
+	w.Header().Del("Content-Length")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(translated)
 	return outcomeOK
 }
 

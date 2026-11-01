@@ -133,13 +133,9 @@ func TestProxyHard_AdmitAndSettleBuffered(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	h.server.Budget.mu.Lock()
-	l := h.server.Budget.providers["prov"]
-	own, slots := l.own["team-a"], len(l.adm)
-	h.server.Budget.mu.Unlock()
-	if own != 1 || slots != 0 { // $1 for 1M input tokens at 1.00/1M
-		t.Fatalf("own=%v slots=%d after settle, want 1 and 0", own, slots)
-	}
+	// The relay settles after the agent has the last byte; $1 for 1M input
+	// tokens at 1.00/1M.
+	waitFor(t, func() bool { own, slots := boundarySlots(h); return own == 1 && slots == 0 })
 
 	// 96 (peers) + 1 (own) = 97: still in boundary, slot must be free.
 	if d, settle := h.server.Budget.Admit(prov, "team-a", "agent/test"); settle == nil || d.Throttled {
@@ -201,6 +197,58 @@ func TestProxyHard_StreamDisconnectSettles(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("stream disconnect: own=%v slots=%d, want 1 and 0", own, slots)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A non-streamed answer whose caller leaves mid-relay settles the usage the
+// relay read and frees the slot, as a stream does.
+func TestProxyHard_JSONDisconnectSettles(t *testing.T) {
+	block := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"usage":{"prompt_tokens":1000000,"completion_tokens":0},"choices":[`)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	})
+	t.Cleanup(func() { close(block) })
+	h.seedRoute()
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
+
+	cert := agentCert(t, h.ca)
+	client := h.client(&cert)
+	client.Timeout = 600 * time.Millisecond
+	req, err := http.NewRequest(http.MethodPost, h.url("/v1/chat/completions"),
+		strings.NewReader(`{"model":"prov/m1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		h.server.Budget.mu.Lock()
+		l := h.server.Budget.providers["prov"]
+		own, slots := l.own["team-a"], len(l.adm)
+		h.server.Budget.mu.Unlock()
+		if own == 1 && slots == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("JSON disconnect: own=%v slots=%d, want 1 and 0", own, slots)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

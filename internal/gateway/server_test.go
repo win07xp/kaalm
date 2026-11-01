@@ -40,6 +40,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -449,7 +450,7 @@ func TestProxy_MTLSHappyPath(t *testing.T) {
 		t.Errorf("model not rewritten: %v", up.body["model"])
 	}
 	// Spend recorded from the buffered usage object.
-	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 30 || u.OutputTokens != 7 {
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 30 || u.OutputTokens != 7 {
 		t.Errorf("spend not recorded: %+v", u)
 	}
 }
@@ -476,7 +477,7 @@ func TestProxy_AnthropicCredentialHeader(t *testing.T) {
 	if up.header.Get("Authorization") != "" {
 		t.Error("no Authorization header expected for anthropic")
 	}
-	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 5 {
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 5 {
 		t.Errorf("anthropic usage not recorded: %+v", u)
 	}
 }
@@ -500,11 +501,16 @@ func TestProxy_ServerToolUseMetric(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
+	// The relay settles after the agent has the last byte.
+	waitUsage(t, h, "prov", "m1")
+	waitFor(t, func() bool {
+		return testutil.ToFloat64(h.server.Metrics.llmServerTools.WithLabelValues("prov", "team-a", "web_search")) > 0
+	})
 	if got := testutil.ToFloat64(h.server.Metrics.llmServerTools.WithLabelValues("prov", "team-a", "web_search")); got != 2 {
 		t.Errorf("server tool use = %v, want 2", got)
 	}
 	// Token accounting is unaffected by the extra usage facet.
-	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 6039 || u.OutputTokens != 931 {
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 6039 || u.OutputTokens != 931 {
 		t.Errorf("tokens not recorded alongside server tools: %+v", u)
 	}
 }
@@ -844,30 +850,46 @@ func TestProxy_StreamStallEndsWithAnAnthropicErrorEvent(t *testing.T) {
 	}
 }
 
-func TestProxy_BufferedBodyStallIsBounded(t *testing.T) {
-	// Headers arrive, then the JSON body stops: the timer bounds the read and
-	// the attempt fails as a timeout (no fallback here, so 504).
+func TestProxy_JSONBodyStallEndsTheAnswerCutOff(t *testing.T) {
+	// Headers and a prefix arrive, then the JSON body stops: the bound ends
+	// the relay, and the agent gets the prefix as an incomplete body.
+	const prefix = `{"id":"resp-1",`
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp-1",`))
+		_, _ = w.Write([]byte(prefix))
 		w.(http.Flusher).Flush()
 		stall(r)
 	})
 	h.seedRoute()
 	h.server.Config.UpstreamTimeout = streamTimeout
+	exp := tracetest.NewInMemoryExporter()
+	h.server.Tracing = newTestTracing(exp)
 	cert := agentCert(t, h.ca)
 
 	start := time.Now()
 	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
-	if resp.StatusCode != http.StatusGatewayTimeout {
-		t.Fatalf("stalled body = %d, want 504", resp.StatusCode)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stalled body = %d, want the 200 the provider started", resp.StatusCode)
 	}
-	if got := errType(t, resp); got != errProviderTimeout {
-		t.Errorf("error type %q", got)
+	body, err := io.ReadAll(resp.Body)
+	if err == nil || string(body) != prefix {
+		t.Errorf("body %q, %v; want %q and an incomplete-body error", body, err, prefix)
 	}
 	if took := time.Since(start); took > 3*time.Second {
 		t.Errorf("stalled body took %v, want about one %v bound", took, streamTimeout)
 	}
+	waitFor(t, func() bool {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "m1", "team-a", outcomeError)) == 1
+	})
+	waitFor(t, func() bool {
+		for _, s := range exp.GetSpans() {
+			if s.Name == "llm.request" {
+				return s.Status.Description == errProviderTimeout
+			}
+		}
+		return false
+	})
 }
 
 func TestUpstreamClientHasNoWholeCallTimeout(t *testing.T) {

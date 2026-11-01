@@ -240,11 +240,14 @@ func TestProxy_ObservesRequestDuration(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("LLM call = %d", resp.StatusCode)
 	}
+	// The request is counted when the relay ends, after the agent has the
+	// last byte, and the duration when the handler returns.
+	waitFor(t, func() bool {
+		return testutil.ToFloat64(m.llmRequests.WithLabelValues("prov", "m1", "team-a", "ok")) == 1 &&
+			testutil.CollectAndCount(m.llmDuration) > 0
+	})
 	if n := testutil.CollectAndCount(m.llmDuration); n != 1 {
 		t.Fatalf("duration histogram has %d label sets after one forwarded call, want 1", n)
-	}
-	if got := testutil.ToFloat64(m.llmRequests.WithLabelValues("prov", "m1", "team-a", "ok")); got != 1 {
-		t.Errorf("requests ok = %v, want 1", got)
 	}
 }
 
@@ -399,6 +402,7 @@ func TestProxy_UntranslatableResponseCountsError(t *testing.T) {
 	count := func(status string) float64 {
 		return testutil.ToFloat64(m.llmRequests.WithLabelValues("backup", "gpt-5-mini", "team-a", status))
 	}
+	waitFor(t, func() bool { return count("error") == 1 })
 	if count("error") != 1 || count("ok") != 0 {
 		t.Errorf("error = %v, ok = %v; want 1 and 0", count("error"), count("ok"))
 	}

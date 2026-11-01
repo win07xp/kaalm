@@ -220,12 +220,14 @@ func TestLLMProxy_VertexGenerateContent(t *testing.T) {
 	if _, ok := call.body["contents"]; !ok || call.body["model"] != nil {
 		t.Errorf("upstream body %s, want the caller's contents and no model member", call.raw)
 	}
-	if u := h.spend.Total("team-a", "prov", "gemini"); u.InputTokens != 11 || u.OutputTokens != 22 {
+	if u := waitUsage(t, h, "prov", "gemini"); u.InputTokens != 11 || u.OutputTokens != 22 {
 		t.Errorf("spend = %+v, want 11 in and 22 out", u)
 	}
-	if got := testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "gemini", "team-a", outcomeOK)); got != 1 {
-		t.Errorf("kaalm_llm_requests_total ok = %v, want 1", got)
-	}
+	// The request is counted when the relay ends, after the agent has the
+	// last byte.
+	waitFor(t, func() bool {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "gemini", "team-a", outcomeOK)) == 1
+	})
 
 	// The second request reuses the cached token.
 	resp = postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(), nil)
@@ -310,7 +312,7 @@ func TestLLMProxy_VertexTokenRejected(t *testing.T) {
 		if got := testutil.ToFloat64(h.server.Metrics.llmFallback.WithLabelValues("prov", "backup", fallbackReasonSuccess)); got != 1 {
 			t.Errorf("fallback {prov,backup,success} = %v, want 1", got)
 		}
-		if u := h.spend.Total("team-a", "backup", "gemini"); u.InputTokens != 11 {
+		if u := waitUsage(t, h, "backup", "gemini"); u.InputTokens != 11 {
 			t.Errorf("backup spend = %+v, want 11 in", u)
 		}
 	})
@@ -470,7 +472,7 @@ func TestLLMProxy_VertexDegradeRewritesPath(t *testing.T) {
 	if len(calls) != 1 || calls[0].path != "/v1/projects/p/locations/l/publishers/google/models/"+smallModel+":generateContent" {
 		t.Fatalf("upstream calls %v, want one on the degraded model", calls)
 	}
-	if u := h.spend.Total("team-a", "prov", smallModel); u.InputTokens != 11 {
+	if u := waitUsage(t, h, "prov", smallModel); u.InputTokens != 11 {
 		t.Errorf("spend on %s = %+v, want 11 in", smallModel, u)
 	}
 }
@@ -497,7 +499,7 @@ func TestLLMProxy_VertexFallbackModelMap(t *testing.T) {
 	if len(calls) != 2 || calls[1].path != "/v1/projects/p/locations/l/publishers/google/models/gemini-lite:generateContent" {
 		t.Fatalf("upstream calls %d, want the primary then the backup on gemini-lite", len(calls))
 	}
-	if u := h.spend.Total("team-a", "backup", "gemini-lite"); u.InputTokens != 11 {
+	if u := waitUsage(t, h, "backup", "gemini-lite"); u.InputTokens != 11 {
 		t.Errorf("backup spend = %+v, want 11 in", u)
 	}
 }
@@ -526,6 +528,8 @@ func TestLLMProxy_VertexRateLimitTokens(t *testing.T) {
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("first call = %d, want 200", resp.StatusCode)
 			}
+			// The relay debits when it ends; the spend record lands after.
+			waitUsage(t, h, "prov", "gemini")
 			resp = postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(), nil)
 			if resp.StatusCode != http.StatusTooManyRequests {
 				_ = resp.Body.Close()
