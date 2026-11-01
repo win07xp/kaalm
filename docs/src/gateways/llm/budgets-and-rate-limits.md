@@ -203,7 +203,7 @@ An unset or zero limit disables its bucket. A request refused by either bucket g
 The token limit is enforced after the fact, because the gateway cannot know a call's token count before the provider answers.
 
 1. **Admit.** The gateway admits a request while the token bucket is above 0. The request does not need a whole token, and admission consumes no tokens. The token check runs first, and the request check then takes one request token, so a request the token bucket refuses keeps its request token.
-2. **Debit.** After the call, the gateway subtracts the settled input plus output tokens from the token bucket that admitted the request: the primary provider's bucket for the requested model, after any budget `degrade` rewrite, even when a fallback provider served the call. A buffered response debits when the gateway reads it. A stream debits when the stream ends ([Streaming responses](request-handling.md#streaming-responses)).
+2. **Debit.** After the call, the gateway subtracts the settled input plus output tokens from the token bucket that admitted the request: the primary provider's bucket for the requested model, after any budget `degrade` rewrite, even when a fallback provider served the call. The debit happens when the relay ends, for every answer ([Request flow](request-handling.md#request-flow), step 10).
 3. **Block.** A large call blocks the next request, not itself.
 
 The token bucket may go negative. The debt is clamped at minus one burst (`tokensPerMinute / number_of_replicas`), so one call larger than a burst blocks the key for at most about one minute.

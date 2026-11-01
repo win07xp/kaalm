@@ -18,6 +18,6 @@ gw -> gw : 6. rate limit
 gw -> gw : 7. strip the prefix, fix up,\napply the header contract
 gw -> prov : 8. forward (fallback walk on failure)
 prov --> gw : response
-gw --> agent : 9. relay, buffered or SSE
+gw --> agent : 9. relay, JSON or SSE
 gw -> gw : 10. read usage, settle spend
 @enduml
