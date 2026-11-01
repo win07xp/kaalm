@@ -196,8 +196,12 @@ type Server struct {
 	platformHTTP *http.Client
 	platformPool *x509.CertPool
 
-	// credentialLog paces the LLM proxy's credential-refusal warning.
+	// credentialLog paces the LLM proxy's credential-refusal and
+	// access-token warnings.
 	credentialLog logThrottle
+	// vertexTokens caches the access tokens minted for google-vertex
+	// providers.
+	vertexTokens vertexTokenCache
 	// toolCredentialLog paces the MCP broker's credential-refusal warning.
 	// It is separate from credentialLog because a ModelProvider and a
 	// ToolProvider can share a name.
@@ -352,6 +356,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/messages", s.Auth.DualModePaths(s.handleLLMProxy))
 	mux.HandleFunc("/v1/chat/completions", s.Auth.DualModePaths(s.handleLLMProxy))
 	mux.HandleFunc("/v1/completions", s.Auth.DualModePaths(s.handleLLMProxy))
+	// The Vertex format's paths. adapterForPath parses the Vertex path
+	// shape; anything else under these prefixes answers 400.
+	mux.HandleFunc("/v1/projects/", s.Auth.DualModePaths(s.handleLLMProxy))
+	mux.HandleFunc("/v1beta1/projects/", s.Auth.DualModePaths(s.handleLLMProxy))
 	// The tool plane's broker surface, on the shared dual-mode
 	// caller-identity profile (docs/src/gateways/tool-plane.md#the-broker).
 	mux.HandleFunc("/v1/mcp/", s.Auth.DualModePaths(s.handleMCPBroker))

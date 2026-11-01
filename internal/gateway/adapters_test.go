@@ -36,6 +36,36 @@ func TestAdapterFormatNames(t *testing.T) {
 	}
 }
 
+// adapterForPath resolves the three body-model paths and the Vertex path
+// shape, and nothing else.
+func TestAdapterForPath(t *testing.T) {
+	cases := []struct {
+		path   string
+		format string // "" when the path must not resolve
+	}{
+		{"/v1/messages", providerTypeAnthropic},
+		{"/v1/chat/completions", "openai"},
+		{"/v1/completions", "openai"},
+		{"/v1/projects/p/locations/l/publishers/prov/models/m:generateContent", providerTypeVertex},
+		{"/v1/projects/p/locations/l/publishers/prov/models/m:streamGenerateContent", providerTypeVertex},
+		{"/v1beta1/projects/p/locations/l/publishers/prov/models/m:generateContent", providerTypeVertex},
+		{"/v1beta1/projects/p/locations/l/publishers/prov/models/m:streamGenerateContent", providerTypeVertex},
+		{"/v1/projects/p/locations/l/publishers/prov/models/m:predict", ""},
+		{"/v1/projects/nonsense", ""},
+		{"/v1/messages/extra", ""},
+		{"/v2/other", ""},
+	}
+	for _, c := range cases {
+		a, ok := adapterForPath(c.path)
+		switch {
+		case c.format == "" && ok:
+			t.Errorf("%s resolved to %s, want no adapter", c.path, a.formatName())
+		case c.format != "" && (!ok || a.formatName() != c.format):
+			t.Errorf("%s resolved to %v, %v; want %s", c.path, a, ok, c.format)
+		}
+	}
+}
+
 // prepareBody runs a request body through the proxy's preparation for a,
 // keeping its model.
 func prepareBody(t *testing.T, a providerAdapter, body string) string {

@@ -350,6 +350,18 @@ the probe. A ModelProvider reports all of these reasons:
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by
   `credentialsRef` is absent in `kaalm-system` or lacks the key, or the
   provider rejected the key on the probe.
+
+  For a `google-vertex` provider, the gateway also raises a `CredentialsInvalid`
+  `Warning` event when Google's token endpoint rejects the key on a request.
+  The event does not change `Ready`. Its message is:
+
+  ```text
+  the token endpoint rejected the service-account key; credential rotation may be needed
+  ```
+
+  The fix is the same: put a key the provider accepts in the Secret. The
+  gateway mints with the new key on the next request.
+
 - `SecretNotOptedIn`: a provider may use only a Secret with the label
   `kaalm.io/provider-credential: "true"`. Only the exact value `true` counts.
   Other labels, such as the channel label `kaalm.io/channel-credential` and the

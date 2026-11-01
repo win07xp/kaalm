@@ -63,12 +63,11 @@ they are likely to matter:
   one replica to hold it; the Discord adapter covers slash commands over
   HTTP instead. Tracked as
   [#124](https://github.com/win07xp/kaalm/issues/124).
-- **Serving the `google-vertex` provider type.** The enum is reserved and
-  the adapter's outbound pieces exist, but no inbound path is routed and
-  the OAuth2 token minting the platform requires is not implemented
-  ([#147](https://github.com/win07xp/kaalm/issues/147) records the
-  alignment). Google now brands the platform the Gemini Enterprise Agent
-  Platform; the wire API is unchanged.
+- **The rest of Vertex.** The `google-vertex` type serves Gemini models
+  with a service-account key. Not served: Claude models on Vertex
+  (`rawPredict` and `streamRawPredict`), credentials from workload
+  identity or the metadata server instead of a key, and cross-format
+  fallback involving `google-vertex`.
 - **Tool plane extensions.** Pricing tool calls (a `costPerCallUSD` facet
   for provider-side tools on the ModelProvider, a per-call cost on the
   ToolProvider catalog), the MCP surfaces the broker denies (`resources/*`,

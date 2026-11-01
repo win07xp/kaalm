@@ -14,7 +14,7 @@ Not every upstream error is a fallback signal. A malformed prompt sent to provid
 | Timeout before any response bytes | Fall back | Treated like a connection error: the request never landed. |
 | `5xx` | Fall back | Upstream-side failure; retrying the same upstream would hit the same failure. |
 | `429` (upstream-side rate limit) | Fall back | The primary's capacity is exhausted, and a different provider will often succeed. |
-| `401` or `403` from upstream | Fall back **and** emit a `Warning` event with `reason=CredentialsInvalid` on the ModelProvider whose credential was refused | Falling back preserves availability while signaling that rotation is needed. |
+| `401` or `403` from upstream, or for `google-vertex` a token endpoint that refuses the provider's key ([Vertex access tokens](provider-routing.md#vertex-access-tokens)) | Fall back **and** emit a `Warning` event with `reason=CredentialsInvalid` on the ModelProvider whose credential was refused | Falling back preserves availability while signaling that rotation is needed. |
 | `400` or `422` (malformed or unprocessable request) | Return to the caller unchanged; do not fall back | The request itself is malformed; every other provider fails the same way. |
 | Other `4xx` | Return to the caller unchanged; do not fall back | Client-side error: the caller should fix the request. |
 
@@ -36,7 +36,7 @@ Every candidate, the primary included, passes these checks before the gateway fo
 | The mapped model is in the candidate's `models`: the edge's `modelMap` entry for the requested model, or the requested model itself when the map has no entry | configuration | no | no | `FallbackIneligible` on the primary |
 | The request is expressible in the candidate's format (crossing edges only; see [What does not](#what-does-not)) | request body | no | no | `FallbackIneligible` on the primary, naming the feature |
 | Budget admission for the agent's namespace: not blocked, throttled, or failed closed | request-time state | yes | yes | The outcome's class feeds the exhaustion mapping under [Depth cap semantics](#depth-cap-semantics) |
-| Forward with the candidate's credentials | upstream | yes | yes, when the response is fallbackable | `CredentialsInvalid` on the candidate for `401` or `403` |
+| Forward with the candidate's credentials | upstream | yes | yes, when the response is fallbackable | `CredentialsInvalid` on the candidate for `401` or `403`, or for a Vertex key the token endpoint refuses |
 
 A static failure is a misconfiguration, and all but the translatability check are discoverable at reconcile time. The gateway skips the candidate and does not walk its children; a child is still tried when another eligible candidate also lists it. It emits the event on the primary ModelProvider, the resource the platform team manages and watches, naming the offender and the failure. The caller never sees the event, and its request continues down the tree. Spending attempt slots on misconfigured fallbacks would hide the problem and make it indistinguishable from upstream outages in metrics.
 

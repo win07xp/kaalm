@@ -109,7 +109,7 @@ Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway
 
 ### LLM providers
 
-The gateway serves Anthropic, OpenAI, and OpenAI-compatible endpoints (Ollama, vLLM, and LiteLLM included); the `google-vertex` type is reserved in the enum and not served ([roadmap](../ROADMAP.md#beyond)). A new provider type is an adapter in the gateway ([Provider adapters](../gateways/llm/provider-routing.md#provider-adapters)).
+The gateway serves Anthropic, OpenAI, and OpenAI-compatible endpoints (Ollama, vLLM, and LiteLLM included), and `google-vertex` (Gemini models in Google's native format). A new provider type is an adapter in the gateway ([Provider adapters](../gateways/llm/provider-routing.md#provider-adapters)).
 
 ### Channel platforms
 

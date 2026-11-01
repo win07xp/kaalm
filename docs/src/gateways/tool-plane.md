@@ -32,6 +32,7 @@ What ships is observation. The provider adapters extract server-tool-use counts 
 |---|---|---|
 | Anthropic | `usage.server_tool_use`, cumulative on streamed `message_delta` events | the counter name, for example `web_search_requests` |
 | OpenAI chat completions | no usage-level server-tool counts on the paths the gateway proxies | none emitted |
+| Vertex (Gemini) | `candidates[].groundingMetadata.webSearchQueries`, counted across candidates; on a stream, the chunk that closes the candidate | `google_search` |
 
 Pricing and enforcement do not ship. Provider-side tool charges are money the budget ledger cannot see, the same gap as usage-less responses under [Hard enforcement](llm/budgets-and-rate-limits.md#hard-enforcement): rule 33 refuses to cap what the ledger prices at zero, and that applies to server tools too. A `serverTools[].costPerCallUSD` facet on the ModelProvider, and stripping or rejecting an undeclared server tool in the request body, are [roadmap](../ROADMAP.md#beyond) items. Provider-side tools have no grant surface of their own: a workload's access is the provider grant chain it already has (`spec.providers`, class `allowedProviders`, provider `allowedNamespaces`).
 

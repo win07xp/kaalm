@@ -17,98 +17,80 @@ limitations under the License.
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
-
-	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// TestVertexPathsNotServed locks the reserved status: google-vertex
-// has no inbound surface, so Vertex-shaped paths resolve no adapter, exactly
-// like any unrecognized path.
-func TestVertexPathsNotServed(t *testing.T) {
-	base := "/v1/projects/p/locations/us/publishers/google/models/gw-vertex%2Fgemini-2:generateContent"
-	if _, ok := adapterForPath(base); ok {
-		t.Fatal("generateContent path must not resolve: google-vertex is reserved")
+// The Vertex path carries the qualified model as its publisher and model
+// segments; only generateContent and streamGenerateContent under v1 and
+// v1beta1 resolve.
+func TestVertexPathsServed(t *testing.T) {
+	served := []string{
+		"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent",
+		"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:streamGenerateContent",
+		"/v1beta1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent",
+		"/v1beta1/projects/p/locations/global/publishers/prov/models/gemini-2.5-flash:streamGenerateContent",
 	}
-	stream := "/v1/projects/p/locations/us/publishers/google/models/gw-vertex%2Fgemini-2:streamGenerateContent"
-	if _, ok := adapterForPath(stream); ok {
-		t.Fatal("streamGenerateContent path must not resolve: google-vertex is reserved")
+	for _, path := range served {
+		a, ok := adapterForPath(path)
+		if !ok || a.formatName() != providerTypeVertex {
+			t.Errorf("%s: adapter %v, %v; want the Vertex adapter", path, a, ok)
+			continue
+		}
+		if got := a.modelFromPath(path); got != "prov/gemini-2.5-flash" {
+			t.Errorf("%s: modelFromPath = %q, want prov/gemini-2.5-flash", path, got)
+		}
 	}
-	if _, ok := adapterForPath("/v1/nonsense"); ok {
-		t.Error("an unrecognized path must not resolve")
+	notServed := []string{
+		// %2F decoded by the mux: one segment too many.
+		"/v1/projects/p/locations/l/publishers/google/models/prov/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:countTokens",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:rawPredict",
+		"/v1/projects/p/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers//models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini",
+		"/v2/projects/p/locations/l/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:generateContent/extra",
+		"/v1/projects/nonsense",
+		"/v1/nonsense",
+		// %3F decoded by the mux: a '?' inside the method segment.
+		"/v1/projects/p/locations/l/publishers/prov/models/gemini:streamGenerateContent?alt=json",
 	}
-	// The outbound half stays: the type still has its adapter.
-	if _, ok := adapterForProviderType(providerTypeVertex); !ok {
-		t.Error("the reserved type keeps its outbound adapter")
+	for _, path := range notServed {
+		if a, ok := adapterForPath(path); ok {
+			t.Errorf("%s resolved to %v, want no adapter", path, a)
+		}
+	}
+	for _, a := range []providerAdapter{anthropicAdapter{}, openaiAdapter{}} {
+		if got := a.modelFromPath(served[0]); got != "" {
+			t.Errorf("%s modelFromPath = %q, want empty: the model travels in the body", a.formatName(), got)
+		}
 	}
 }
 
-// A google-vertex primary on a served path is refused with 400 before it is
-// admitted, rate limited, or forwarded.
-func TestLLMProxy_VertexPrimaryIsRefused(t *testing.T) {
-	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	h.seedRoute()
-	h.server.RateLimiter = NewRateLimiter(func() int { return 1 })
-	h.store.providers["prov"].Spec.Type = providerTypeVertex
-	h.store.providers["prov"].Spec.RateLimits = kaalmv1beta1.ModelProviderRateLimits{RequestsPerMinute: 1}
-	cert := agentCert(t, h.ca)
-
-	calls := []struct {
-		path string
-		body map[string]any
-	}{
-		{"/v1/chat/completions", map[string]any{"model": "prov/m1"}},
-		// A second call is still 400, not 429: the first took no token.
-		{"/v1/chat/completions", map[string]any{"model": "prov/m1"}},
-		{"/v1/messages", map[string]any{"model": "prov/m1", "max_tokens": 1,
-			"messages": []any{map[string]any{"role": "user", "content": "hi"}}}},
-	}
-	for i, c := range calls {
-		resp := postJSON(t, h.client(&cert), h.url(c.path), c.body, nil)
-		var envelope struct {
-			Error errorBody `json:"error"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-			t.Fatalf("call %d: decoding error envelope: %v", i, err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest || envelope.Error.Type != errInvalidRequest {
-			t.Errorf("call %d on %s = %d %q, want 400 %q", i, c.path, resp.StatusCode, envelope.Error.Type, errInvalidRequest)
-		}
-		if !strings.Contains(envelope.Error.Message, "reserved") || envelope.Error.Provider != "prov" {
-			t.Errorf("call %d: error %+v does not say the provider type is reserved", i, envelope.Error)
-		}
-	}
-	if n := len(h.upreqs); n != 0 {
-		t.Errorf("%d requests reached the upstream, want 0", n)
-	}
-	if u := h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
-		t.Errorf("spend for team-a = %+v, want none", u)
-	}
-}
-
-func TestVertexUpstreamPath_ModelRewriteAndAltSSE(t *testing.T) {
+// upstreamPath points the publisher at google, writes the raw model id, and
+// sets alt=sse on streamGenerateContent only.
+func TestVertexUpstreamPath(t *testing.T) {
 	v := vertexAdapter{}
-	// The qualified {providerRef}/{modelId} in the URL is rewritten to the raw
-	// model ID (URL-encoded).
-	in := "/v1/projects/p/locations/us/publishers/google/models/prov%2Fgemini-2:generateContent"
-	got := v.upstreamPath(in, "gemini-2")
-	if got != "/v1/projects/p/locations/us/publishers/google/models/gemini-2:generateContent" {
-		t.Errorf("model not rewritten: %q", got)
+	cases := []struct{ in, model, want string }{
+		{"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent", "gemini-2.5-flash",
+			"/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"},
+		// A fallback edge's mapped model replaces the inbound one.
+		{"/v1/projects/p/locations/us-central1/publishers/prov/models/gemini-2.5-flash:generateContent", "gemini-2.0-flash",
+			"/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
+		{"/v1beta1/projects/p/locations/global/publishers/prov/models/gemini-2.5-flash:streamGenerateContent", "gemini-2.5-flash",
+			"/v1beta1/projects/p/locations/global/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse"},
+		// Project and location survive, escaped for the URL.
+		{"/v1/projects/my proj/locations/l?x/publishers/prov/models/m:generateContent", "m",
+			"/v1/projects/my%20proj/locations/l%3Fx/publishers/google/models/m:generateContent"},
+		// A path that is not a Vertex path passes through.
+		{"/v1/chat/completions", "m", "/v1/chat/completions"},
 	}
-	// Streaming gets ?alt=sse appended when absent.
-	streamIn := "/v1/projects/p/locations/us/publishers/google/models/prov%2Fgemini-2:streamGenerateContent"
-	gotStream := v.upstreamPath(streamIn, "gemini-2")
-	if gotStream != "/v1/projects/p/locations/us/publishers/google/models/gemini-2:streamGenerateContent?alt=sse" {
-		t.Errorf("alt=sse not injected: %q", gotStream)
-	}
-	// An existing alt= is preserved (not doubled).
-	withAlt := streamIn + "?alt=sse"
-	if got := v.upstreamPath(withAlt, "gemini-2"); got != gotStream {
-		t.Errorf("alt=sse should not be doubled: %q", got)
+	for _, c := range cases {
+		if got := v.upstreamPath(c.in, c.model); got != c.want {
+			t.Errorf("upstreamPath(%q, %q) = %q, want %q", c.in, c.model, got, c.want)
+		}
 	}
 }
 
@@ -123,6 +105,22 @@ func TestVertexUsageExtraction(t *testing.T) {
 	v.accumulateStreamUsage([]byte(`{"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`), &acc)
 	if acc.InputTokens != 5 || acc.OutputTokens != 3 {
 		t.Errorf("stream usage wrong: %+v", acc)
+	}
+}
+
+// Gemini reports thinking tokens in thoughtsTokenCount, outside
+// candidatesTokenCount, and bills them as output; both count as output.
+func TestVertexUsageExtraction_Thoughts(t *testing.T) {
+	v := vertexAdapter{}
+	u, ok := v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12,"thoughtsTokenCount":40}}`))
+	if !ok || u.InputTokens != 88 || u.OutputTokens != 52 {
+		t.Errorf("buffered usage = %+v ok=%v, want input 88, output 52", u, ok)
+	}
+	var acc Usage
+	v.accumulateStreamUsage([]byte(`{"candidates":[{"content":{}}]}`), &acc)
+	v.accumulateStreamUsage([]byte(`{"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3,"thoughtsTokenCount":7}}`), &acc)
+	if acc.InputTokens != 5 || acc.OutputTokens != 10 {
+		t.Errorf("stream usage = %+v, want input 5, output 10", acc)
 	}
 }
 

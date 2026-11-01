@@ -30,11 +30,11 @@ Three responses on the `:8443` listener are not in this envelope. A JSON-RPC hea
 
 ## LLM Gateway error responses
 
-The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{toolProvider}`, plus the `409` that [`POST /v1/task/complete`](task-complete.md) raises; that page lists the rest of its codes. The enforcement points that produce them are in [Request flow](../llm/request-handling.md#request-flow), [Budgets and rate limits](../llm/budgets-and-rate-limits.md), [Fallback logic](../llm/fallback.md), and [The tool plane](../tool-plane.md).
+The `:8443` listener raises these on the LLM proxy paths and on `/v1/mcp/{toolProvider}`, plus the `409` that [`POST /v1/task/complete`](task-complete.md) raises; that page lists the rest of its codes. The enforcement points that produce them are in [Request flow](../llm/request-handling.md#request-flow), [Budgets and rate limits](../llm/budgets-and-rate-limits.md), [Fallback logic](../llm/fallback.md), and [The tool plane](../tool-plane.md).
 
 | Status | `error.type` | `retryable` | `Retry-After` | Raised when |
 |---|---|---|---|---|
-| 400 | `invalid_request` | no | | The body is not JSON, `model` is not `{providerRef}/{modelId}`, the body repeats the `model`, `stream`, or `stream_options` field in any letter case, `stream` is not a boolean (step 3 of [Request flow](../llm/request-handling.md#request-flow) gives the reasons), the provider type is not built into this gateway or is the [reserved `google-vertex` type](../llm/request-handling.md#the-google-vertex-type-is-reserved), or a broker request on `/v1/mcp/{toolProvider}` is not a single JSON-RPC message or names `method`, `params`, or `params.name` more than once ([The tool plane](../tool-plane.md#the-broker) gives the reason) |
+| 400 | `invalid_request` | no | | The body is not JSON, `model` is not `{providerRef}/{modelId}`, the body repeats the `model`, `stream`, or `stream_options` field in any letter case, `stream` is not a boolean (step 3 of [Request flow](../llm/request-handling.md#request-flow) gives the reasons), the provider type is not built into this gateway, a path on the cluster listener is not one the gateway serves ([Request format detection](../llm/request-handling.md#request-format-detection)), or a broker request on `/v1/mcp/{toolProvider}` is not a single JSON-RPC message or names `method`, `params`, or `params.name` more than once ([The tool plane](../tool-plane.md#the-broker) gives the reason) |
 | 401 | `unauthorized` | no | | No client certificate and no bearer token, a bearer token from a Kaalm-managed Pod, a token `TokenReview` rejects, or a source IP outside the authenticated namespace |
 | 403 | `invalid_cert` | no | | A client certificate whose SAN is not an Agent or AgentTask identity |
 | 403 | `access_denied` | no | | The tenancy chain denies the provider ([Multi-tenancy](../../concepts/tenancy-and-tiers.md#multi-tenancy)); on the broker, the workload is not found, a namespace or class check denies the ToolProvider, or the caller sends a session id bound to another caller |
@@ -82,6 +82,12 @@ For an OpenAI-format caller:
 
 ```text
 data: {"error":{"type":"provider_error","message":"the provider stream failed before it completed; the response is truncated","provider":"openai-shared"}}
+```
+
+A Vertex-format caller gets the same kind of line, because every format except Anthropic's gets the gateway error envelope in a `data:` line:
+
+```text
+data: {"error":{"type":"provider_error","message":"the provider stream failed before it completed; the response is truncated","provider":"vertex-shared"}}
 ```
 
 | `error.type` | Raised when |

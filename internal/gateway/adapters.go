@@ -41,9 +41,8 @@ func (u Usage) isZero() bool {
 
 // providerAdapter carries the per-provider knowledge: request-format paths,
 // credential header shape, usage extraction (buffered and streamed), and
-// whether a streaming request needs the usage option. Anthropic and OpenAI/OpenAI-compatible are the
-// served types; google-vertex is reserved and keeps only its
-// outbound adapter pieces.
+// whether a streaming request needs the usage option. The served types are
+// anthropic, openai, openai-compatible, and google-vertex.
 type providerAdapter interface {
 	// formatName identifies the request format for logs and metrics.
 	formatName() string
@@ -61,10 +60,14 @@ type providerAdapter interface {
 	// adapters pass it through; Vertex embeds the model in the path and
 	// injects ?alt=sse.
 	upstreamPath(inboundPath, modelID string) string
+	// modelFromPath returns the qualified model a format carries in the
+	// URL, or "" when the model travels in the body.
+	modelFromPath(path string) string
 }
 
-// adapterForPath maps a request path to the adapter that registered it.
-// Unrecognized paths on the cluster listener are rejected with 400.
+// adapterForPath maps a request path to the adapter of its format: the
+// three body-model paths, or the Vertex path shape. Unrecognized paths on
+// the cluster listener are rejected with 400.
 func adapterForPath(urlPath string) (providerAdapter, bool) {
 	path, _, _ := strings.Cut(urlPath, "?") // strip any query string for matching
 	switch path {
@@ -73,11 +76,14 @@ func adapterForPath(urlPath string) (providerAdapter, bool) {
 	case "/v1/chat/completions", "/v1/completions":
 		return openaiAdapter{}, true
 	}
-	// No Vertex-format path is routed: google-vertex is a reserved type in
-	// this release
-	// (docs/src/gateways/llm/request-handling.md#the-google-vertex-type-is-reserved).
-	// The mux never routes anything else here either; this guard is
-	// for handler-level callers.
+	// The Vertex parse reads the whole path, the same string modelFromPath
+	// and upstreamPath read, so a '?' the mux decoded from %3F inside the
+	// method segment fails all three alike instead of only here.
+	if _, ok := parseVertexPath(urlPath); ok {
+		return vertexAdapter{}, true
+	}
+	// The mux routes the Vertex prefixes here whole, so a path under them
+	// that is not a Vertex call lands here.
 	return nil, false
 }
 
@@ -208,6 +214,8 @@ func (anthropicAdapter) streamUsageOption() bool { return false }
 
 func (anthropicAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
 
+func (anthropicAdapter) modelFromPath(string) string { return "" }
+
 // ---- OpenAI and OpenAI-compatible ----
 
 type openaiAdapter struct{}
@@ -292,3 +300,5 @@ func mayCarryOpenAIUsage(data []byte) bool {
 func (openaiAdapter) streamUsageOption() bool { return true }
 
 func (openaiAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
+
+func (openaiAdapter) modelFromPath(string) string { return "" }

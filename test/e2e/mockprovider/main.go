@@ -38,11 +38,24 @@ limitations under the License.
 //	                        request, so a spec can see the history a framework
 //	                        agent sent; /v1/messages answers as /ok does
 //
+// It also stands in for Google Vertex, for a google-vertex ModelProvider:
+//
+//	POST .../token       -> the OAuth2 token endpoint: a JWT-bearer grant
+//	                        gets the access token vertexMockToken
+//	POST {prefix}/{v1|v1beta1}/projects/{p}/locations/{l}/publishers/google/models/{model}:generateContent
+//	                     -> 200 Gemini answer with usageMetadata, given
+//	                        Authorization: Bearer vertexMockToken
+//	POST ...:streamGenerateContent?alt=sse
+//	                     -> the same as two SSE chunks, usage on the last
+//	GET .../publishers/google/models
+//	                     -> 200 for the controller's google-vertex probe
+//
 // GET .../v1/models returns 200 for probe compatibility. POST /callback records
 // async-webhook deliveries; GET /introspect/callbacks returns them for
 // assertions. Every chat call is counted by its endpoint prefix and exposed
 // at GET /introspect/requests, so specs can assert that a request never
-// reached the upstream (S17's hard-budget proof).
+// reached the upstream (S17's hard-budget proof). Served Vertex calls count
+// under their endpoint prefix too, and token grants under "/token".
 package main
 
 import (
@@ -336,6 +349,104 @@ func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// vertexMockToken is the access token the mock's token endpoint mints and
+// its Vertex calls require.
+const vertexMockToken = "mock-vertex-token"
+
+// vertexPrefix returns the endpoint prefix of a Vertex call path (what
+// precedes /{version}/projects/), "/" for a bare path, and false when the
+// path is not a generateContent or streamGenerateContent call on a google
+// model.
+func vertexPrefix(path string) (prefix, method string, ok bool) {
+	i := strings.Index(path, "/publishers/google/models/")
+	if i < 0 {
+		return "", "", false
+	}
+	last := path[strings.LastIndexByte(path, '/')+1:]
+	_, method, found := strings.Cut(last, ":")
+	if !found || (method != "generateContent" && method != "streamGenerateContent") {
+		return "", "", false
+	}
+	for _, version := range []string{"/v1/projects/", "/v1beta1/projects/"} {
+		if j := strings.Index(path[:i], version); j >= 0 {
+			if j == 0 {
+				return "/", method, true
+			}
+			return path[:j], method, true
+		}
+	}
+	return "", "", false
+}
+
+// token answers a JWT-bearer grant with vertexMockToken, standing in for
+// Google's token endpoint. The assertion's signature is not checked.
+func (m *mock) token(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil ||
+		r.PostForm.Get("grant_type") != "urn:ietf:params:oauth:grant-type:jwt-bearer" || r.PostForm.Get("assertion") == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+		return
+	}
+	m.count("/token")
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"access_token":"` + vertexMockToken + `","token_type":"Bearer","expires_in":3600}`))
+}
+
+// vertex serves generateContent and streamGenerateContent (with alt=sse)
+// for a caller that presents vertexMockToken.
+func (m *mock) vertex(w http.ResponseWriter, r *http.Request, prefix, method string) {
+	if r.Header.Get("Authorization") != "Bearer "+vertexMockToken {
+		http.Error(w, `{"error":{"code":401,"status":"UNAUTHENTICATED"}}`, http.StatusUnauthorized)
+		return
+	}
+	stream := method == "streamGenerateContent"
+	if stream && r.URL.Query().Get("alt") != "sse" {
+		http.Error(w, `{"error":{"code":400,"message":"mock serves only alt=sse streams"}}`, http.StatusBadRequest)
+		return
+	}
+	m.count(prefix)
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 1<<20))
+	usage := map[string]any{"promptTokenCount": 11, "candidatesTokenCount": 22, "totalTokenCount": 33}
+	candidate := func(text string) map[string]any {
+		return map[string]any{"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": text}}}}
+	}
+	if !stream {
+		c := candidate(mockReplyText)
+		c["finishReason"] = "STOP"
+		body, _ := json.Marshal(map[string]any{"candidates": []any{c}, "usageMetadata": usage})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	f, _ := w.(http.Flusher)
+	i := strings.LastIndexByte(mockReplyText, ' ')
+	last := candidate(mockReplyText[i:])
+	last["finishReason"] = "STOP"
+	for _, chunk := range []map[string]any{
+		{"candidates": []any{candidate(mockReplyText[:i])}},
+		{"candidates": []any{last}, "usageMetadata": usage},
+	} {
+		raw, _ := json.Marshal(chunk)
+		_, _ = w.Write(append(append([]byte("data: "), raw...), '\n', '\n'))
+		if f != nil {
+			f.Flush()
+		}
+	}
+}
+
+// count adds one call to a prefix's counter.
+func (m *mock) count(prefix string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.requests == nil {
+		m.requests = map[string]int{}
+	}
+	m.requests[prefix]++
+}
+
 // models answers the health probe (GET .../v1/models).
 func (m *mock) models(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -382,7 +493,16 @@ func (m *mock) handler() http.Handler {
 			m.chat(w, r)
 		case strings.HasSuffix(r.URL.Path, "/v1/models") && r.Method == http.MethodGet:
 			m.models(w, r)
+		case strings.HasSuffix(r.URL.Path, "/token") && r.Method == http.MethodPost:
+			m.token(w, r)
+		case strings.HasSuffix(r.URL.Path, "/publishers/google/models") && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"publisherModels":[]}`))
 		default:
+			if prefix, method, ok := vertexPrefix(r.URL.Path); ok && r.Method == http.MethodPost {
+				m.vertex(w, r, prefix, method)
+				return
+			}
 			http.NotFound(w, r)
 		}
 	})

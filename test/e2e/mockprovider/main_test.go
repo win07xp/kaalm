@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -433,5 +434,76 @@ func TestPacedStreamsSpaceEvents(t *testing.T) {
 	}
 	if took < 3*pace {
 		t.Errorf("paced messages stream took %v, want at least %v", took, 3*pace)
+	}
+}
+
+// The mock stands in for Google: a token endpoint that answers a JWT-bearer
+// grant, and the Vertex generateContent and streamGenerateContent calls
+// that require the token it minted.
+func TestVertexTokenAndCalls(t *testing.T) {
+	m := &mock{}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	form := url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"}, "assertion": {"a.b.c"}}
+	resp, err := http.PostForm(srv.URL+"/token", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tok map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&tok)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 || tok["access_token"] != vertexMockToken || tok["expires_in"] != float64(3600) {
+		t.Fatalf("token = %d %v", resp.StatusCode, tok)
+	}
+	resp, _ = http.PostForm(srv.URL+"/token", url.Values{"grant_type": {"client_credentials"}})
+	_ = resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("a non-JWT grant = %d, want 400", resp.StatusCode)
+	}
+
+	call := func(path, token string) (*http.Response, string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"contents":[]}`))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp, string(raw)
+	}
+	const base = "/vertex/v1beta1/projects/p/locations/global/publishers/google/models/gemini-mock"
+	if resp, _ := call(base+":generateContent", "wrong"); resp.StatusCode != 401 {
+		t.Errorf("wrong token = %d, want 401", resp.StatusCode)
+	}
+	resp, body := call(base+":generateContent", vertexMockToken)
+	if resp.StatusCode != 200 || !strings.Contains(body, mockReplyText) ||
+		!strings.Contains(body, `"promptTokenCount":11`) {
+		t.Errorf("generateContent = %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := call(base+":streamGenerateContent", vertexMockToken); resp.StatusCode != 400 {
+		t.Errorf("stream without alt=sse = %d, want 400", resp.StatusCode)
+	}
+	resp, body = call(base+":streamGenerateContent?alt=sse", vertexMockToken)
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" ||
+		strings.Count(body, "data: ") != 2 || !strings.Contains(body, `"usageMetadata"`) {
+		t.Errorf("streamGenerateContent = %d %q %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+	if m.requests["/vertex"] != 2 || m.requests["/token"] != 1 {
+		t.Errorf("counts = %v, want /vertex:2 (the served calls) and /token:1", m.requests)
+	}
+
+	// The controller's probe lists the publisher's models.
+	resp, err = http.Get(srv.URL + "/vertex/v1/projects/p/locations/global/publishers/google/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("publisher models = %d, want 200", resp.StatusCode)
 	}
 }

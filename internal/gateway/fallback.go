@@ -64,6 +64,9 @@ type forwardResult struct {
 	chosen     *kaalmv1beta1.ModelProvider // the candidate resource, for usage accounting
 	model      string                      // the model the candidate served (the edge's map applied)
 	format     llmtranslate.Format         // the candidate's wire format ("" when it cannot cross)
+	// credentialRejected: the token endpoint refused the provider's
+	// service-account key: a credential failure with no upstream response.
+	credentialRejected bool
 	// settle frees the winning candidate's boundary admission slot with the
 	// request's actual cost (hard enforcement). Nil outside the boundary
 	// region; idempotent; the caller MUST invoke it on every outcome path.
@@ -318,15 +321,26 @@ func (s *Server) tryWithFallbacks(
 		settle(0)
 		res.settle = nil
 	}
-	if res.class == classUpstream && res.resp != nil &&
-		(res.resp.StatusCode == 401 || res.resp.StatusCode == 403) {
-		s.recordEvent(provider, nil, kaalmv1beta1.ReasonCredentialsInvalid, kaalmv1beta1.ActionFallback,
-			"upstream returned %d; credential rotation may be needed", res.resp.StatusCode)
-	}
+	s.recordCredentialFailure(provider, res)
 	if child, ok := s.walkChildren(ctx, provider, st, attempt); ok {
 		return child, true
 	}
 	return res, false
+}
+
+// recordCredentialFailure raises CredentialsInvalid on a provider whose
+// credential failed: an upstream 401 or 403, or a token endpoint that
+// refused its service-account key.
+func (s *Server) recordCredentialFailure(provider *kaalmv1beta1.ModelProvider, res forwardResult) {
+	switch {
+	case res.class != classUpstream:
+	case res.credentialRejected:
+		s.recordEvent(provider, nil, kaalmv1beta1.ReasonCredentialsInvalid, kaalmv1beta1.ActionFallback,
+			"the token endpoint rejected the service-account key; credential rotation may be needed")
+	case res.resp != nil && (res.resp.StatusCode == 401 || res.resp.StatusCode == 403):
+		s.recordEvent(provider, nil, kaalmv1beta1.ReasonCredentialsInvalid, kaalmv1beta1.ActionFallback,
+			"upstream returned %d; credential rotation may be needed", res.resp.StatusCode)
+	}
 }
 
 func (s *Server) walkChildren(
