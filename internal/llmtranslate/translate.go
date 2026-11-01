@@ -464,14 +464,20 @@ func openAIToolChoiceToAnthropic(in map[string]any) map[string]any {
 	return toolChoice
 }
 
+// MaxTokens returns the output token limit a request body carries:
+// max_completion_tokens, else max_tokens. ok is false when it has neither.
+func MaxTokens(body map[string]any) (int64, bool) {
+	if n, ok := numberOf(body["max_completion_tokens"]); ok {
+		return n, true
+	}
+	return numberOf(body["max_tokens"])
+}
+
 // openAIMaxTokens applies the max_tokens rule: the request's value capped
 // to a known ceiling, the ceiling when the request has none, and
 // untranslatable when neither exists (Anthropic requires the field).
 func openAIMaxTokens(in map[string]any, model string, maxOutputTokens int64) (int64, error) {
-	maxTokens, hasMax := numberOf(in["max_completion_tokens"])
-	if !hasMax {
-		maxTokens, hasMax = numberOf(in["max_tokens"])
-	}
+	maxTokens, hasMax := MaxTokens(in)
 	switch {
 	case !hasMax && maxOutputTokens <= 0:
 		return 0, untranslatable(fmt.Sprintf(

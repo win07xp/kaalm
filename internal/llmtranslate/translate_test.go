@@ -503,3 +503,27 @@ func TestNewStream_SameFormatIsNil(t *testing.T) {
 		t.Error("same-format streams must not be translated")
 	}
 }
+
+func TestMaxTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+		want int64
+		ok   bool
+	}{
+		{"decoded max_tokens", parse(t, `{"max_tokens":256}`), 256, true},
+		{"int64 as the translation writes it", map[string]any{"max_tokens": int64(4096)}, 4096, true},
+		{"max_completion_tokens wins", parse(t, `{"max_tokens":10,"max_completion_tokens":20}`), 20, true},
+		{"absent", parse(t, `{"model":"m"}`), 0, false},
+		{"not a number", parse(t, `{"max_tokens":"lots"}`), 0, false},
+		{"nil body", nil, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := MaxTokens(tc.body)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("MaxTokens = %d, %v; want %d, %v", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
