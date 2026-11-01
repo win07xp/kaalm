@@ -181,10 +181,10 @@ spec:
 ```
 
 `Ready` and `Healthy` read as in step 3, with one addition: the probe lists the
-publisher models with an access token (it reuses the token across probes), so `Healthy=True` shows that the endpoint accepts an access token
-minted from the key. A Secret value that is not a service-account key, or a key
-that Google's token endpoint refuses, reports `Ready=False` with reason
-`CredentialsInvalid`.
+publisher models with an access token minted from the key, so `Healthy=True`
+shows that the endpoint accepts that token. A Secret value that is not a
+service-account key, or a key that Google's token endpoint refuses, reports
+`Ready=False` with reason `CredentialsInvalid`.
 
 An agent calls the provider in Google's format, with the Gemini model id
 qualified by the provider name, `vertex-shared/gemini-2.5-flash`. With the
