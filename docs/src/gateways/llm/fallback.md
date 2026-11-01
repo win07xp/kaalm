@@ -140,7 +140,7 @@ When the candidate answers with SSE, the relay translates event by event and sen
 
 ### Holding a translated answer
 
-A non-streamed answer from a crossing candidate is translated whole, so this is the one path where the gateway holds an answer instead of relaying it as its bytes arrive ([Response relay](request-handling.md#request-flow), step 9). The hold is bounded by 1 MiB plus 16 bytes for each `max_tokens` of the translated request (`max_completion_tokens` when the request carries that instead). When the request carries neither, the candidate model's `maxOutputTokens` stands in, and when that is unset too, the bound is 1 MiB.
+A non-streamed answer from a crossing candidate is translated whole, so this is the one path where the gateway holds an answer instead of relaying it as its bytes arrive ([Response relay](request-handling.md#request-flow), step 9). The hold is bounded by 1 MiB plus 16 bytes for each `max_tokens` of the translated request. When the translated request carries no `max_tokens`, the candidate model's `maxOutputTokens` stands in, and when that is unset too, the bound is 1 MiB.
 
 A token never renders to 16 bytes of JSON, and the 1 MiB covers the ids, tool-call structure, and other parts that `max_tokens` does not count. Only a provider that breaks its contract reaches the limit.
 
