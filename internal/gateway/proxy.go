@@ -932,6 +932,12 @@ func (s *Server) relayJSON(
 		slog.Warn("JSON relay read error", "namespace", namespace,
 			"provider", provider.Name, "model", modelID, "err", err)
 		spanError(ctx, streamErrorType(err))
+		// Send the status if no body byte did: the caller's abort would
+		// otherwise close the connection with the 2xx still buffered, and
+		// the agent would see no response at all.
+		if sink.f != nil {
+			sink.f.Flush()
+		}
 		return outcomeError, true
 	}
 	return outcomeOK, false

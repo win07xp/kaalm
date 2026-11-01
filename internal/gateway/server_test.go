@@ -892,6 +892,37 @@ func TestProxy_JSONBodyStallEndsTheAnswerCutOff(t *testing.T) {
 	})
 }
 
+func TestProxy_JSONStallBeforeTheFirstByteSendsTheStatus(t *testing.T) {
+	// The provider sends its 2xx headers and no body byte, then stalls: the
+	// agent still gets the 200 the provider started, then an incomplete
+	// body, not a connection closed with no response.
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		stall(r)
+	})
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	cert := agentCert(t, h.ca)
+
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1"})
+	resp, err := h.client(&cert).Post(h.url("/v1/chat/completions"), "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("no response from the gateway: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stalled body = %d, want the 200 the provider started", resp.StatusCode)
+	}
+	if body, err := io.ReadAll(resp.Body); err == nil {
+		t.Errorf("body %q read cleanly; want an incomplete-body error", body)
+	}
+	waitFor(t, func() bool {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "m1", "team-a", outcomeError)) == 1
+	})
+}
+
 func TestUpstreamClientHasNoWholeCallTimeout(t *testing.T) {
 	s := &Server{Config: Config{UpstreamTimeout: time.Second}}
 	if got := s.upstream().Timeout; got != 0 {
