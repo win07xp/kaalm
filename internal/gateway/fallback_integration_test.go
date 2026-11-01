@@ -646,7 +646,96 @@ func TestIntegration_CrossFormatFallback_CutOffAnswerDoesNotFallBack(t *testing.
 		w.(http.Flusher).Flush()
 		panic(http.ErrAbortHandler)
 	})
-	var childCalls atomic.Int64
+	childCalls := addCrossingChild(t, h)
+
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 502", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderError {
+		t.Errorf("error type %q, want %s", got, errProviderError)
+	}
+	if got := childCalls.Load(); got != 0 {
+		t.Errorf("the backup's fallback was called %d times after the 2xx started", got)
+	}
+}
+
+// bigOpenAIAnswer answers a chat completion whose content is n bytes, past
+// the 1 MiB hold floor when n is larger.
+func bigOpenAIAnswer(n int) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"role":"assistant","content":"`)
+		_, _ = io.WriteString(w, strings.Repeat("z", n))
+		_, _ = io.WriteString(w, `"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
+	}
+}
+
+// answerText decodes an Anthropic message and returns its text length.
+func answerTextLen(t *testing.T, resp *http.Response) int {
+	t.Helper()
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Content) != 1 {
+		t.Fatalf("content blocks %d, want 1", len(out.Content))
+	}
+	return len(out.Content[0].Text)
+}
+
+func TestIntegration_CrossFormatFallback_HoldLimitFollowsMaxTokens(t *testing.T) {
+	// A request allowing 200000 output tokens may get an answer far past the
+	// 1 MiB floor: the hold limit grows with max_tokens, so it translates.
+	const size = 3 << 19 // 1.5 MiB
+	h, cert := crossingHarness(t, bigOpenAIAnswer(size))
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 200000,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 200: the answer is within what max_tokens allows", resp.StatusCode)
+	}
+	if got := answerTextLen(t, resp); got != size {
+		t.Errorf("translated text %d bytes, want %d", got, size)
+	}
+}
+
+func TestIntegration_CrossFormatFallback_HoldLimitFollowsMaxOutputTokens(t *testing.T) {
+	// The caller sets no max_tokens, so the translated request carries none:
+	// the limit comes from the backup model's declared maxOutputTokens.
+	const size = 3 << 19 // 1.5 MiB
+	h, cert := crossingHarness(t, bigOpenAIAnswer(size))
+	maxOut := int64(100000)
+	h.store.providers["backup"].Spec.Models[0].MaxOutputTokens = &maxOut
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model":    "prov/m1",
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 200: the answer is within what maxOutputTokens allows", resp.StatusCode)
+	}
+	if got := answerTextLen(t, resp); got != size {
+		t.Errorf("translated text %d bytes, want %d", got, size)
+	}
+}
+
+// addCrossingChild gives the crossing backup its own fallback, "child", and
+// returns its call count.
+func addCrossingChild(t *testing.T, h *harness) *atomic.Int64 {
+	t.Helper()
+	childCalls := new(atomic.Int64)
 	childSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		childCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
@@ -669,19 +758,37 @@ func TestIntegration_CrossFormatFallback_CutOffAnswerDoesNotFallBack(t *testing.
 		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "child"}})
 	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
 		kaalmv1beta1.LocalObjectReference{Name: "child"})
+	return childCalls
+}
+
+func TestIntegration_CrossFormatFallback_IdleAnswerIs504(t *testing.T) {
+	// The crossing backup sends its 2xx headers and a prefix, then goes
+	// idle: the gap bound ends the hold with 504 provider_timeout, and the
+	// backup's own fallback is never tried, since the 2xx had started.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"content":"half`)
+		w.(http.Flusher).Flush()
+		stall(r)
+	})
+	h.server.Config.UpstreamTimeout = streamTimeout
+	childCalls := addCrossingChild(t, h)
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
 
 	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
 		"model": "prov/m1", "max_tokens": 64,
 		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
 	}, nil)
-	if resp.StatusCode != http.StatusBadGateway {
+	if resp.StatusCode != http.StatusGatewayTimeout {
 		_ = resp.Body.Close()
-		t.Fatalf("status %d, want 502", resp.StatusCode)
+		t.Fatalf("status %d, want 504", resp.StatusCode)
 	}
-	if got := errType(t, resp); got != errProviderError {
-		t.Errorf("error type %q, want %s", got, errProviderError)
+	if got := errType(t, resp); got != errProviderTimeout {
+		t.Errorf("error type %q, want %s", got, errProviderTimeout)
 	}
 	if got := childCalls.Load(); got != 0 {
 		t.Errorf("the backup's fallback was called %d times after the 2xx started", got)
 	}
+	waitFor(t, func() bool { _, slots := boundarySlots(h); return slots == 0 })
 }
