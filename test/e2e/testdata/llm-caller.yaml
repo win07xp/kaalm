@@ -26,10 +26,11 @@ spec:
         # Retry through the gateway's source-IP startup race: the anti-spoofing
         # check (source IP -> Pod namespace) returns 401 until the gateway's Pod
         # informer observes this freshly-created caller Pod. A real client
-        # retries the same way.
+        # retries the same way, and reads the token file on every request:
+        # the kubelet replaces the file before the token expires.
         - |
-          token=$(cat /var/run/token/token)
           for i in $(seq 1 20); do
+            token=$(cat /var/run/token/token)
             code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
               --cacert /var/run/ca/ca.crt \
               -H "Authorization: Bearer $token" \

@@ -135,8 +135,8 @@ gateway:
   # once (the gateway's --max-pod-waits-per-agent). Each wait holds gateway
   # work for up to the capped wakeTimeout, so this bounds that work. The next
   # message gets 503 agent_not_ready, which is retryable. The cluster total
-  # for one Agent is this value times gateway.replicas. Must be positive, or
-  # the gateway exits at startup.
+  # for one Agent is this value times gateway.replicas. Must be at least 1;
+  # the values schema rejects a smaller value at install or upgrade.
   maxPodWaitsPerAgent: 100
   # Per-attempt upstream LLM-provider bound (the gateway's --upstream-timeout).
   # It sets two bounds: the wait for the first response byte, then the

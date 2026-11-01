@@ -87,6 +87,14 @@ jobs:
       - name: Build binaries
         run: make build
 
+      # test/chart shells out to helm and skips without one, so the suites
+      # run against the Helm the chart, e2e, and release jobs pin, not the
+      # runner image's.
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+
       - name: Unit and envtest suites (85% coverage minimum)
         run: make cover-check
 
@@ -127,6 +135,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # test/chart shells out to helm and skips without one, so the suites
+      # run against the Helm the chart, e2e, and release jobs pin, not the
+      # runner image's.
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
       - name: Unit and envtest suites under the race detector
         run: make test-race
 

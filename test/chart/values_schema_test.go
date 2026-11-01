@@ -209,6 +209,14 @@ rbac:
 	}
 }
 
+// gateway.maxPodWaitsPerAgent must be at least 1: the gateway exits at
+// startup on a smaller value, so the schema rejects it at install or upgrade.
+func TestValuesSchema_MaxPodWaitsPerAgentMinimum(t *testing.T) {
+	schemaFails(t, "maxPodWaitsPerAgent", "--set", "gateway.maxPodWaitsPerAgent=0")
+	schemaFails(t, "maxPodWaitsPerAgent", "--set", "gateway.maxPodWaitsPerAgent=-1")
+	renders(t, "--set", "gateway.maxPodWaitsPerAgent=1")
+}
+
 // helm lint checks values against the schema: the chart's defaults pass, and
 // a list where developers needs a map fails.
 func TestValuesSchema_HelmLint(t *testing.T) {
