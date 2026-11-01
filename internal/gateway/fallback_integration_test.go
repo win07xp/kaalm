@@ -675,7 +675,7 @@ func bigOpenAIAnswer(n int) http.HandlerFunc {
 	}
 }
 
-// answerText decodes an Anthropic message and returns its text length.
+// answerTextLen decodes an Anthropic message and returns its text length.
 func answerTextLen(t *testing.T, resp *http.Response) int {
 	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
