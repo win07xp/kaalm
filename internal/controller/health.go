@@ -68,6 +68,10 @@ type HTTPProviderHealthChecker struct {
 	// Client is the HTTP client. If nil, a client bounded by the provider's
 	// healthCheck.timeoutSeconds (default 10s) is used per probe.
 	Client *http.Client
+
+	// vertexTokens holds the access tokens the google-vertex probe minted,
+	// one per provider; see vertexProbeTokens.
+	vertexTokens vertexProbeTokens
 }
 
 // healthCheckTimeout returns the per-probe timeout: healthCheck.timeoutSeconds
@@ -120,7 +124,9 @@ func (h *HTTPProviderHealthChecker) Probe(
 		req.Header.Set("Authorization", "Bearer "+credential)
 	case "google-vertex":
 		var failed *ProviderProbeResult
-		if req, failed = vertexProbeRequest(ctx, cl, provider.Spec.Endpoint, credential); failed != nil {
+		if req, failed = vertexProbeRequest(
+			ctx, cl, &h.vertexTokens, provider.Name, provider.Spec.Endpoint, credential,
+		); failed != nil {
 			return *failed
 		}
 	default:
@@ -137,6 +143,12 @@ func (h *HTTPProviderHealthChecker) Probe(
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return ProviderProbeResult{Healthy: true}
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		// A token Vertex refuses is not reused: the next due probe mints
+		// again, so a token revoked at Google while the key stays valid
+		// recovers on the next probe.
+		if provider.Spec.Type == "google-vertex" {
+			h.vertexTokens.forget(provider.Name)
+		}
 		return ProviderProbeResult{AuthFailed: true}
 	default:
 		return ProviderProbeResult{Err: fmt.Errorf("provider returned HTTP %d", resp.StatusCode)}
