@@ -202,48 +202,42 @@ func TestProxyHard_StreamDisconnectSettles(t *testing.T) {
 	}
 }
 
-// A non-streamed answer whose caller leaves mid-relay settles the usage the
-// relay read and frees the slot, as a stream does.
+// A non-streamed answer whose caller leaves mid-relay is read on until the
+// provider stalls: the usage it read settles, and the slot frees when the
+// idle bound ends the read.
 func TestProxyHard_JSONDisconnectSettles(t *testing.T) {
-	block := make(chan struct{})
+	arrived := make(chan struct{}, 1)
+	left := make(chan struct{})
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"usage":{"prompt_tokens":1000000,"completion_tokens":0},"choices":[`)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		select {
-		case <-block:
-		case <-r.Context().Done():
-		}
+		w.(http.Flusher).Flush()
+		arrived <- struct{}{}
+		trickleUntil(w, left)
+		stall(r)
 	})
-	t.Cleanup(func() { close(block) })
+	h.server.Config.UpstreamTimeout = streamTimeout
 	h.seedRoute()
 	prov := hardenProv(h)
 	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
 
 	cert := agentCert(t, h.ca)
-	client := h.client(&cert)
-	client.Timeout = 600 * time.Millisecond
-	req, err := http.NewRequest(http.MethodPost, h.url("/v1/chat/completions"),
-		strings.NewReader(`{"model":"prov/m1"}`))
-	if err != nil {
-		t.Fatal(err)
+	resp, cancel := postCancellable(t, h, &cert)
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		close(left)
+		t.Fatal("the provider never answered")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}
+	cancel()
+	_ = resp.Body.Close()
+	time.Sleep(100 * time.Millisecond)
+	close(left)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		h.server.Budget.mu.Lock()
-		l := h.server.Budget.providers["prov"]
-		own, slots := l.own["team-a"], len(l.adm)
-		h.server.Budget.mu.Unlock()
+		own, slots := boundarySlots(h)
 		if own == 1 && slots == 0 {
 			return
 		}

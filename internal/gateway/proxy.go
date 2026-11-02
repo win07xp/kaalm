@@ -300,7 +300,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		return fr
 	})
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && !readsOnAfterCallerLeft(res) {
 		s.settleCallerLeft(ctx, res, c.Namespace, &modelID, &answered)
 		return
 	}
@@ -315,11 +315,12 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // settleCallerLeft ends a request whose caller left before the gateway
-// answered, and writes nothing. A 2xx answer arrives unread and can no
-// longer be read, since its read derives from the caller's context, so it
-// counts as usage missing and settles zero. Any other attempt settles zero.
-// A relay that had started settles what it read itself. The request counts
-// as client_closed.
+// answered, and writes nothing. A 2xx that reaches it is a stream: it
+// arrives unread and can no longer be read, since its read derives from the
+// caller's context, so it counts as usage missing and settles zero. A
+// non-streamed 2xx goes to its relay instead and is read to its end (see
+// readsOnAfterCallerLeft). Any other attempt settles zero. A relay that had
+// started settles what it read itself. The request counts as client_closed.
 func (s *Server) settleCallerLeft(
 	ctx context.Context, res forwardResult, namespace string, modelID, answered *string,
 ) {
@@ -350,7 +351,9 @@ func (s *Server) settleCallerLeft(
 // the serving candidate's adapter from the untranslated bytes as they pass.
 // debitTokens takes the settled usage off the token rate limit that
 // admitted the request. A 2xx is counted on kaalm_llm_requests_total when
-// its relay ends, so the status says how it ended.
+// its relay ends, so the status says how it ended. A non-streamed 2xx comes
+// here after the caller left too: the JSON relay and the hold read it to
+// its end, settle its usage, and count client_closed.
 func (s *Server) writeWalkResult(
 	ctx context.Context, w http.ResponseWriter, res forwardResult, adapter providerAdapter,
 	inboundFormat llmtranslate.Format, namespace, workload string, modelID, answered *string,
@@ -465,9 +468,11 @@ func (s *Server) candidateRequest(
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 // The attempt runs under an attemptWatchdog: UpstreamTimeout bounds the wait
-// for response headers, then each gap between body reads. A 2xx, JSON or
-// SSE, is returned unread and hands the watchdog to the relay through the
-// wrapped body, whose Close releases it. Any other status is read up to
+// for response headers, then each gap between body reads. The attempt ends
+// when the caller leaves, except a non-streamed 2xx: once its headers
+// arrive, it is read to its end (see relayJSON). A 2xx, JSON or SSE, is
+// returned unread and hands the watchdog to the relay through the wrapped
+// body, whose Close releases it. Any other status is read up to
 // errorBodyLimit and closed, which releases the watchdog. A credential the store
 // refuses is a connect-class failure, logged at most once a minute per provider.
 // For google-vertex the credential is a service-account key, exchanged for
@@ -519,6 +524,13 @@ func (s *Server) forwardOnce(
 	if class == classNone {
 		// A 2xx goes to the relay unread: the walk never abandons a 2xx
 		// (tryWithFallbacks returns it), and the handler closes the body.
+		// A non-streamed 2xx is read to its end whatever the caller does:
+		// the provider billed the whole answer before it sent the headers,
+		// and usage can be its last member. A stream stays tied to the
+		// caller, whose leaving stops the provider generating.
+		if !isSSE(resp) {
+			dog.detach()
+		}
 		return fr
 	}
 	// Any other status is read up to errorBodyLimit and closed, so an
@@ -722,6 +734,13 @@ func isSSE(resp *http.Response) bool {
 	return strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 }
 
+// readsOnAfterCallerLeft reports whether the walk's result is a non-streamed
+// 2xx, which its relay reads to its end for its usage after the caller
+// leaves (see forwardOnce).
+func readsOnAfterCallerLeft(res forwardResult) bool {
+	return res.resp != nil && res.resp.StatusCode >= 200 && res.resp.StatusCode <= 299 && !isSSE(res.resp)
+}
+
 // relayStream forwards SSE events to the caller as each one completes, and
 // events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
@@ -894,7 +913,11 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 // arrive, so the gateway's memory per request does not grow with the
 // answer's size. Usage is read from the same bytes by the adapter's usage
 // reader, and spend settles when the relay ends, on every exit, as in
-// relayStream. The upstream Content-Length passes through. It returns the
+// relayStream. A caller that leaves does not end the upstream read: the
+// relay stops writing and reads to the end, so spend settles the usage
+// read, including usage that arrives after the caller left. A provider that
+// stalls ends the read at the idle bound, and usage not read by then is
+// missing. The upstream Content-Length passes through. It returns the
 // outcome for kaalm_llm_requests_total and marks the llm.request span (ctx)
 // the same way: ok, client_closed for a caller that left, or error for an
 // answer the provider broke or let go idle after the status was sent. cut
@@ -915,12 +938,18 @@ func (s *Server) relayJSON(
 	buf := getScanBuf()
 	defer putScanBuf(buf)
 	readErr, writeErr := relayBody(resp.Body, sink, reader, *buf)
+	if writeErr != nil {
+		// The agent is gone, or (ErrContentLength) must be cut off. The
+		// provider billed the whole answer when it sent the headers, so the
+		// rest is read for its usage and discarded. The attempt no longer
+		// follows the caller; the idle bound still ends a stalled provider.
+		readErr, _ = relayBody(resp.Body, io.Discard, reader, *buf)
+	}
 	bodyLog("llm response", sink.logged)
 	switch {
-	// The upstream read derives from the caller's context, as in
-	// relayStream: ctx.Err() is set only when the caller left. A failed
-	// write to the agent is the caller leaving too, except ErrContentLength:
-	// the provider sent more than the length it declared.
+	// ctx.Err() is set only when the caller left. A failed write to the
+	// agent is the caller leaving too, except ErrContentLength: the
+	// provider sent more than the length it declared.
 	case ctx.Err() != nil, writeErr != nil && !errors.Is(writeErr, http.ErrContentLength):
 		spanError(ctx, outcomeClientClosed)
 		return outcomeClientClosed, false
@@ -974,7 +1003,9 @@ func (h *holdBuffer) Write(p []byte) (int, error) {
 // gets a whole error response: 502 provider_error for an answer over the
 // limit, cut off, or untranslatable, 504 provider_timeout for one that went
 // idle. None of them continues the walk: the provider's 2xx had started.
-// It returns the outcome for kaalm_llm_requests_total.
+// A caller that leaves does not end the hold: the answer is read to its
+// end for its usage, nothing is translated or written, and the outcome is
+// client_closed. It returns the outcome for kaalm_llm_requests_total.
 func (s *Server) relayCrossing(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, servingAdapter providerAdapter,
 	from, to llmtranslate.Format, limit int64, namespace, workload string,

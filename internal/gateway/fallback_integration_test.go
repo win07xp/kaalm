@@ -531,19 +531,13 @@ func TestIntegration_CrossFormatStreamFailureUsesTheCallersShape(t *testing.T) {
 	}
 }
 
-// A caller that leaves a non-stream request while the provider is answering
-// ends the walk: the request counts as client_closed, the fallback is not
-// tried, and no spend settles for the cut-off answer. The read can end in
-// the cancel error or, as the transport can report the cancel, a clean end
-// of the partial body; both are the caller leaving.
+// A caller that leaves a non-stream request before the provider's headers
+// arrive ends the walk: the request counts as client_closed, the fallback is
+// not tried, and no spend settles, since no answer had started.
 func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
 	arrived := make(chan struct{}, 1)
 	release := make(chan struct{})
-	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"id":"partial","choices":[`)
-		w.(http.Flusher).Flush()
+	h := newHarness(t, func(_ http.ResponseWriter, r *http.Request) {
 		arrived <- struct{}{}
 		select {
 		case <-release:
@@ -605,7 +599,62 @@ func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
 		t.Errorf("fallback counted %v times after the caller left", got)
 	}
 	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 0 || u.OutputTokens != 0 {
-		t.Errorf("spend settled for a cut-off answer: %+v", u)
+		t.Errorf("spend settled for an answer that never started: %+v", u)
+	}
+}
+
+// A caller that leaves while a crossing answer is held does not end the
+// hold: the answer is read to its end, spend settles from its usage, which
+// the provider sends last, and the request counts as client_closed.
+func TestIntegration_CrossFormatFallback_CallerLeftDuringTheHoldSettlesUsage(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","object":"chat.completion","model":"gpt-5-mini",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"Co`)
+		w.(http.Flusher).Flush()
+		arrived <- struct{}{}
+		<-release
+		_, _ = io.WriteString(w, `ld."},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
+	})
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/messages"), bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := h.client(cert).Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the backup never answered")
+	}
+	cancel()
+	<-done
+	// Let the gateway see the caller leave before the rest arrives.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	waitForSpend(t, h, "backup", "gpt-5-mini", 7)
+	requests := func(status string) float64 {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("backup", "gpt-5-mini", "team-a", status))
+	}
+	waitFor(t, func() bool { return requests(outcomeClientClosed) == 1 })
+	for _, status := range []string{outcomeOK, outcomeError} {
+		if got := requests(status); got != 0 {
+			t.Errorf("%s requests = %v, want 0", status, got)
+		}
 	}
 }
 

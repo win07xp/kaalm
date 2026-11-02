@@ -25,25 +25,29 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // A request whose caller left before the relay started counts as
-// client_closed: a 2xx answer, which arrives unread and can no longer be
-// read, counts as usage missing, and every outcome settles zero.
+// client_closed: a 2xx stream, which arrives unread and can no longer be
+// read, counts as usage missing, and every outcome settles zero. A
+// non-streamed 2xx never reaches settleCallerLeft: its relay reads it.
 func TestSettleCallerLeft(t *testing.T) {
 	cases := []struct {
 		name        string
 		status      int
 		body        string
 		noResponse  bool
+		stream      bool
 		wantInput   int64
 		wantMissing float64
 		// zeroSettle: the admission slot is freed with a zero cost.
 		zeroSettle bool
 	}{
-		{name: "2xx answer", status: 200, body: `{"id":"x","usage":{"prompt_tokens":7,"completion_tokens":2}}`,
+		{name: "2xx stream", status: 200, stream: true,
+			body:        "data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n",
 			wantMissing: 1, zeroSettle: true},
 		{name: "provider error", status: 400, body: `{"error":{}}`, zeroSettle: true},
 		{name: "no response", noResponse: true, zeroSettle: true},
@@ -57,7 +61,11 @@ func TestSettleCallerLeft(t *testing.T) {
 			res := forwardResult{provider: "prov", model: "m1", chosen: prov,
 				settle: func(cost float64) { settled = cost }}
 			if !tc.noResponse {
-				res.resp = &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}
+				res.resp = &http.Response{StatusCode: tc.status, Header: http.Header{},
+					Body: io.NopCloser(strings.NewReader(tc.body))}
+				if tc.stream {
+					res.resp.Header.Set("Content-Type", "text/event-stream")
+				}
 				if tc.status >= 300 {
 					res.body = []byte(tc.body)
 				}
@@ -154,5 +162,47 @@ func TestForwardOnce_ErrorBodyIsReadUpToTheLimit(t *testing.T) {
 	res = forward(context.Background())
 	if !res.fallilable || res.class != classConnect || res.err == nil {
 		t.Errorf("read failure = %+v, want a fallilable connect-class error", res)
+	}
+}
+
+// A non-streamed 2xx is read to its end whatever the caller does, so its
+// attempt no longer follows the caller's cancel; a stream's still does.
+func TestForwardOnce_NonStreamedSuccessOutlivesTheCaller(t *testing.T) {
+	for _, tc := range []struct {
+		contentType string
+		outlives    bool
+	}{
+		{contentType: "application/json", outlives: true},
+		{contentType: "text/event-stream", outlives: false},
+	} {
+		t.Run(tc.contentType, func(t *testing.T) {
+			forward := forwardOnceHarness(t, func(r *http.Request) *http.Response {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {tc.contentType}},
+					Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}
+			})
+			parent, cancel := context.WithCancel(context.Background())
+			res := forward(parent)
+			body, ok := res.resp.Body.(*watchedBody)
+			if !ok {
+				t.Fatalf("body %T, want the watched body", res.resp.Body)
+			}
+			defer func() { _ = body.Close() }()
+			cancel()
+			if tc.outlives {
+				time.Sleep(50 * time.Millisecond)
+				if err := body.dog.ctx.Err(); err != nil {
+					t.Fatalf("the non-streamed answer's read ended with the caller: %v", context.Cause(body.dog.ctx))
+				}
+				return
+			}
+			select {
+			case <-body.dog.ctx.Done():
+			case <-time.After(2 * time.Second):
+				t.Fatal("the stream's read outlived the caller")
+			}
+			if cause := context.Cause(body.dog.ctx); !errors.Is(cause, context.Canceled) {
+				t.Errorf("cause = %v, want context.Canceled", cause)
+			}
+		})
 	}
 }

@@ -19,6 +19,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"math"
@@ -182,46 +183,130 @@ func TestRelayJSON_UsageBeforeTheCutSettles(t *testing.T) {
 	waitFor(t, func() bool { _, slots := boundarySlots(h); return slots == 0 })
 }
 
-// A caller that leaves mid-relay is client_closed; the gateway settles what
-// it read and does not count a provider error.
+// A caller that leaves mid-relay is client_closed. The gateway reads the
+// rest of the answer for its usage, which the provider sends last, and
+// settles it; it does not count a provider error.
 func TestRelayJSON_CallerLeftMidRelayIsClientClosed(t *testing.T) {
 	arrived := make(chan struct{}, 1)
-	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+	release := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"usage":{"prompt_tokens":6,"completion_tokens":1},"choices":[`)
+		_, _ = io.WriteString(w, `{"id":"x","choices":[`)
 		w.(http.Flusher).Flush()
 		arrived <- struct{}{}
-		<-r.Context().Done()
+		<-release
+		// Padding the gateway can no longer write to the agent, then usage.
+		pad := strings.Repeat(" ", 4<<10)
+		for i := 0; i < 64; i++ {
+			_, _ = io.WriteString(w, pad)
+		}
+		_, _ = io.WriteString(w, `],"usage":{"prompt_tokens":6,"completion_tokens":1}}`)
 	})
 	h.seedRoute()
 	cert := agentCert(t, h.ca)
-	raw, _ := json.Marshal(map[string]any{"model": "prov/m1"})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/chat/completions"), bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.client(&cert).Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp, cancel := postCancellable(t, h, &cert)
 	select {
 	case <-arrived:
 	case <-time.After(5 * time.Second):
+		close(release)
 		t.Fatal("the provider never answered")
 	}
 	cancel()
 	_ = resp.Body.Close()
+	// Let the gateway see the caller leave before the rest arrives.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
 
 	waitFor(t, func() bool { return llmRequestsWith(h, outcomeClientClosed) == 1 })
 	if got := llmRequestsWith(h, outcomeError); got != 0 {
 		t.Errorf("error requests = %v, want 0", got)
 	}
-	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 6 {
-		t.Errorf("settled usage %+v, want what the relay read", u)
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 6 || u.OutputTokens != 1 {
+		t.Errorf("settled usage %+v, want 6 and 1 read after the caller left", u)
 	}
+	if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != 0 {
+		t.Errorf("usage missing = %v, want 0", got)
+	}
+}
+
+// A provider that stalls after the caller left ends the read at the idle
+// bound: the request is client_closed, the usage never read counts as
+// missing, and the hard-enforcement slot frees.
+func TestRelayJSON_DrainEndsAtTheIdleBound(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	left := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","choices":[`)
+		w.(http.Flusher).Flush()
+		arrived <- struct{}{}
+		trickleUntil(w, left)
+		stall(r)
+	})
+	h.server.Config.UpstreamTimeout = streamTimeout
+	h.seedRoute()
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
+	cert := agentCert(t, h.ca)
+	resp, cancel := postCancellable(t, h, &cert)
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		close(left)
+		t.Fatal("the provider never answered")
+	}
+	cancel()
+	_ = resp.Body.Close()
+	time.Sleep(100 * time.Millisecond)
+	close(left)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for llmRequestsWith(h, outcomeClientClosed) != 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := llmRequestsWith(h, outcomeClientClosed); got != 1 {
+		t.Fatalf("client_closed requests = %v, want 1", got)
+	}
+	if got := llmRequestsWith(h, outcomeError); got != 0 {
+		t.Errorf("error requests = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != 1 {
+		t.Errorf("usage missing = %v, want 1", got)
+	}
+	waitFor(t, func() bool { own, slots := boundarySlots(h); return own == 0 && slots == 0 })
+}
+
+// trickleUntil writes a single space every 50ms, flushing each, until done
+// closes: JSON whitespace that keeps the answer going without changing it.
+func trickleUntil(w http.ResponseWriter, done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			return
+		case <-time.After(50 * time.Millisecond):
+			_, _ = io.WriteString(w, " ")
+			w.(http.Flusher).Flush()
+		}
+	}
+}
+
+// postCancellable sends a chat completion for prov/m1 whose context the
+// caller cancels to leave mid-answer.
+func postCancellable(t *testing.T, h *harness, cert *tls.Certificate) (*http.Response, context.CancelFunc) {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1"})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/chat/completions"), bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.client(cert).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, cancel
 }
 
 // An answer with no usage relays in full, settles zero, and counts as
