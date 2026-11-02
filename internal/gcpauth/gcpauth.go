@@ -17,7 +17,8 @@ limitations under the License.
 // Package gcpauth mints Google Cloud OAuth2 access tokens from a
 // service-account JSON key, the credential a google-vertex ModelProvider's
 // Secret holds. It is shared so the controller's liveness probe and the
-// gateway use one implementation; it depends on neither.
+// gateway use one implementation; it depends on neither. It also holds the
+// access-token cache policy (TokenCache) that both reuse.
 package gcpauth
 
 import (
