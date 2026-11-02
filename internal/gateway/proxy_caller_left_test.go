@@ -17,17 +17,22 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // A request whose caller left before the relay started counts as
@@ -204,5 +209,80 @@ func TestForwardOnce_NonStreamedSuccessOutlivesTheCaller(t *testing.T) {
 				t.Errorf("cause = %v, want context.Canceled", cause)
 			}
 		})
+	}
+}
+
+// cancelOnSpanEnd runs onEnd, once, when a span with the given name ends.
+type cancelOnSpanEnd struct {
+	name  string
+	once  sync.Once
+	onEnd func()
+}
+
+func (*cancelOnSpanEnd) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+
+func (p *cancelOnSpanEnd) OnEnd(s sdktrace.ReadOnlySpan) {
+	if s.Name() == p.name {
+		p.once.Do(p.onEnd)
+	}
+}
+
+func (*cancelOnSpanEnd) Shutdown(context.Context) error   { return nil }
+func (*cancelOnSpanEnd) ForceFlush(context.Context) error { return nil }
+
+// A non-streamed 2xx already in hand when the handler sees the caller gone
+// goes to its relay, not to settleCallerLeft: it is read to its end and its
+// usage settles. The llm.forward span ends after forwardOnce returns the
+// unread 2xx and before the handler checks the caller, so the caller leaves
+// there.
+func TestHandleLLMProxy_CallerLeftAfterTheWalkReadsTheAnswer(t *testing.T) {
+	release := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(w, `{"id":"x","choices":[],"usage":{"prompt_tokens":6,"completion_tokens":1}}`)
+	})
+	h.seedRoute()
+	reqCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(&cancelOnSpanEnd{name: "llm.forward", onEnd: func() {
+		cancel()
+		// Let the server see the connection close before the handler
+		// checks the caller.
+		time.Sleep(150 * time.Millisecond)
+		releaseOnce.Do(func() { close(release) })
+	}}))
+	h.server.Tracing = &Tracing{tracer: tp.Tracer("test"), prop: propagation.TraceContext{}, tp: tp}
+
+	cert := agentCert(t, h.ca)
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1"})
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, h.url("/v1/chat/completions"), bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := h.client(&cert).Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never ended")
+	}
+
+	waitFor(t, func() bool { return llmRequestsWith(h, outcomeClientClosed) == 1 })
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 6 || u.OutputTokens != 1 {
+		t.Errorf("settled usage %+v, want 6 and 1 read after the caller left", u)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != 0 {
+		t.Errorf("usage missing = %v, want 0", got)
 	}
 }
