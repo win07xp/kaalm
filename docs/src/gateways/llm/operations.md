@@ -63,7 +63,7 @@ The `status` values of `kaalm_llm_requests_total`:
 - `ok`: a 2xx relayed in full.
 - `error`: the gateway or the provider failed the request, including a stream or a non-streamed answer that the provider broke or let go idle after its status line ([Streaming responses](request-handling.md#streaming-responses), [Response relay](request-handling.md#request-flow)).
 - `rate_limited`: the gateway's rate limit refused the request.
-- `client_closed`: the caller disconnected during the walk or while the gateway relayed any answer. A caller that leaves during the walk stops the fallback walk, and the gateway writes nothing. A caller that leaves during a relay has already received the status and part of the answer, so the gateway only stops relaying ([details](request-handling.md#a-caller-that-disconnects-before-the-answer)).
+- `client_closed`: the caller disconnected during the walk or while the gateway relayed any answer. A caller that leaves during the walk stops the fallback walk, and the gateway writes nothing. A caller that leaves during a relay has already received the status and part of the answer, so the gateway stops writing. For a non-streamed answer it still reads the answer to its end for its usage, and the count lands then; a stream is cancelled ([details](request-handling.md#a-caller-that-disconnects-before-the-answer)).
 
 A 2xx is counted when its relay ends, so its `status` says how the answer ended: a stream that ended in an error event, or a JSON answer cut off, counts as `error`, not `ok`. `client_closed` is not a wire error type. No caller receives it, so it is not in the [error vocabulary](../api/errors.md).
 

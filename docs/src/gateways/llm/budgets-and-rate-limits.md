@@ -157,6 +157,7 @@ Three limits are part of the guarantee:
 
 - The gateway can only cap what providers report. A response with no usage metadata settles at zero cost ([Streaming responses](request-handling.md#streaming-responses)); a provider that omits usage evades any gateway-side cap. Rule 33 keeps unpriced *models* out of hard mode, but usage-less *responses* are a provider behavior no proxy can price.
   An agent cannot turn stream usage off: the gateway sets `include_usage` on every OpenAI-format streaming request and refuses a non-boolean `stream` ([Streaming responses](request-handling.md#streaming-responses)).
+  An agent that closes a non-streamed call before its usage arrives does not escape the cap, because the gateway reads the answer to its end. A stream it abandons before its usage arrives settles zero ([A caller that disconnects before the answer](request-handling.md#a-caller-that-disconnects-before-the-answer)).
 - The margin bounds when serialization engages, not what one admitted request may cost. A single request larger than the remaining headroom is admitted, and its overshoot is the one-in-flight-request bound of the guarantee above.
 - A simultaneous crash of all replicas loses at most the in-flight requests' costs inside the boundary region (settles publish immediately there), rather than soft mode's 10 seconds of spend.
 

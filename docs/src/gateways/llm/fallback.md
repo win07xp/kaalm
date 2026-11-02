@@ -146,6 +146,8 @@ A token never renders to 16 bytes of JSON, and the 1 MiB covers the ids, tool-ca
 
 An answer over the limit ends the request with `502 provider_error`. An answer cut off during the hold ends it with `502 provider_error`, or with `504 provider_timeout` when the gap bound ended it. The provider's 2xx had started, so neither continues the walk. Spend still settles from the usage the gateway read while it drained the answer, so budgets stay whole.
 
+A caller that leaves during the hold does not end it. The answer is read to its end, spend settles from its usage, and nothing is written ([A caller that disconnects before the answer](request-handling.md#a-caller-that-disconnects-before-the-answer)).
+
 ### Usage, spend, and errors
 
 Usage is read with the **serving candidate's** adapter from the untranslated upstream response, never from the translated one, and spend lands on the provider that served, at that provider's prices for the mapped model. The bytes are read as they pass, as for a native answer ([Request flow](request-handling.md#request-flow), step 10).

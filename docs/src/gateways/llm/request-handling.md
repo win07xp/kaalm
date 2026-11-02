@@ -46,14 +46,15 @@ This page walks the request path, then covers how a model name identifies a prov
 
 ### A caller that disconnects before the answer
 
-When the caller disconnects before the gateway answers, the fallback walk stops and no further candidate is tried, because no one is left to read the result. The gateway writes nothing to the caller. The request counts as `client_closed` on `kaalm_llm_requests_total`, and the `llm.request` span gets the same status. A caller that leaves while the gateway is relaying an answer counts the same way, whether the answer is JSON or a stream; a stream's relay is under [Streaming responses](#streaming-responses).
+When the caller disconnects before the gateway answers, the fallback walk stops and no further candidate is tried, because no one is left to read the result. The gateway writes nothing to the caller. The request counts as `client_closed` on `kaalm_llm_requests_total`, and the `llm.request` span gets the same status. A caller that leaves while the gateway is relaying an answer counts the same way, whether the answer is JSON or a stream; a stream's relay is under [Streaming responses](#streaming-responses). For a non-streamed answer the count lands when the gateway finishes reading the answer, not when the caller leaves.
 
 An attempt on a fallback candidate that was in progress when the caller left counts on `kaalm_llm_fallback_total` with the reason `client_closed`, and its `llm.forward` span gets that description instead of a failure class. The caller leaving is not the candidate's failure.
 
 Spend settles by what the gateway has from the attempt that was in progress:
 
-- A relay already under way settles the usage it read, as the stream relay does, because the provider did the work. A relay that read none counts on `kaalm_llm_usage_missing_total` and settles zero.
-- A 2xx answer whose relay had not started counts on `kaalm_llm_usage_missing_total` and settles zero, because the gateway reads an answer only while it relays it.
+- A non-streamed 2xx answer, relayed or held for translation, is read to its end after the caller leaves. The gateway stops writing, discards the rest, and reads only its usage, so spend settles the answer's exact usage and the token bucket debit is the same as for a completed answer. A provider has billed the whole answer by the time it sends the headers of a non-streamed answer, so reading on costs nothing. Without it, an agent could close before a trailing `usage` member (OpenAI puts it last) and pay nothing.
+- That read ends when the answer ends or when the provider sends no byte for the gap bound of step 8, `gateway.providerFirstByteTimeout`. A provider that keeps sending is never cut, so the read lasts as long as the answer does. Usage not read by the end counts on `kaalm_llm_usage_missing_total` and settles zero. Under [hard enforcement](budgets-and-rate-limits.md#hard-enforcement) the admission slot frees when the read ends, so a disconnected call holds its connection and its slot until then. Size the timeout with that in mind.
+- A stream the caller leaves is not read on. The gateway cancels the upstream read, which stops the provider generating, and settles the usage read so far. A stream that had sent no usage yet, or whose relay had not started, counts on `kaalm_llm_usage_missing_total` and settles zero.
 - An attempt with no response yet (the caller left before the provider's response headers arrived) or with a non-2xx response settles zero.
 
 ### The forwarded-header contract
