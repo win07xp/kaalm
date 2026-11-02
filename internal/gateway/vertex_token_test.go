@@ -75,7 +75,7 @@ func TestVertexTokenCache(t *testing.T) {
 	ctx := context.Background()
 	clock := time.Now()
 	newCache := func() *vertexTokenCache {
-		return &vertexTokenCache{now: func() time.Time { return clock }}
+		return &vertexTokenCache{cache: gcpauth.TokenCache{Now: func() time.Time { return clock }}}
 	}
 
 	t.Run("expiry and rotation", func(t *testing.T) {

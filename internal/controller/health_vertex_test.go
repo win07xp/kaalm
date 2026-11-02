@@ -158,7 +158,7 @@ func TestHTTPProbe_VertexTokenCache(t *testing.T) {
 	start := time.Now()
 	clock := start
 	checker := &HTTPProviderHealthChecker{Client: f.srv.Client()}
-	checker.vertexTokens.now = func() time.Time { return clock }
+	checker.vertexTokens.Now = func() time.Time { return clock }
 	probe := func(name, credential string) ProviderProbeResult {
 		t.Helper()
 		return checker.Probe(context.Background(), &kaalmv1beta1.ModelProvider{

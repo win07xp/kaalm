@@ -26,6 +26,7 @@ import (
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/eventrec"
+	"github.com/win07xp/kaalm/internal/gcpauth"
 )
 
 // ProviderProbeResult classifies a provider liveness probe. Exactly one of
@@ -70,8 +71,8 @@ type HTTPProviderHealthChecker struct {
 	Client *http.Client
 
 	// vertexTokens holds the access tokens the google-vertex probe minted,
-	// one per provider; see vertexProbeTokens.
-	vertexTokens vertexProbeTokens
+	// one per provider; see gcpauth.TokenCache.
+	vertexTokens gcpauth.TokenCache
 }
 
 // healthCheckTimeout returns the per-probe timeout: healthCheck.timeoutSeconds
@@ -147,7 +148,7 @@ func (h *HTTPProviderHealthChecker) Probe(
 		// again, so a token revoked at Google while the key stays valid
 		// recovers on the next probe.
 		if provider.Spec.Type == "google-vertex" {
-			h.vertexTokens.forget(provider.Name)
+			h.vertexTokens.Forget(provider.Name)
 		}
 		return ProviderProbeResult{AuthFailed: true}
 	default:
