@@ -143,3 +143,27 @@ func TestWatchedBody_CleanEndAfterTheStallIsStillIdle(t *testing.T) {
 		t.Errorf("end of body after the bound passed = %v, want errUpstreamIdle", err)
 	}
 }
+
+// causeReader blocks until ctx is done, then fails with the context's cause,
+// the way the transport reports a request cancelled with a cause.
+type causeReader struct{ ctx context.Context }
+
+func (r causeReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, context.Cause(r.ctx)
+}
+
+func (causeReader) Close() error { return nil }
+
+func TestWatchedBody_IdleCauseIsNotWrappedTwice(t *testing.T) {
+	ctx, dog := newAttemptWatchdog(context.Background(), 40*time.Millisecond)
+	body := dog.watch(causeReader{ctx: ctx})
+	defer func() { _ = body.Close() }()
+	_, err := io.ReadAll(body)
+	if !errors.Is(err, errUpstreamIdle) {
+		t.Fatalf("stalled read error = %v, want errUpstreamIdle", err)
+	}
+	if err.Error() != errUpstreamIdle.Error() {
+		t.Errorf("stalled read error = %q, want %q once", err, errUpstreamIdle)
+	}
+}

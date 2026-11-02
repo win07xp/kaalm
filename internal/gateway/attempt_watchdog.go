@@ -93,6 +93,8 @@ func (b *watchedBody) Read(p []byte) (int, error) {
 	// complete.
 	switch {
 	case err == nil || !b.dog.idle():
+	case errors.Is(err, errUpstreamIdle):
+		// The transport reports the cancel cause itself.
 	case errors.Is(err, io.EOF):
 		err = errUpstreamIdle
 	default:
