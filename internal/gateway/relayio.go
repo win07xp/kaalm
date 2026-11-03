@@ -30,7 +30,8 @@ const scanBufSize = 64 * 1024
 // scanBufPool reuses the scanner start buffers of the stream relays and
 // the tools/list relay: one per stream was a quarter of the gateway's
 // allocated bytes under streaming load. A Scanner that outgrows its buffer
-// allocates its own; only the original goes back to the pool.
+// allocates its own; only the original goes back to the pool. A non-streamed
+// relay also reads a large answer through one of these buffers.
 var scanBufPool = sync.Pool{New: func() any {
 	b := make([]byte, scanBufSize)
 	return &b
@@ -41,6 +42,21 @@ var scanBufPool = sync.Pool{New: func() any {
 func getScanBuf() *[]byte { return scanBufPool.Get().(*[]byte) }
 
 func putScanBuf(buf *[]byte) { scanBufPool.Put(buf) }
+
+// relayBufSize is the buffer a non-streamed relay starts reading with. Most
+// answers fit, and a pool miss costs this size, so a small answer pays less
+// for it on average than for the answer's own bytes.
+const relayBufSize = 4 * 1024
+
+// relayBufPool reuses the start buffers of the non-streamed relays.
+var relayBufPool = sync.Pool{New: func() any {
+	b := make([]byte, relayBufSize)
+	return &b
+}}
+
+func getRelayBuf() *[]byte { return relayBufPool.Get().(*[]byte) }
+
+func putRelayBuf(buf *[]byte) { relayBufPool.Put(buf) }
 
 // eventFlusher is the upstream reader of a stream relay. It flushes the
 // caller's response just before the relay waits on the upstream for more

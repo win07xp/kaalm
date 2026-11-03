@@ -857,10 +857,21 @@ func (s *Server) settleRelay(
 	}
 }
 
-// relayBody copies body to sink through buf, feeding every byte to reader
-// first. It stops at the body's end (readErr nil), a read error, or a write
-// error.
-func relayBody(body io.Reader, sink io.Writer, reader *usageReader, buf []byte) (readErr, writeErr error) {
+// relayBody copies body to sink, feeding every byte to reader first. It
+// stops at the body's end (readErr nil), a read error, or a write error. It
+// reads with a small buffer until a read fills it, then with a scan buffer:
+// each read leaves as one write and flush, so a large answer needs the larger
+// reads, and a small one should not pay for them.
+func relayBody(body io.Reader, sink io.Writer, reader *usageReader) (readErr, writeErr error) {
+	small := getRelayBuf()
+	defer putRelayBuf(small)
+	var large *[]byte
+	defer func() {
+		if large != nil {
+			putScanBuf(large)
+		}
+	}()
+	buf := *small
 	for {
 		n, err := body.Read(buf)
 		if n > 0 {
@@ -874,6 +885,10 @@ func relayBody(body io.Reader, sink io.Writer, reader *usageReader, buf []byte) 
 		}
 		if err != nil {
 			return err, nil
+		}
+		if large == nil && n == len(buf) {
+			large = getScanBuf()
+			buf = *large
 		}
 	}
 }
@@ -935,15 +950,13 @@ func (s *Server) relayJSON(
 
 	sink := &flushWriter{w: w}
 	sink.f, _ = w.(http.Flusher)
-	buf := getScanBuf()
-	defer putScanBuf(buf)
-	readErr, writeErr := relayBody(resp.Body, sink, reader, *buf)
+	readErr, writeErr := relayBody(resp.Body, sink, reader)
 	if writeErr != nil {
 		// The agent is gone, or (ErrContentLength) must be cut off. The
 		// provider billed the whole answer when it sent the headers, so the
 		// rest is read for its usage and discarded. The attempt no longer
 		// follows the caller; the idle bound still ends a stalled provider.
-		readErr, _ = relayBody(resp.Body, io.Discard, reader, *buf)
+		readErr, _ = relayBody(resp.Body, io.Discard, reader)
 	}
 	bodyLog("llm response", sink.logged)
 	switch {
@@ -1015,9 +1028,7 @@ func (s *Server) relayCrossing(
 	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, debitTokens) }()
 
 	hold := &holdBuffer{limit: limit}
-	buf := getScanBuf()
-	defer putScanBuf(buf)
-	readErr, _ := relayBody(resp.Body, hold, reader, *buf)
+	readErr, _ := relayBody(resp.Body, hold, reader)
 	bodyLog("llm response", hold.logged)
 	fail := func(status int, errType, message string) string {
 		spanError(ctx, errType)
