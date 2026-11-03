@@ -44,7 +44,7 @@
 3.4 internal/console/
 3.5 agentruntime/agent.go images/agent-python/kaalm_agent/__main__.py images/agent-python/kaalm_agent/tls.py
 3.6 internal/profiling/ cmd/gateway/main.go cmd/manager/main.go charts/kaalm/templates/networkpolicy.yaml
-4.1 internal/gateway/server.go internal/gateway/proxy.go internal/controller/health.go internal/controller/probe_client.go internal/controller/health_vertex.go internal/gateway/attempt_watchdog.go
+4.1 internal/gateway/server.go internal/gateway/proxy.go internal/controller/health.go internal/controller/probe_client.go internal/controller/health_vertex.go internal/gateway/attempt_watchdog.go internal/gateway/vertex_token.go
 4.2 internal/gateway/async.go internal/callbackpolicy/policy.go
 4.3 internal/gateway/mcpbroker.go internal/gateway/server.go
 4.4 internal/gateway/discord.go internal/gateway/whatsapp.go internal/gateway/platform.go
