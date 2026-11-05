@@ -53,7 +53,7 @@ The probe sends `GET {spec.endpoint}/v1/models`, the provider's model-list call,
 | `anthropic` | `x-api-key: <key>` and `anthropic-version: 2023-06-01` |
 | `openai`, `openai-compatible` | `Authorization: Bearer <key>` |
 
-For `google-vertex` the probe mints an OAuth2 access token from the credential and requests the publisher-model list; see [The google-vertex probe](#the-google-vertex-probe). An `openai-compatible` server that expects a different header rejects the probe, which shows as `CredentialsInvalid` on a `401` or `403`.
+For `google-vertex` the probe sends an OAuth2 access token minted from the credential and requests the publisher-model list; see [The google-vertex probe](#the-google-vertex-probe). An `openai-compatible` server that expects a different header rejects the probe, which shows as `CredentialsInvalid` on a `401` or `403`.
 
 The probe never follows a redirect, so a redirecting endpoint cannot receive the credential headers at another host. A redirect lands in the last row below. Each probe is bounded by `healthCheck.timeoutSeconds` (default 10s). The probe is a second credential egress; [Health probes are a second credential egress](../../security/credentials.md#health-probes-are-a-second-credential-egress) states its bound.
 
@@ -71,11 +71,18 @@ The `Healthy` message carries the HTTP status or the network error, cut to 1,024
 
 For `spec.type: google-vertex` the credential Secret holds a GCP service-account JSON key: `type: service_account`, with `project_id`, `client_email`, and a PEM RSA `private_key`, and an optional `token_uri`, which must be an `https` URL and defaults to `https://oauth2.googleapis.com/token`.
 
-The probe mints an OAuth2 access token (scope `https://www.googleapis.com/auth/cloud-platform`) with a JWT bearer grant signed by the key, then sends `GET {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models` to `spec.endpoint` with the token as a bearer credential. `project` is the key's `project_id`. `location` is the `{location}` of a regional `{location}-aiplatform.googleapis.com` endpoint host, and `global` for any other host, including the global `aiplatform.googleapis.com` endpoint. The private key signs the assertion and is never sent. The probe sends the assertion to the key's `token_uri` and the access token to `spec.endpoint`, so those two hosts bound where this credential goes.
+The probe uses an OAuth2 access token (scope `https://www.googleapis.com/auth/cloud-platform`) minted with a JWT bearer grant signed by the key, then sends `GET {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models` to `spec.endpoint` with the token as a bearer credential. `project` is the key's `project_id`. `location` is the `{location}` of a regional `{location}-aiplatform.googleapis.com` endpoint host, and `global` for any other host, including the global `aiplatform.googleapis.com` endpoint. The private key signs the assertion and is never sent. The probe sends the assertion to the key's `token_uri` and the access token to `spec.endpoint`, so those two hosts bound where this credential goes.
 
-`CredentialsInvalid` covers a `401` or `403` from Vertex, a token endpoint that refuses the key (HTTP `401`, `403`, or a `400` carrying OAuth2 error `invalid_grant` or `invalid_client`), and a Secret value that is not a usable service-account key. Any other failure (a network error, a `5xx`, or another token-endpoint error) sets `ProviderUnhealthy`. Under `ProviderUnhealthy`, a token-endpoint error can include the endpoint's response body; [the `Healthy` condition](../../resources/modelprovider.md#status) states how the message is cut.
+The controller keeps the access token it minted for each `google-vertex` provider and sends it on later probes until five minutes before it expires, or until one hour after the mint when the token endpoint reports no expiry. A probe that reuses a token makes one request, to `spec.endpoint`, so the token endpoint sees about one mint per hour per provider, not one per probe. A probe mints again in these cases:
 
-The gateway mints its own tokens for requests ([Vertex access tokens](../../gateways/llm/provider-routing.md#vertex-access-tokens)); the probe's mint is separate.
+- It is the first probe after a controller start or a leader change. Each controller replica keeps its tokens in memory.
+- The Secret's value changed. The token is tied to the key it was minted from, so a rotated key takes effect on the next probe with no restart.
+- Vertex answered `401` or `403` to the previous probe's token. A refused token is not reused.
+- The previous mint failed. Nothing is kept from a failed mint.
+
+`CredentialsInvalid` covers a `401` or `403` from Vertex, a token endpoint that refuses the key (HTTP `401`, `403`, or a `400` carrying OAuth2 error `invalid_grant` or `invalid_client`), and a Secret value that is not a usable service-account key. Any other failure (a network error, a `5xx`, or another token-endpoint error) sets `ProviderUnhealthy`. Under `ProviderUnhealthy`, a token-endpoint error can include the endpoint's response body; [the `Healthy` condition](../../resources/modelprovider.md#status) states how the message is cut. Token-endpoint failures show only on probes that mint. A probe that reuses a token reports only Vertex's own answer.
+
+The probe's token cache is the controller's own, separate from each gateway replica's cache ([Vertex access tokens](../../gateways/llm/provider-routing.md#vertex-access-tokens)). Only the leader controller replica probes, so with N gateway replicas a provider sees about N+1 mints per hour.
 
 ### Probe TLS trust
 

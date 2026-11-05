@@ -34,26 +34,33 @@ const vertexRegionalHostSuffix = "-aiplatform.googleapis.com"
 // vertexProbeRequest builds the google-vertex liveness request: a GET of the
 // publisher-models list,
 // {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models,
-// carrying an OAuth2 access token minted from the service-account JSON key
-// in the credential. The project is the key's project_id and the location
-// comes from the endpoint host (vertexLocation). The token exchange runs
-// over hc, so it shares the probe's timeout, redirect refusal, and trust
-// pool. A credential that is not a usable key, or a token endpoint that
-// refuses it, returns an AuthFailed result; any other token failure is
-// transient.
+// carrying an OAuth2 access token for the service-account JSON key in the
+// credential. The project is the key's project_id and the location comes
+// from the endpoint host (vertexLocation). The token comes from tokens (see
+// gcpauth.TokenCache) when one minted from this key for this provider is
+// still good; otherwise it is minted over hc, so the mint shares the probe's
+// timeout, redirect refusal, and trust pool, and stored in tokens. A failed
+// mint stores nothing. A credential that is not a usable key, or a token
+// endpoint that refuses it, returns an AuthFailed result; any other token
+// failure is transient.
 func vertexProbeRequest(
-	ctx context.Context, hc *http.Client, endpoint, credential string,
+	ctx context.Context, hc *http.Client, tokens *gcpauth.TokenCache, providerName, endpoint, credential string,
 ) (*http.Request, *ProviderProbeResult) {
 	key, err := gcpauth.ParseServiceAccountKey([]byte(credential))
 	if err != nil {
 		return nil, &ProviderProbeResult{AuthFailed: true, Err: err}
 	}
-	token, err := key.AccessToken(ctx, hc)
-	if err != nil {
-		if errors.Is(err, gcpauth.ErrRejected) {
-			return nil, &ProviderProbeResult{AuthFailed: true, Err: err}
+	token, ok := tokens.Cached(providerName, credential)
+	if !ok {
+		minted, err := key.Token(ctx, hc)
+		if err != nil {
+			if errors.Is(err, gcpauth.ErrRejected) {
+				return nil, &ProviderProbeResult{AuthFailed: true, Err: err}
+			}
+			return nil, &ProviderProbeResult{Err: fmt.Errorf("minting the Vertex access token: %w", err)}
 		}
-		return nil, &ProviderProbeResult{Err: fmt.Errorf("minting the Vertex access token: %w", err)}
+		tokens.Store(providerName, credential, minted)
+		token = minted.AccessToken
 	}
 	target := fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models",
 		strings.TrimSuffix(endpoint, "/"), url.PathEscape(key.ProjectID), url.PathEscape(vertexLocation(endpoint)))
