@@ -30,8 +30,9 @@ import (
 // provider, so the gateway mints about once an hour per provider instead of
 // once per request. The caching policy (key hash, refresh margin, default
 // lifetime) is gcpauth.TokenCache; this type adds a single flight, so
-// concurrent misses on one provider share one mint. The zero value is ready
-// to use.
+// concurrent misses on one provider share one mint. A token the upstream
+// refuses is forgotten by the request that sent it, so the next request mints.
+// The zero value is ready to use.
 type vertexTokenCache struct {
 	cache  gcpauth.TokenCache
 	flight singleflight.Group
@@ -77,4 +78,10 @@ func (c *vertexTokenCache) token(
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// forget drops token from the provider's entry, leaving any newer token
+// another request minted in the meantime.
+func (c *vertexTokenCache) forget(providerName, token string) {
+	c.cache.ForgetToken(providerName, token)
 }

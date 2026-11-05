@@ -92,3 +92,14 @@ func (c *TokenCache) Forget(name string) {
 	defer c.mu.Unlock()
 	delete(c.tokens, name)
 }
+
+// ForgetToken drops the entry under name only when it holds token. A caller
+// that learned the token it sent was refused uses it, so a newer token another
+// mint stored in the meantime stays.
+func (c *TokenCache) ForgetToken(name, token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t, ok := c.tokens[name]; ok && t.token == token {
+		delete(c.tokens, name)
+	}
+}

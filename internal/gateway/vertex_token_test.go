@@ -222,32 +222,33 @@ func TestVertexTokenCache(t *testing.T) {
 		}
 	})
 
-	t.Run("forget a refused token", func(t *testing.T) {
-		e := newTokenEndpoint(t, 3600, false)
-		c := newCache()
-		key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
-		expect := func(want string, wantMints int64) {
-			t.Helper()
-			got, err := c.token(ctx, e.srv.Client(), "prov", key, 5*time.Second)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != want || e.mints.Load() != wantMints {
-				t.Errorf("got %q after %d mints, want %q after %d", got, e.mints.Load(), want, wantMints)
-			}
-		}
-		expect("tok-1", 1)
-		c.forget("prov", "tok-1")
-		expect("tok-2", 2)
-		// A late refusal of the old token leaves the newer one in place.
-		c.forget("prov", "tok-1")
-		expect("tok-2", 2)
-	})
-
 	t.Run("invalid key", func(t *testing.T) {
 		_, err := newCache().token(ctx, nil, "prov", "not-a-key", time.Second)
 		if !errors.Is(err, gcpauth.ErrInvalidKey) {
 			t.Errorf("err = %v, want ErrInvalidKey", err)
 		}
 	})
+}
+
+// A refused token is forgotten, so the next read mints. A late refusal of the
+// old token leaves the newer one in place.
+func TestVertexTokenCache_Forget(t *testing.T) {
+	e := newTokenEndpoint(t, 3600, false)
+	c := &vertexTokenCache{}
+	key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+	expect := func(want string, wantMints int64) {
+		t.Helper()
+		got, err := c.token(context.Background(), e.srv.Client(), "prov", key, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want || e.mints.Load() != wantMints {
+			t.Errorf("got %q after %d mints, want %q after %d", got, e.mints.Load(), want, wantMints)
+		}
+	}
+	expect("tok-1", 1)
+	c.forget("prov", "tok-1")
+	expect("tok-2", 2)
+	c.forget("prov", "tok-1")
+	expect("tok-2", 2)
 }
