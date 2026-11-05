@@ -108,6 +108,19 @@ func TestTokenCache(t *testing.T) {
 		expectHit(t, c, "b", "key", "tok-b")
 	})
 
+	t.Run("forget a token drops only that token", func(t *testing.T) {
+		clock := start
+		c := newCache(&clock)
+		c.Store("a", "key", hourToken("tok-a", clock))
+		c.Store("b", "key", hourToken("tok-b", clock))
+		c.ForgetToken("a", "stale")
+		expectHit(t, c, "a", "key", "tok-a")
+		c.ForgetToken("unknown", "x")
+		c.ForgetToken("a", "tok-a")
+		expectMiss(t, c, "a", "key")
+		expectHit(t, c, "b", "key", "tok-b")
+	})
+
 	t.Run("nil clock uses the wall clock", func(t *testing.T) {
 		var c TokenCache
 		c.Store("p", "key", Token{AccessToken: "tok", Expiry: time.Now().Add(time.Hour)})
