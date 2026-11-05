@@ -71,6 +71,9 @@ func TestProxy_TokensPerMinuteBlocksAfterLargeCall(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("first call = %d, want 200", resp.StatusCode)
 	}
+	// The relay debits when it ends, after the agent has the last byte; the
+	// spend record lands after the debit.
+	waitUsage(t, h, "prov", "m1")
 	// 1000 - 1100 = -100 tokens at 1000/min: 6 seconds.
 	expectTokenRateLimited(t, h, "6")
 }
@@ -130,6 +133,9 @@ func TestProxy_TokensPerMinuteDebitsPrimaryOnFallback(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("fallback call = %d, want 200", resp.StatusCode)
 	}
+	// The relay debits when it ends, after the agent has the last byte; the
+	// spend record lands after the debit.
+	waitUsage(t, h, "backup", "m1")
 	// 1000 - 2000 = -1000 tokens (the clamp) at 1000/min: 60 seconds.
 	expectTokenRateLimited(t, h, "60")
 }

@@ -48,12 +48,32 @@ var openAIResponse = []byte(`{"id":"chatcmpl-123","object":"chat.completion","cr
 	`"model":"mock-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok from mock"},` +
 	`"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":22,"total_tokens":33}}`)
 
-func BenchmarkExtractUsageOpenAI(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if _, ok := (openaiAdapter{}).extractUsage(openAIResponse); !ok {
-			b.Fatal("usage not found")
-		}
+// BenchmarkUsageReader feeds a whole answer to each format's usage reader,
+// the work the JSON relay adds per answer.
+func BenchmarkUsageReader(b *testing.B) {
+	bodies := []struct {
+		name    string
+		adapter providerAdapter
+		body    []byte
+	}{
+		{"openai", openaiAdapter{}, openAIResponse},
+		{"anthropic", anthropicAdapter{}, []byte(`{"id":"msg_1","type":"message","role":"assistant",` +
+			`"content":[{"type":"text","text":"ok from mock"}],"stop_reason":"end_turn",` +
+			`"usage":{"input_tokens":11,"output_tokens":22,"server_tool_use":{"web_search_requests":1}}}`)},
+		{"vertex", vertexAdapter{}, []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok from mock"}]},` +
+			`"finishReason":"STOP","groundingMetadata":{"webSearchQueries":["q"]}}],` +
+			`"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":22,"thoughtsTokenCount":3}}`)},
+	}
+	for _, tc := range bodies {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(tc.body)))
+			for i := 0; i < b.N; i++ {
+				if _, ok := usageOf(tc.adapter, tc.body); !ok {
+					b.Fatal("usage not found")
+				}
+			}
+		})
 	}
 }
 

@@ -143,3 +143,67 @@ func TestWatchedBody_CleanEndAfterTheStallIsStillIdle(t *testing.T) {
 		t.Errorf("end of body after the bound passed = %v, want errUpstreamIdle", err)
 	}
 }
+
+// causeReader blocks until ctx is done, then fails with the context's cause,
+// the way the transport reports a request cancelled with a cause.
+type causeReader struct{ ctx context.Context }
+
+func (r causeReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, context.Cause(r.ctx)
+}
+
+func (causeReader) Close() error { return nil }
+
+func TestWatchedBody_IdleCauseIsNotWrappedTwice(t *testing.T) {
+	ctx, dog := newAttemptWatchdog(context.Background(), 40*time.Millisecond)
+	body := dog.watch(causeReader{ctx: ctx})
+	defer func() { _ = body.Close() }()
+	_, err := io.ReadAll(body)
+	if !errors.Is(err, errUpstreamIdle) {
+		t.Fatalf("stalled read error = %v, want errUpstreamIdle", err)
+	}
+	if err.Error() != errUpstreamIdle.Error() {
+		t.Errorf("stalled read error = %q, want %q once", err, errUpstreamIdle)
+	}
+}
+
+// The attempt follows the caller's cancel until detach; after it, only the
+// idle bound and release end the attempt.
+func TestAttemptWatchdog_FollowsTheCallerUntilDetached(t *testing.T) {
+	t.Run("cancelled before detach", func(t *testing.T) {
+		parent, cancel := context.WithCancel(context.Background())
+		ctx, dog := newAttemptWatchdog(parent, time.Hour)
+		defer dog.release()
+		cancel()
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+			t.Fatal("the caller's cancel did not end the attempt")
+		}
+		if cause := context.Cause(ctx); !errors.Is(cause, context.Canceled) {
+			t.Errorf("cause = %v, want context.Canceled", cause)
+		}
+		if dog.idle() {
+			t.Error("the caller's cancel reported the idle cause")
+		}
+	})
+	t.Run("cancelled after detach", func(t *testing.T) {
+		parent, cancel := context.WithCancel(context.Background())
+		ctx, dog := newAttemptWatchdog(parent, time.Hour)
+		dog.detach()
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("a detached attempt ended with the caller: %v", context.Cause(ctx))
+		}
+		dog.kick()
+		dog.release()
+		if ctx.Err() == nil {
+			t.Fatal("release left the detached attempt live")
+		}
+		if dog.idle() {
+			t.Error("release reported the idle cause")
+		}
+	})
+}

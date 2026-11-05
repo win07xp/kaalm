@@ -48,8 +48,9 @@ type providerAdapter interface {
 	formatName() string
 	// injectCredential sets the provider's auth header.
 	injectCredential(h http.Header, credential string)
-	// extractUsage reads token counts from a buffered JSON response body.
-	extractUsage(body []byte) (Usage, bool)
+	// usageReader returns a reader for the usage of a JSON response body,
+	// fed the body's bytes as the relay copies them.
+	usageReader() *usageReader
 	// accumulateStreamUsage inspects one SSE data payload and folds any usage
 	// it carries into u.
 	accumulateStreamUsage(data []byte, u *Usage)
@@ -119,27 +120,7 @@ func (anthropicAdapter) injectCredential(h http.Header, credential string) {
 	h.Set("x-api-key", credential)
 }
 
-func (anthropicAdapter) extractUsage(body []byte) (Usage, bool) {
-	var resp struct {
-		Usage struct {
-			InputTokens   int64           `json:"input_tokens"`
-			OutputTokens  int64           `json:"output_tokens"`
-			ServerToolUse json.RawMessage `json:"server_tool_use"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return Usage{}, false
-	}
-	u := Usage{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
-		ServerTools:  serverToolCounts(resp.Usage.ServerToolUse),
-	}
-	if u.isZero() {
-		return Usage{}, false
-	}
-	return u, true
-}
+func (anthropicAdapter) usageReader() *usageReader { return newAnthropicUsageReader() }
 
 // serverToolCounts decodes an Anthropic usage.server_tool_use object
 // ({"web_search_requests": 1}) into normalized per-tool counts
@@ -226,21 +207,7 @@ func (openaiAdapter) injectCredential(h http.Header, credential string) {
 	h.Set("Authorization", "Bearer "+credential)
 }
 
-func (openaiAdapter) extractUsage(body []byte) (Usage, bool) {
-	var resp struct {
-		Usage struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return Usage{}, false
-	}
-	if resp.Usage.PromptTokens == 0 && resp.Usage.CompletionTokens == 0 {
-		return Usage{}, false
-	}
-	return Usage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens}, true
-}
+func (openaiAdapter) usageReader() *usageReader { return newOpenAIUsageReader() }
 
 // accumulateStreamUsage: a usage object appears in the final chunk preceding
 // [DONE], present only when stream_options.include_usage was set (which

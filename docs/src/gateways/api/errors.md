@@ -47,14 +47,14 @@ The `:8443` listener raises these on the LLM proxy paths and on `/v1/mcp/{toolPr
 | 429 | `budget_exhausted` | no after a block; yes after throttles only | seconds to the next period, or the throttle's `1` | The provider, or the provider and every fallback, is budget-blocked or throttled |
 | 429 | `budget_throttled` | yes | `1` | Hard enforcement: the boundary admission slot is held by another request |
 | 500 | `internal_unavailable` | yes | | The broker could not re-encode a `tools/list` response |
-| 502 | `provider_error` | no | | The fallback walk ended with a mixed or unclassified failure, or a fallback response could not be translated |
+| 502 | `provider_error` | no | | The fallback walk ended with a mixed or unclassified failure, a fallback response could not be translated, or a fallback answer of another format went over the size its `max_tokens` allows or was cut off before it completed ([Holding a translated answer](../llm/fallback.md#holding-a-translated-answer)) |
 | 503 | `internal_unavailable` | yes | `1` | `TokenReview` failed for a bearer token that missed the cache |
 | 503 | `provider_unavailable` | no | | Every attempt in the fallback walk failed to connect |
 | 503 | `budget_state_unavailable` | yes | `1` | Hard enforcement: the replica cannot verify budget state and fails closed |
 | 503 | `tool_unavailable` | yes | `1` | The tool server is unreachable, redirects, or answers with a `5xx` |
 | 503 | `tool_unavailable` | yes | | The credential Secret is unreadable, or reading the tool server's response failed. A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-error-event) instead |
 | 503 | `tool_unavailable` | no | | The tool server rejects the gateway credential, or returns an unparseable `tools/list` response |
-| 504 | `provider_timeout` | no | | Every attempt in the fallback walk timed out |
+| 504 | `provider_timeout` | no | | Every attempt in the fallback walk timed out, or a fallback answer of another format went idle during the hold |
 | 504 | `tool_timeout` | yes | | The brokered call exceeded `gateway.mcpUpstreamTimeout` (default 120s). A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-error-event) instead |
 
 Notes on the rows:

@@ -157,6 +157,7 @@ Three limits are part of the guarantee:
 
 - The gateway can only cap what providers report. A response with no usage metadata settles at zero cost ([Streaming responses](request-handling.md#streaming-responses)); a provider that omits usage evades any gateway-side cap. Rule 33 keeps unpriced *models* out of hard mode, but usage-less *responses* are a provider behavior no proxy can price.
   An agent cannot turn stream usage off: the gateway sets `include_usage` on every OpenAI-format streaming request and refuses a non-boolean `stream` ([Streaming responses](request-handling.md#streaming-responses)).
+  An agent that closes a non-streamed call before its usage arrives does not escape the cap, because the gateway reads the answer to its end. A stream it abandons before its usage arrives settles zero ([A caller that disconnects before the answer](request-handling.md#a-caller-that-disconnects-before-the-answer)).
 - The margin bounds when serialization engages, not what one admitted request may cost. A single request larger than the remaining headroom is admitted, and its overshoot is the one-in-flight-request bound of the guarantee above.
 - A simultaneous crash of all replicas loses at most the in-flight requests' costs inside the boundary region (settles publish immediately there), rather than soft mode's 10 seconds of spend.
 
@@ -203,7 +204,7 @@ An unset or zero limit disables its bucket. A request refused by either bucket g
 The token limit is enforced after the fact, because the gateway cannot know a call's token count before the provider answers.
 
 1. **Admit.** The gateway admits a request while the token bucket is above 0. The request does not need a whole token, and admission consumes no tokens. The token check runs first, and the request check then takes one request token, so a request the token bucket refuses keeps its request token.
-2. **Debit.** After the call, the gateway subtracts the settled input plus output tokens from the token bucket that admitted the request: the primary provider's bucket for the requested model, after any budget `degrade` rewrite, even when a fallback provider served the call. A buffered response debits when the gateway reads it. A stream debits when the stream ends ([Streaming responses](request-handling.md#streaming-responses)).
+2. **Debit.** After the call, the gateway subtracts the settled input plus output tokens from the token bucket that admitted the request: the primary provider's bucket for the requested model, after any budget `degrade` rewrite, even when a fallback provider served the call. The debit happens when the relay ends, for every answer ([Request flow](request-handling.md#request-flow), step 10).
 3. **Block.** A large call blocks the next request, not itself.
 
 The token bucket may go negative. The debt is clamped at minus one burst (`tokensPerMinute / number_of_replicas`), so one call larger than a burst blocks the key for at most about one minute.

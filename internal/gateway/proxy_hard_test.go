@@ -133,13 +133,9 @@ func TestProxyHard_AdmitAndSettleBuffered(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	h.server.Budget.mu.Lock()
-	l := h.server.Budget.providers["prov"]
-	own, slots := l.own["team-a"], len(l.adm)
-	h.server.Budget.mu.Unlock()
-	if own != 1 || slots != 0 { // $1 for 1M input tokens at 1.00/1M
-		t.Fatalf("own=%v slots=%d after settle, want 1 and 0", own, slots)
-	}
+	// The relay settles after the agent has the last byte; $1 for 1M input
+	// tokens at 1.00/1M.
+	waitFor(t, func() bool { own, slots := boundarySlots(h); return own == 1 && slots == 0 })
 
 	// 96 (peers) + 1 (own) = 97: still in boundary, slot must be free.
 	if d, settle := h.server.Budget.Admit(prov, "team-a", "agent/test"); settle == nil || d.Throttled {
@@ -201,6 +197,52 @@ func TestProxyHard_StreamDisconnectSettles(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("stream disconnect: own=%v slots=%d, want 1 and 0", own, slots)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A non-streamed answer whose caller leaves mid-relay is read on until the
+// provider stalls: the usage it read settles, and the slot frees when the
+// idle bound ends the read.
+func TestProxyHard_JSONDisconnectSettles(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	left := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"usage":{"prompt_tokens":1000000,"completion_tokens":0},"choices":[`)
+		w.(http.Flusher).Flush()
+		arrived <- struct{}{}
+		trickleUntil(w, left)
+		stall(r)
+	})
+	h.server.Config.UpstreamTimeout = streamTimeout
+	h.seedRoute()
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
+
+	cert := agentCert(t, h.ca)
+	resp, cancel := postCancellable(t, h, &cert)
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		close(left)
+		t.Fatal("the provider never answered")
+	}
+	cancel()
+	_ = resp.Body.Close()
+	time.Sleep(100 * time.Millisecond)
+	close(left)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		own, slots := boundarySlots(h)
+		if own == 1 && slots == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("JSON disconnect: own=%v slots=%d, want 1 and 0", own, slots)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

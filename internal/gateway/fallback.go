@@ -56,7 +56,7 @@ func fallbackCandidate(primary, candidate *kaalmv1beta1.ModelProvider) runtime.O
 // resp or the failure fields is meaningful.
 type forwardResult struct {
 	resp       *http.Response              // set on a completed HTTP round trip (any status)
-	body       []byte                      // buffered non-stream body, if read
+	body       []byte                      // non-2xx body, read up to errorBodyLimit
 	fallilable bool                        // whether this outcome should trigger fallback
 	class      failClass                   // the failure class, for the exhaustion mapping
 	err        error                       // transport error, if any
@@ -64,6 +64,7 @@ type forwardResult struct {
 	chosen     *kaalmv1beta1.ModelProvider // the candidate resource, for usage accounting
 	model      string                      // the model the candidate served (the edge's map applied)
 	format     llmtranslate.Format         // the candidate's wire format ("" when it cannot cross)
+	holdLimit  int64                       // for a crossing 2xx, the most bytes the translation hold keeps
 	// credentialRejected: the token endpoint refused the provider's
 	// service-account key: a credential failure with no upstream response.
 	credentialRejected bool

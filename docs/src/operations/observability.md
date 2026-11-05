@@ -94,7 +94,7 @@ Per-line fields are per call site, not a fixed schema. The controller's lines ca
 
 **Hard rule: in the default build, prompt and response bodies are never logged at any level.** This holds at `info`, at `debug`, and on every code path. Specifically:
 
-- The **LLM proxy** writes no per-request line. Its only log lines are a budget threshold crossing, a streaming relay error, a response that carried no usage, paced to once a minute per provider per gateway replica ([Streaming responses](../gateways/llm/request-handling.md#streaming-responses)), and a refused provider credential ([Credential handling](../gateways/llm/provider-routing.md#credential-handling)). Each carries names, counts, or a reason, never a body or a key value. Request accounting is metrics ([Aggregated catalog](#aggregated-catalog)).
+- The **LLM proxy** writes no per-request line. Its only log lines are a budget threshold crossing, a relay error on a stream or a non-streamed answer, a response that carried no usage, paced to once a minute per provider per gateway replica ([Streaming responses](../gateways/llm/request-handling.md#streaming-responses)), and a refused provider credential ([Credential handling](../gateways/llm/provider-routing.md#credential-handling)). Each carries names, counts, or a reason, never a body or a key value. Request accounting is metrics ([Aggregated catalog](#aggregated-catalog)).
 - The **tool broker** logs one audit record per call: caller identity, ToolProvider, tool, method, outcome, duration, and sizes ([Audit and metering](../gateways/tool-plane.md#audit-and-metering)). It also writes two warnings: a refused or unreadable credential ([Credential injection](../gateways/tool-plane.md#credential-injection)), and a tool server that rejected the gateway credential ([Failure modes](../gateways/tool-plane.md#failure-modes)). Each is paced to once a minute per ToolProvider per gateway replica, and carries the ToolProvider name and a reason or status, never a body or a credential value. Arguments and results are never logged.
 - The **User Gateway** logs a failed delivery attempt and each test-chat delivery, with channel, request id, status, and latency. Webhook payloads and agent replies are never logged.
 - **Reconciler logs** cite resource names and condition reasons, never Secret content, channel auth tokens, or provider API keys.
@@ -107,6 +107,7 @@ A separate **debug build**, enabled by the Go build tag `kaalm_debug_logs` at co
 
 - The published images are default builds. A debug build emits a startup banner, so an operator who runs one notices.
 - There is **no runtime Helm value, environment variable, feature flag, or administration endpoint** that flips body logging on in a default build. The switch is build-time only.
+- For an LLM answer the gateway relays or holds for translation, the debug build logs only the first 64 KiB. A relayed answer passes through without being kept whole, so there is no full copy to log.
 
 ## Kubernetes Events
 
@@ -176,7 +177,7 @@ OpenTelemetry tracing is off by default. When it is on, it connects one user mes
 |---|---|---|---|
 | `channel.receive` | server | User Gateway | Webhook and test-chat receipt; root unless the caller sent trace context. Covers handling through the sync reply, or through the `202` in async mode; the background delivery stays in the same trace |
 | `agent.deliver` | client | User Gateway | The delivery to the agent, retries included; its context travels to the agent on the delivery request |
-| `llm.request` | server | LLM proxy | Parented by whatever context the agent propagated. A denial past route authorization (budget, rate limit) closes it with an error status, so a blocked request is visible in its trace. A stream that breaks partway closes it with the error type of the event the caller got (`provider_error` or `provider_timeout`), and a caller that disconnects before the gateway answers, stream or not, closes it with `client_closed`. The status line has already been sent, so the span status is the trace's only sign that the stream did not complete |
+| `llm.request` | server | LLM proxy | Parented by whatever context the agent propagated. A denial past route authorization (budget, rate limit) closes it with an error status, so a blocked request is visible in its trace. A stream or a non-streamed answer that breaks partway closes it with `provider_error` or `provider_timeout`. A caller that leaves before the answer or during the relay closes it with `client_closed`. The status line is already sent, so the span status is the trace's only sign that the answer did not complete |
 | `llm.forward` | client | LLM proxy | One per provider attempt, fallback candidates included; the candidate is the `kaalm.provider` attribute |
 | `tool.call` | server | Tool broker | The governed MCP call; broker denials and failed relays carry an error status, as the note after the table explains |
 | `tool.forward` | client | Tool broker | The upstream half of a forwarded call |

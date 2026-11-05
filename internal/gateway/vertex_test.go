@@ -96,7 +96,7 @@ func TestVertexUpstreamPath(t *testing.T) {
 
 func TestVertexUsageExtraction(t *testing.T) {
 	v := vertexAdapter{}
-	u, ok := v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12}}`))
+	u, ok := usageOf(v, []byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12}}`))
 	if !ok || u.InputTokens != 88 || u.OutputTokens != 12 {
 		t.Errorf("buffered usage wrong: %+v ok=%v", u, ok)
 	}
@@ -112,7 +112,7 @@ func TestVertexUsageExtraction(t *testing.T) {
 // candidatesTokenCount, and bills them as output; both count as output.
 func TestVertexUsageExtraction_Thoughts(t *testing.T) {
 	v := vertexAdapter{}
-	u, ok := v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12,"thoughtsTokenCount":40}}`))
+	u, ok := usageOf(v, []byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12,"thoughtsTokenCount":40}}`))
 	if !ok || u.InputTokens != 88 || u.OutputTokens != 52 {
 		t.Errorf("buffered usage = %+v ok=%v, want input 88, output 52", u, ok)
 	}
@@ -129,7 +129,7 @@ func TestVertexUsageExtraction_Thoughts(t *testing.T) {
 // "google_search" server tool.
 func TestVertexUsageExtraction_Grounding(t *testing.T) {
 	v := vertexAdapter{}
-	u, ok := v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12},` +
+	u, ok := usageOf(v, []byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12},`+
 		`"candidates":[{"groundingMetadata":{"webSearchQueries":["euro 2024 winner","who won euro 2024"]}}]}`))
 	if !ok || u.ServerTools["google_search"] != 2 {
 		t.Errorf("grounded usage = %+v ok=%v, want google_search:2", u, ok)
@@ -145,7 +145,7 @@ func TestVertexUsageExtraction_Grounding(t *testing.T) {
 	}
 
 	// Ungrounded responses report no server tools.
-	u, _ = v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1},"candidates":[{}]}`))
+	u, _ = usageOf(v, []byte(`{"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1},"candidates":[{}]}`))
 	if u.ServerTools != nil {
 		t.Errorf("ungrounded response must yield nil ServerTools: %v", u.ServerTools)
 	}

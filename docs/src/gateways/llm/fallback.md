@@ -20,7 +20,7 @@ Not every upstream error is a fallback signal. A malformed prompt sent to provid
 
 Notes on individual rows:
 
-- **Timeout before any response bytes.** The per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`; see [Deployment](../../operations/deployment.md#helm-chart-contents)). It bounds the wait for the first response byte; after that, the same value bounds each gap between response bytes. A timeout after the first byte of a stream is a mid-stream failure: it ends the stream with an error event and does not fall back. A non-streaming response that stalls after its headers is still a timeout before any bytes reach the caller, so it falls back.
+- **Timeout before any response bytes.** The per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`; see [Deployment](../../operations/deployment.md#helm-chart-contents)). It bounds the wait for the first response byte; after that, the same value bounds each gap between response bytes. A timeout after the first byte of a stream is a mid-stream failure: it ends the stream with an error event and does not fall back. A non-streamed answer that stalls after its 2xx headers also ends cut off and does not fall back, because its status line is already sent. It gets no error event: the response ends without its final bytes ([Response relay](request-handling.md#request-flow), step 9). A translated answer that stalls during the hold gets a whole `504 provider_timeout` instead ([Holding a translated answer](#holding-a-translated-answer)). A stall before the headers still falls back.
 - **Upstream `429`.** This is distinct from the gateway's own `429 rate_limited`, which is returned to the caller without fallback.
 - **Upstream `401` or `403`.** If a later health probe still sees 401 or 403, the reconciler sets `Ready=False, reason=CredentialsInvalid` on that provider.
 
@@ -138,9 +138,19 @@ When the candidate answers with SSE, the relay translates event by event and sen
 | `message_delta` | the `finish_reason` chunk, then the usage chunk |
 | `message_stop` | `[DONE]` |
 
+### Holding a translated answer
+
+A non-streamed answer from a crossing candidate is translated whole, so this is the one path where the gateway holds an answer instead of relaying it as its bytes arrive ([Response relay](request-handling.md#request-flow), step 9). The hold is bounded by 1 MiB plus 16 bytes for each `max_tokens` of the translated request. When the translated request carries no `max_tokens`, the candidate model's `maxOutputTokens` stands in, and when that is unset too, the bound is 1 MiB.
+
+A token never renders to 16 bytes of JSON, and the 1 MiB covers the ids, tool-call structure, and other parts that `max_tokens` does not count. Only a provider that breaks its contract reaches the limit.
+
+An answer over the limit ends the request with `502 provider_error`. An answer cut off during the hold ends it with `502 provider_error`, or with `504 provider_timeout` when the gap bound ended it. The provider's 2xx had started, so neither continues the walk. Spend still settles from the usage the gateway read while it drained the answer, so budgets stay whole.
+
+A caller that leaves during the hold does not end it. The answer is read to its end, spend settles from its usage, and nothing is written ([A caller that disconnects before the answer](request-handling.md#a-caller-that-disconnects-before-the-answer)).
+
 ### Usage, spend, and errors
 
-Usage is read with the **serving candidate's** adapter from the untranslated upstream response, never from the translated one, and spend lands on the provider that served, at that provider's prices for the mapped model.
+Usage is read with the **serving candidate's** adapter from the untranslated upstream response, never from the translated one, and spend lands on the provider that served, at that provider's prices for the mapped model. The bytes are read as they pass, as for a native answer ([Request flow](request-handling.md#request-flow), step 10).
 
 A non-fallbackable `4xx` from a cross-format candidate (`400`, `422`, other `4xx`) is relayed in the **caller's** error envelope, because the caller cannot parse the other format's; the status and message carry over. Fallbackable failures are classified as in [Fallback triggers](#fallback-triggers).
 

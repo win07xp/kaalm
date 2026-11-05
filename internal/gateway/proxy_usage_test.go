@@ -38,6 +38,10 @@ func TestUsageMissing_WarnsOncePerProviderPerInterval(t *testing.T) {
 	h.server.usageMissingLog.now = func() time.Time { return clock }
 	cert := agentCert(t, h.ca)
 	client := h.client(&cert)
+	missing := func() float64 {
+		return testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1"))
+	}
+	calls := 0.0
 	call := func() {
 		t.Helper()
 		resp := postJSON(t, client, h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1", "messages": []any{}}, nil)
@@ -47,6 +51,9 @@ func TestUsageMissing_WarnsOncePerProviderPerInterval(t *testing.T) {
 			t.Fatalf("status %d", resp.StatusCode)
 		}
 		<-h.upreqs
+		// The relay settles after the agent has the last byte.
+		calls++
+		waitFor(t, func() bool { return missing() == calls })
 	}
 	const msg = "LLM response carried no usage; settled at zero spend"
 
@@ -54,9 +61,6 @@ func TestUsageMissing_WarnsOncePerProviderPerInterval(t *testing.T) {
 	call()
 	if n := len(logRecords(t, buf, msg)); n != 1 {
 		t.Errorf("warnings after two responses = %d, want 1", n)
-	}
-	if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != 2 {
-		t.Errorf("kaalm_llm_usage_missing_total = %v, want 2", got)
 	}
 	h.server.usageMissing("team-a", "other", "m9")
 	if n := len(logRecords(t, buf, msg)); n != 2 {

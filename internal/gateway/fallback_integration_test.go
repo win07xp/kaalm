@@ -107,7 +107,7 @@ func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
 		t.Fatalf("fallback chain should yield 200 from the backup, got %d", resp.StatusCode)
 	}
 	// The backup's spend was recorded, not the primary's.
-	if u := h.spend.Total("team-a", "backup", "m1"); u.InputTokens != 3 {
+	if u := waitUsage(t, h, "backup", "m1"); u.InputTokens != 3 {
 		t.Errorf("backup usage not recorded: %+v", u)
 	}
 }
@@ -270,7 +270,7 @@ func TestIntegration_CrossFormatFallback_AnthropicCallerOpenAIBackup(t *testing.
 		t.Errorf("backup messages wrong: %v", msgs)
 	}
 	// Spend landed on the backup for the mapped model, read with its adapter.
-	if u := h.spend.Total("team-a", "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
+	if u := waitUsage(t, h, "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
 		t.Errorf("backup usage not recorded for the mapped model: %+v", u)
 	}
 	if u := h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
@@ -387,7 +387,7 @@ func TestIntegration_CrossFormatFallback_OpenAICallerAnthropicBackup(t *testing.
 	if gotBody["max_tokens"] != float64(4096) || gotBody["model"] != "claude-sonnet-4-6" {
 		t.Errorf("backup request wrong: %v", gotBody)
 	}
-	if u := h.spend.Total("team-a", "backup", "claude-sonnet-4-6"); u.InputTokens != 4 {
+	if u := waitUsage(t, h, "backup", "claude-sonnet-4-6"); u.InputTokens != 4 {
 		t.Errorf("spend wrong: %+v", u)
 	}
 }
@@ -482,7 +482,7 @@ func TestIntegration_PreHeaderStallFallsBackAsATimeout(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d, want the backup's 200", resp.StatusCode)
 	}
-	if u := h.spend.Total("team-a", "backup", "m1"); u.InputTokens != 3 {
+	if u := waitUsage(t, h, "backup", "m1"); u.InputTokens != 3 {
 		t.Errorf("backup usage not recorded: %+v", u)
 	}
 	if got := testutil.ToFloat64(h.server.Metrics.llmFallback.WithLabelValues("prov", "backup", "success")); got != 1 {
@@ -531,19 +531,13 @@ func TestIntegration_CrossFormatStreamFailureUsesTheCallersShape(t *testing.T) {
 	}
 }
 
-// A caller that leaves a non-stream request while the provider is answering
-// ends the walk: the request counts as client_closed, the fallback is not
-// tried, and no spend settles for the cut-off answer. The read can end in
-// the cancel error or, as the transport can report the cancel, a clean end
-// of the partial body; both are the caller leaving.
+// A caller that leaves a non-stream request before the provider's headers
+// arrive ends the walk: the request counts as client_closed, the fallback is
+// not tried, and no spend settles, since no answer had started.
 func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
 	arrived := make(chan struct{}, 1)
 	release := make(chan struct{})
-	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"id":"partial","choices":[`)
-		w.(http.Flusher).Flush()
+	h := newHarness(t, func(_ http.ResponseWriter, r *http.Request) {
 		arrived <- struct{}{}
 		select {
 		case <-release:
@@ -605,6 +599,245 @@ func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
 		t.Errorf("fallback counted %v times after the caller left", got)
 	}
 	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 0 || u.OutputTokens != 0 {
-		t.Errorf("spend settled for a cut-off answer: %+v", u)
+		t.Errorf("spend settled for an answer that never started: %+v", u)
 	}
+}
+
+// A caller that leaves while a crossing answer is held does not end the
+// hold: the answer is read to its end, spend settles from its usage, which
+// the provider sends last, and the request counts as client_closed.
+func TestIntegration_CrossFormatFallback_CallerLeftDuringTheHoldSettlesUsage(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","object":"chat.completion","model":"gpt-5-mini",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"Co`)
+		w.(http.Flusher).Flush()
+		arrived <- struct{}{}
+		<-release
+		_, _ = io.WriteString(w, `ld."},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
+	})
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/messages"), bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := h.client(cert).Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the backup never answered")
+	}
+	cancel()
+	<-done
+	// Let the gateway see the caller leave before the rest arrives.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	waitForSpend(t, h, "backup", "gpt-5-mini", 7)
+	requests := func(status string) float64 {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("backup", "gpt-5-mini", "team-a", status))
+	}
+	waitFor(t, func() bool { return requests(outcomeClientClosed) == 1 })
+	for _, status := range []string{outcomeOK, outcomeError} {
+		if got := requests(status); got != 0 {
+			t.Errorf("%s requests = %v, want 0", status, got)
+		}
+	}
+}
+
+func TestIntegration_CrossFormatFallback_OverLimitAnswerIs502(t *testing.T) {
+	// The Anthropic caller allows 16 output tokens; the OpenAI backup sends
+	// an answer far past what 16 tokens can render, usage last.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"role":"assistant","content":"`)
+		_, _ = io.WriteString(w, strings.Repeat("z", int(crossingHoldLimit(16))+256))
+		_, _ = io.WriteString(w, `"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
+	})
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 16,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 502", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderError {
+		t.Errorf("error type %q, want %s", got, errProviderError)
+	}
+	if u := waitUsage(t, h, "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
+		t.Errorf("backup spend %+v, want the usage read while draining", u)
+	}
+	waitFor(t, func() bool { _, slots := boundarySlots(h); return slots == 0 })
+}
+
+func TestIntegration_CrossFormatFallback_CutOffAnswerDoesNotFallBack(t *testing.T) {
+	// The crossing backup cuts its 2xx partway; its own fallback is never
+	// tried, since the 2xx had started.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"content":"half`)
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	})
+	childCalls := addCrossingChild(t, h)
+
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 502", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderError {
+		t.Errorf("error type %q, want %s", got, errProviderError)
+	}
+	if got := childCalls.Load(); got != 0 {
+		t.Errorf("the backup's fallback was called %d times after the 2xx started", got)
+	}
+}
+
+// bigOpenAIAnswer answers a chat completion whose content is n bytes, past
+// the 1 MiB hold floor when n is larger.
+func bigOpenAIAnswer(n int) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"role":"assistant","content":"`)
+		_, _ = io.WriteString(w, strings.Repeat("z", n))
+		_, _ = io.WriteString(w, `"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
+	}
+}
+
+// answerTextLen decodes an Anthropic message and returns its text length.
+func answerTextLen(t *testing.T, resp *http.Response) int {
+	t.Helper()
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Content) != 1 {
+		t.Fatalf("content blocks %d, want 1", len(out.Content))
+	}
+	return len(out.Content[0].Text)
+}
+
+func TestIntegration_CrossFormatFallback_HoldLimitFollowsMaxTokens(t *testing.T) {
+	// A request allowing 200000 output tokens may get an answer far past the
+	// 1 MiB floor: the hold limit grows with max_tokens, so it translates.
+	const size = 3 << 19 // 1.5 MiB
+	h, cert := crossingHarness(t, bigOpenAIAnswer(size))
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 200000,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 200: the answer is within what max_tokens allows", resp.StatusCode)
+	}
+	if got := answerTextLen(t, resp); got != size {
+		t.Errorf("translated text %d bytes, want %d", got, size)
+	}
+}
+
+func TestIntegration_CrossFormatFallback_HoldLimitFollowsMaxOutputTokens(t *testing.T) {
+	// The caller sets no max_tokens, so the translated request carries none:
+	// the limit comes from the backup model's declared maxOutputTokens.
+	const size = 3 << 19 // 1.5 MiB
+	h, cert := crossingHarness(t, bigOpenAIAnswer(size))
+	maxOut := int64(100000)
+	h.store.providers["backup"].Spec.Models[0].MaxOutputTokens = &maxOut
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model":    "prov/m1",
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 200: the answer is within what maxOutputTokens allows", resp.StatusCode)
+	}
+	if got := answerTextLen(t, resp); got != size {
+		t.Errorf("translated text %d bytes, want %d", got, size)
+	}
+}
+
+// addCrossingChild gives the crossing backup its own fallback, "child", and
+// returns its call count.
+func addCrossingChild(t *testing.T, h *harness) *atomic.Int64 {
+	t.Helper()
+	childCalls := new(atomic.Int64)
+	childSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		childCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"from-child","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},` +
+			`"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`))
+	}))
+	t.Cleanup(childSrv.Close)
+	h.server.Config.UpstreamCAs.AddCert(childSrv.Certificate())
+	h.server.upstreamOnce = onceReset()
+	h.store.providers["child"] = &kaalmv1beta1.ModelProvider{
+		ObjectMeta: metav1ObjectMeta("child"),
+		Spec: kaalmv1beta1.ModelProviderSpec{
+			Type: "openai", Endpoint: childSrv.URL, AllowedNamespaces: []string{"team-*"},
+			Models: []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}},
+		},
+	}
+	h.store.creds["child"] = "sk-child"
+	h.store.providers["backup"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "child"}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "child"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "child"})
+	return childCalls
+}
+
+func TestIntegration_CrossFormatFallback_IdleAnswerIs504(t *testing.T) {
+	// The crossing backup sends its 2xx headers and a prefix, then goes
+	// idle: the gap bound ends the hold with 504 provider_timeout, and the
+	// backup's own fallback is never tried, since the 2xx had started.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","choices":[{"index":0,"message":{"content":"half`)
+		w.(http.Flusher).Flush()
+		stall(r)
+	})
+	h.server.Config.UpstreamTimeout = streamTimeout
+	childCalls := addCrossingChild(t, h)
+	prov := hardenProv(h)
+	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
+
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want 504", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderTimeout {
+		t.Errorf("error type %q, want %s", got, errProviderTimeout)
+	}
+	if got := childCalls.Load(); got != 0 {
+		t.Errorf("the backup's fallback was called %d times after the 2xx started", got)
+	}
+	waitFor(t, func() bool { _, slots := boundarySlots(h); return slots == 0 })
 }
