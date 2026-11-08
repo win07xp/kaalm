@@ -213,7 +213,7 @@ The estimate is an input estimate plus an output cap:
 
 - **Input:** the request body's size in bytes divided by 4, about four bytes per token.
 - **Output cap**, the first of these that exists:
-  1. The request's own cap (`max_completion_tokens` or `max_tokens`, or `generationConfig.maxOutputTokens` for Vertex), lowered to the model's `maxOutputTokens` when that is smaller, because the provider never generates more than its ceiling.
+  1. The request's own cap (`max_completion_tokens` or `max_tokens`, or `generationConfig.maxOutputTokens` for Vertex, which also reads the snake_case spelling `generation_config.max_output_tokens`), lowered to the model's `maxOutputTokens` when that is smaller, because the provider never generates more than its ceiling. Cap member names match exactly: a case variant such as `Max_Tokens` is no cap, because the gateway never rewrites these members and a provider that matches names exactly would not apply it. The call then reserves the model's `maxOutputTokens`, or one replica share when the model declares none.
   2. The model's `maxOutputTokens`, when the request sets no cap.
   3. One replica share (`tokensPerMinute / number_of_replicas`), when neither exists, because the gateway then has no other bound on the call.
 
@@ -225,8 +225,9 @@ The reservation may push the bucket below 0, so an estimate larger than the limi
 
 The bucket that admitted the call settles it when the relay ends ([Request flow](request-handling.md#request-flow), step 10):
 
-- **A 2xx with usage:** the usage replaces the reservation. The gateway credits the reservation back, then debits the input plus output tokens the response reported.
-- **A 2xx with no usage:** the call keeps its reservation as its charge. Without that, an agent that read a stream and left before the usage event would pay nothing on the token bucket. Dollar spend for such an answer still settles zero ([Streaming responses](request-handling.md#streaming-responses)).
+- **A 2xx that finished cleanly, with usage:** the usage replaces the reservation. The gateway credits the reservation back, then debits the input plus output tokens the response reported.
+- **A 2xx that finished cleanly, with no usage:** the call keeps its reservation as its charge. Without that, an answer that carried no usage would pay nothing on the token bucket. Dollar spend for such an answer still settles zero ([Streaming responses](request-handling.md#streaming-responses)).
+- **A 2xx that did not finish cleanly:** the caller left, or the provider broke the answer or let it go idle (outcome `client_closed` or `error`, streamed or not). The bucket settles at the larger of the usage read and the reservation. The usage read is only a floor: an Anthropic stream reports input tokens first and output tokens only in its last event, so a stream cut before that event has partial usage, and the output already sent would go uncharged. A call with no usage read keeps its reservation. Dollar spend still settles from the usage read.
 - **No 2xx from any candidate:** the gateway returns the reservation in full, because no provider served the call. A 4xx relayed verbatim is in this case.
 
 The credit returns only what the reservation took, and never lifts the bucket above the current burst. The debt clamp can cut a reservation short, and a refund of tokens the bucket never gave up would widen the limit. Refills during a long call, and a share that changed while it ran, would otherwise lift the bucket past full.
@@ -252,7 +253,7 @@ For the token bucket the wait is a worst case: a call that settles below its res
 
 - **The bound holds when the output cap holds.** A call whose provider generates past its declared ceiling overshoots by the difference ([The bound](#the-bound)).
 - **The split is approximate.** The per-replica split is approximate, as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the reservation and its settle land only on the replica that served the call.
-- **Only input plus output tokens count.** The settled charge is the input plus output count from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, `prompt_tokens` already includes cached prompt tokens, so cache hits count. A response with no usage keeps its reservation as its charge, the case counted as `kaalm_llm_usage_missing_total` ([Streaming responses](request-handling.md#streaming-responses)).
+- **Only input plus output tokens count.** The settled charge is the input plus output count from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, `prompt_tokens` already includes cached prompt tokens, so cache hits count. A response with no usage counts on `kaalm_llm_usage_missing_total`, and [Settling the reservation](#settling-the-reservation) gives its charge.
 - **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `requestsPerMinute` and the full `tokensPerMinute`. Together, tenants can still reach the provider's own rate limit, so these limits do not keep a shared provider key under it.
 
 ### Dividing by live replica count
