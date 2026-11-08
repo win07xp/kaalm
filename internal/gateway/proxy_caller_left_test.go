@@ -37,8 +37,9 @@ import (
 
 // A request whose caller left before the relay started counts as
 // client_closed: a 2xx stream, which arrives unread and can no longer be
-// read, counts as usage missing, and every outcome settles zero. A
-// non-streamed 2xx never reaches settleCallerLeft: its relay reads it.
+// read, counts as usage missing and keeps its token reservation, any other
+// outcome releases it, and every outcome settles zero spend. A non-streamed
+// 2xx never reaches settleCallerLeft: its relay reads it.
 func TestSettleCallerLeft(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -50,12 +51,15 @@ func TestSettleCallerLeft(t *testing.T) {
 		wantMissing float64
 		// zeroSettle: the admission slot is freed with a zero cost.
 		zeroSettle bool
+		// wantTokens: the token bucket after a 500-token reservation on a
+		// 1000-token share settles.
+		wantTokens float64
 	}{
 		{name: "2xx stream", status: 200, stream: true,
 			body:        "data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n",
-			wantMissing: 1, zeroSettle: true},
-		{name: "provider error", status: 400, body: `{"error":{}}`, zeroSettle: true},
-		{name: "no response", noResponse: true, zeroSettle: true},
+			wantMissing: 1, zeroSettle: true, wantTokens: 500},
+		{name: "provider error", status: 400, body: `{"error":{}}`, zeroSettle: true, wantTokens: 1000},
+		{name: "no response", noResponse: true, zeroSettle: true, wantTokens: 1000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,10 +79,21 @@ func TestSettleCallerLeft(t *testing.T) {
 					res.body = []byte(tc.body)
 				}
 			}
+			rl := NewRateLimiter(func() int { return 1 })
+			now := time.Now()
+			rl.now = func() time.Time { return now }
+			ok, _, reservation := rl.Allow(rlTokenProvider(0, 1000), "team-a", "m1", tokenEstimate{Output: 500})
+			if !ok || reservation == nil {
+				t.Fatal("the reservation must be admitted")
+			}
 			gone, cancel := context.WithCancel(context.Background())
 			cancel()
 			model, answered := "m1", "prov"
-			h.server.settleCallerLeft(gone, res, "team-a", &model, &answered)
+			h.server.settleCallerLeft(gone, res, "team-a", &model, &answered, reservation)
+			reservation.release() // the handler's safety net does nothing after a keep
+			if got := rl.buckets[tokenKey("team-a", "m1")].tokens; got != tc.wantTokens {
+				t.Errorf("token bucket = %v, want %v", got, tc.wantTokens)
+			}
 
 			if got := testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "m1", "team-a", outcomeClientClosed)); got != 1 {
 				t.Errorf("client_closed requests = %v, want 1", got)

@@ -33,9 +33,12 @@ import (
 // the per-replica share, so a cluster-wide burst can admit up to one request
 // per replica (up to number_of_replicas requests at once) while the long-run
 // rate stays at the ceiling. It does not cap concurrency. The token ceiling is
-// enforced after the fact: a request is admitted while the token bucket is
-// above zero, and its settled usage is debited when the call ends
-// (DebitTokens), so a large call blocks the next request rather than itself.
+// reserved at admission: a request is admitted while the token bucket is
+// above zero, its estimated tokens come off the bucket in the same step (the
+// returned tokenReservation), and the call's settled usage replaces the
+// estimate when it ends. Concurrent calls on one replica therefore cannot
+// together exceed the share by more than one reservation, and a large call
+// delays the next request rather than being refused itself.
 // See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type RateLimiter struct {
 	// Replicas returns the count of gateway replicas that take new traffic
@@ -64,17 +67,50 @@ func NewRateLimiter(replicas func() int) *RateLimiter {
 	return &RateLimiter{Replicas: replicas, now: time.Now, buckets: map[string]*tokenBucket{}}
 }
 
+// outputCapUnknown, as tokenEstimate.Output, means neither the request nor
+// the model declares an output cap: the reservation is one replica share in
+// its place, the only bound the gateway has, so such calls run about one at
+// a time per (namespace, model) on each replica.
+const outputCapUnknown int64 = -1
+
+// tokenEstimate is what a request reserves on the token bucket at admission:
+// an input estimate plus its output cap, or outputCapUnknown. The zero value
+// reserves nothing.
+type tokenEstimate struct{ Input, Output int64 }
+
+// tokenReservation is the estimate an admitted request took off its
+// (namespace, model) token bucket. Exactly one of settle, keep, or release
+// takes effect, the first one called; the others then do nothing, so a
+// deferred release is a safe net for every early return. A nil reservation
+// (no token limit) does nothing.
+type tokenReservation struct {
+	r                *RateLimiter
+	limit            int32
+	namespace, model string
+	// taken is what actually came off the bucket, which the floor at minus
+	// one share can make less than the estimate.
+	taken float64
+	done  bool
+}
+
 // Allow reports whether an LLM request may proceed and, when it may not, the
 // Retry-After in seconds. It checks the token bucket first (tokensPerMinute:
-// admitted while above zero, nothing consumed), then consumes one request
-// token (requestsPerMinute), so a request the token bucket refuses keeps its
-// request token. An unset limit always allows. The request bucket holds at
-// least one request, so a ceiling below the replica count still admits one
-// request per refill on each replica.
-func (r *RateLimiter) Allow(provider *kaalmv1beta1.ModelProvider, namespace, model string) (bool, int) {
+// admitted while above zero), then consumes one request token
+// (requestsPerMinute), so a request the token bucket refuses keeps its
+// request token. Once both admit, est comes off the token bucket in the same
+// lock hold, down to the floor of minus one share, and the returned
+// reservation records how much did; a large estimate therefore delays the
+// next request instead of being refused outright. A refusal reserves nothing
+// and returns a nil reservation, as does a provider with no token limit. An
+// unset limit always allows. The request bucket holds at least one request,
+// so a ceiling below the replica count still admits one request per refill
+// on each replica.
+func (r *RateLimiter) Allow(
+	provider *kaalmv1beta1.ModelProvider, namespace, model string, est tokenEstimate,
+) (ok bool, retryAfter int, res *tokenReservation) {
 	limits := provider.Spec.RateLimits
 	if limits.TokensPerMinute <= 0 && limits.RequestsPerMinute <= 0 {
-		return true, 0
+		return true, 0, nil
 	}
 	// Read the replica count before taking the lock: Replicas lists Pods from
 	// the cache and can block, and must not stall every other limiter call.
@@ -84,42 +120,85 @@ func (r *RateLimiter) Allow(provider *kaalmv1beta1.ModelProvider, namespace, mod
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	var tb *tokenBucket
 	if limits.TokensPerMinute > 0 {
-		b := r.refilled(tokenKey(namespace, model), tokenShare, tokenShare)
-		if b.tokens <= 0 {
-			return false, retryAfterSeconds(-b.tokens, tokenShare)
+		tb = r.refilled(tokenKey(namespace, model), tokenShare, tokenShare)
+		if tb.tokens <= 0 {
+			return false, retryAfterSeconds(-tb.tokens, tokenShare), nil
 		}
 	}
 	if limits.RequestsPerMinute > 0 {
 		b := r.refilled(namespace+"/"+model, requestShare, requestBurst(requestShare))
 		if b.tokens < 1 {
-			return false, retryAfterSeconds(1-b.tokens, requestShare)
+			return false, retryAfterSeconds(1-b.tokens, requestShare), nil
 		}
 		b.tokens--
 	}
-	return true, 0
+	if tb == nil {
+		return true, 0, nil
+	}
+	reserve := float64(est.Input) + float64(est.Output)
+	if est.Output == outputCapUnknown {
+		reserve = float64(est.Input) + tokenShare
+	}
+	before := tb.tokens
+	tb.tokens -= reserve
+	if tb.tokens < -tokenShare {
+		tb.tokens = -tokenShare
+	}
+	return true, 0, &tokenReservation{
+		r: r, limit: limits.TokensPerMinute, namespace: namespace, model: model, taken: before - tb.tokens,
+	}
 }
 
-// DebitTokens subtracts a finished call's settled tokens from the
-// (namespace, model) token bucket that admitted it. The bucket may go
-// negative, down to minus one burst at the current share, so one huge call
-// blocks the key for at most about one refill window. When the share later
-// shrinks (more replicas or a lower ceiling), refilled re-clamps the older
-// debt, so the bound holds across those changes. A provider with no
-// tokensPerMinute limit debits nothing.
-func (r *RateLimiter) DebitTokens(provider *kaalmv1beta1.ModelProvider, namespace, model string, tokens int64) {
-	limit := provider.Spec.RateLimits.TokensPerMinute
-	if limit <= 0 || tokens <= 0 {
+// settle replaces the reservation with the call's settled usage (input plus
+// output tokens). It credits back what the reservation took, clamped at the
+// current burst, then debits usage. The credit returns only taken, never
+// the full estimate, so a reservation the floor cut short cannot refund
+// tokens the bucket never gave up; the clamp keeps refills during a long
+// call, and a share that shrank mid-call, from lifting the bucket past full,
+// so the end state is what a debit at the end of the call would leave. The
+// bucket may go negative, down to minus one burst at the current share, so
+// one huge call blocks the key for at most about one refill window. When
+// the share later shrinks (more replicas or a lower ceiling), refilled
+// re-clamps the older debt, so the bound holds across those changes; a debt
+// that re-clamp already forgave can come back as credit here, bounded by
+// one burst, the same approximation as the re-clamp itself.
+func (res *tokenReservation) settle(usage int64) {
+	if res == nil {
 		return
 	}
-	share := perReplica(limit, r.replicas()) // outside the lock, as in Allow
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	b := r.refilled(tokenKey(namespace, model), share, share)
-	b.tokens -= float64(tokens)
+	share := perReplica(res.limit, res.r.replicas()) // outside the lock, as in Allow
+	res.r.mu.Lock()
+	defer res.r.mu.Unlock()
+	if res.done {
+		return
+	}
+	res.done = true
+	b := res.r.refilled(tokenKey(res.namespace, res.model), share, share)
+	b.tokens += res.taken
+	if b.tokens > share {
+		b.tokens = share
+	}
+	b.tokens -= float64(usage)
 	if b.tokens < -share {
 		b.tokens = -share
 	}
+}
+
+// release returns the reservation in full, for a call that ends without a
+// 2xx from any candidate: it settles zero usage.
+func (res *tokenReservation) release() { res.settle(0) }
+
+// keep leaves the reservation on the bucket as the call's charge, for a 2xx
+// that reported no usage.
+func (res *tokenReservation) keep() {
+	if res == nil {
+		return
+	}
+	res.r.mu.Lock()
+	defer res.r.mu.Unlock()
+	res.done = true
 }
 
 // tokenKey is the token bucket's key for (namespace, model), under a prefix

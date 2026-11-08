@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -34,6 +36,8 @@ import (
 // therefore reads the few top-level members it routes by from the bytes,
 // rewrites the model value, and writes the routing member names exactly, so
 // a provider that matches names exactly reads the members the gateway read.
+// For a provider with a token rate limit it also reads the request's output
+// cap members (requestOutputCap), and never rewrites them.
 
 // requestFields locates the top-level members of a request body the
 // gateway routes and meters by.
@@ -285,6 +289,64 @@ func rewriteRequestBody(body []byte, f requestFields, model string, forceUsage b
 // spend, and an agent must not be able to opt out of metering.
 func needsStreamOptions(a providerAdapter, f requestFields) bool {
 	return a.streamUsageOption() && f.streamTrue
+}
+
+// requestOutputCap returns the output cap a request body sets: the first of
+// the top-level max_completion_tokens, max_tokens, and
+// generationConfig.maxOutputTokens (the Vertex shape) that holds a positive
+// number, or false when none does. Names match the way encoding/json
+// matches struct fields, and a repeated member counts by its last copy, as
+// encoding/json keeps it. body must already pass json.Valid. The token rate
+// limit reserves this cap at admission; the proxy calls it only for a
+// provider with tokensPerMinute, so the unlimited path pays nothing.
+func requestOutputCap(body []byte) (int64, bool) {
+	open := skipJSONSpace(body, 0)
+	if body[open] != '{' {
+		return 0, false
+	}
+	var completion, maxTokens, generation []byte
+	forEachJSONMember(body, open, func(name string, start, end int) bool {
+		switch {
+		case jsonNameMatches(name, "max_completion_tokens"):
+			completion = body[start:end]
+		case jsonNameMatches(name, "max_tokens"):
+			maxTokens = body[start:end]
+		case jsonNameMatches(name, "generationConfig"):
+			generation = nil
+			if body[start] == '{' {
+				forEachJSONMember(body, start, func(name string, s, e int) bool {
+					if jsonNameMatches(name, "maxOutputTokens") {
+						generation = body[s:e]
+					}
+					return true
+				})
+			}
+		}
+		return true
+	})
+	for _, token := range [...][]byte{completion, maxTokens, generation} {
+		if n, ok := jsonCapValue(token); ok {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// jsonCapValue reads an output cap value: a JSON number that is finite and
+// at least 1, truncated to a whole number of tokens. Anything else (absent,
+// a string, null, 0, a negative number, an object) is no cap.
+func jsonCapValue(token []byte) (int64, bool) {
+	if len(token) == 0 || (token[0] != '-' && (token[0] < '0' || token[0] > '9')) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(string(token), 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) || f < 1 {
+		return 0, false
+	}
+	if f >= math.MaxInt64 {
+		return math.MaxInt64, true
+	}
+	return int64(f), true
 }
 
 // skipJSONSpace returns the offset of the first non-space byte at or after i.

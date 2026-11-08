@@ -206,8 +206,12 @@ spec:
       costPer1MOutputTokens: "2.00"
 ---
 # perf-limited: perf-fast with request and token rate limits set far above
-# any rate the leg reaches, so every request runs the limiter (admission,
-# then the token debit once usage settles) and none is refused.
+# any rate the leg reaches, so every request runs the limiter (admission with
+# its token reservation, then the settle once usage arrives) and none is
+# refused. The loadgen's OpenAI chat body sets no max_tokens, so the model
+# declares maxOutputTokens: without it every request would reserve the whole
+# share and the leg would be refused. 64 matches the cap the loadgen's
+# Anthropic body sends.
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
@@ -232,6 +236,7 @@ spec:
     - id: mock-model
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
+      maxOutputTokens: 64
 ---
 # perf-anthropic: perf-fast as the Anthropic type, so the stream phase's
 # Anthropic leg is relayed natively by the messages adapter and measures the

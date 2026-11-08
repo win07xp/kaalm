@@ -396,6 +396,61 @@ func TestRewriteRequestBodyForcesIncludeUsage(t *testing.T) {
 	}
 }
 
+// TestRequestOutputCap: the output cap is read from the top-level
+// max_completion_tokens, max_tokens, or generationConfig.maxOutputTokens, in
+// that order, and counts only as a positive finite JSON number. Names match
+// the way encoding/json matches struct fields, and the last copy wins.
+func TestRequestOutputCap(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want int64
+		ok   bool
+	}{
+		{`{"model":"p/m","max_tokens":400}`, 400, true},
+		{`{"max_tokens":400,"max_completion_tokens":300}`, 300, true},
+		{`{"max_completion_tokens":"300","max_tokens":400}`, 400, true},
+		{`{"generationConfig":{"temperature":1,"maxOutputTokens":256}}`, 256, true},
+		{`{"max_tokens":128,"generationConfig":{"maxOutputTokens":256}}`, 128, true},
+		{`{"Max_Tokens":400}`, 400, true},
+		{`{"max_tokens":100,"max_tokens":200}`, 200, true},
+		{`{"generationConfig":{"maxOutputTokens":1,"MaxOutputTokens":2}}`, 2, true},
+		{`{"max_tokens":1.5e3}`, 1500, true},
+		{` { "max_tokens" : 7 } `, 7, true},
+		{`{"max_tokens":"400"}`, 0, false},
+		{`{"max_tokens":0}`, 0, false},
+		{`{"max_tokens":-5}`, 0, false},
+		{`{"max_tokens":0.5}`, 0, false},
+		{`{"max_tokens":1e400}`, 0, false},
+		{`{"max_tokens":{"n":4}}`, 0, false},
+		{`{"max_tokens":null}`, 0, false},
+		{`{"model":"p/m"}`, 0, false},
+		{`{}`, 0, false},
+		{`null`, 0, false},
+		{`{"generationConfig":[{"maxOutputTokens":5}]}`, 0, false},
+		{`{"generationConfig":null}`, 0, false},
+		{`{"messages":[{"role":"user","max_tokens":5}],"options":{"max_tokens":6}}`, 0, false},
+	} {
+		got, ok := requestOutputCap([]byte(c.body))
+		if got != c.want || ok != c.ok {
+			t.Errorf("requestOutputCap(%s) = (%d, %v), want (%d, %v)", c.body, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// The rewrite leaves an output cap member's name and bytes as sent: the
+// gateway reads the cap, never rewrites it.
+func TestRewriteRequestBodyKeepsOutputCapMembers(t *testing.T) {
+	body := []byte(`{"Max_Tokens":1.50e3,"model":"p/m","generationConfig":{"MaxOutputTokens" : 256}}`)
+	f, err := scanRequestFields(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"Max_Tokens":1.50e3,"model":"n","generationConfig":{"MaxOutputTokens" : 256}}`
+	if got := string(rewriteRequestBody(body, f, "n", false)); got != want {
+		t.Errorf("rewrite:\n got %s\nwant %s", got, want)
+	}
+}
+
 // decodeNumbers decodes b keeping numbers as their text.
 func decodeNumbers(b []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
