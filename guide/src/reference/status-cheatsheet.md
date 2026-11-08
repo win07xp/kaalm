@@ -198,9 +198,11 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once none does.
 - `MaxOutputTokensUnset` (advisory, never affects `Ready`): a fallback edge
   from `openai` or `openai-compatible` into `anthropic` reaches models with
-  no `maxOutputTokens`, and the message lists up to ten `provider/model`
-  pairs and counts the rest; `False` with
-  `MaxOutputTokensDeclared` once none remain.
+  no `maxOutputTokens`, or the provider sets `tokensPerMinute` and some of its
+  own models declare none. The message lists up to ten `provider/model` pairs
+  for each case and counts the rest. Set `maxOutputTokens` on the listed
+  models; the condition is `False` with `MaxOutputTokensDeclared` once none
+  remain.
 - `BoundaryMarginRaised` (hard enforcement only): observed traffic forced the
   gateway to admit more conservatively than the configured
   `boundaryMarginPercent`; a signal to raise the value, not an outage.

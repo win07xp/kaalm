@@ -50,7 +50,10 @@ spec:
       # request crosses a fallback edge into an anthropic provider without
       # one, and caps a larger value. A model without it cannot serve such
       # a request; the reconciler sets the MaxOutputTokensUnset condition
-      # on the primary that maps to it.
+      # on the primary that maps to it. Under tokensPerMinute it also
+      # bounds the token reservation of a request that sets no output cap;
+      # without it, such a request reserves a whole replica share (see
+      # Rate limit scope).
       maxOutputTokens: 64000
 
   # Glob patterns. "*" matches every namespace; an empty list admits none.
@@ -87,7 +90,9 @@ spec:
     # Cluster-wide ceiling per (namespace, model); see Rate limit scope.
     requestsPerMinute: 300
     # Cluster-wide ceiling on input plus output tokens per minute, per
-    # (namespace, model). Unset or 0 means no token limit.
+    # (namespace, model). Unset or 0 means no token limit. Each call
+    # reserves its estimate at admission, from the request's output cap or
+    # the model's maxOutputTokens (see Rate limit scope).
     tokensPerMinute: 500000
 
   # Providers tried when this one fails, each with its own fallback list,
@@ -154,7 +159,7 @@ status:
 | `GatewayReachable` | `True` with `GatewayReady` when at least one gateway Pod is Ready and not being deleted, else `False` with `GatewayUnavailable`. Set on every pass, a held delete included, and refreshed at once when a gateway Pod's readiness changes. Every ModelProvider shows the same value, whether or not it passes its checks and whether or not its delete is held. |
 | `FallbackIneligible` | Advisory; never affects `Ready`. `True` with `reason: FallbackIneligible` when the reconcile-time scan finds a fallback candidate that a caller's namespace or model can never reach; `False` with `AllCandidatesEligible` once the findings clear. The message lists the first ten findings and counts the rest ([How a condition message lists problems](validation-and-defaulting.md#how-a-condition-message-lists-problems)). A `Warning` event with the same reason fires when a new finding appears, listed in the message or not. A provider with no findings carries no such condition ([Reconcile-time fallback eligibility scan](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan)). |
 | `DegradeTargetNotCheapest` | Advisory; never affects `Ready`. `True` with `CheaperModelAvailable` when a degrade policy's `degradeTo` costs more than another priced model in the catalog, `False` with `DegradeTargetCheapest` once none does. The message lists up to ten such targets and counts the rest ([How a condition message lists problems](validation-and-defaulting.md#how-a-condition-message-lists-problems)). One `Warning` event fires on the transition to `True` ([`degradeTo` validation](#degradeto-validation)). |
-| `MaxOutputTokensUnset` | Advisory; never affects `Ready`. `True` with `MaxOutputTokensUnset` when a fallback edge from an `openai` or `openai-compatible` provider into an `anthropic` provider reaches models that declare no `maxOutputTokens`. The message lists up to ten `provider/model` pairs, each quoted, in sorted order, and counts the rest ([How a condition message lists problems](validation-and-defaulting.md#how-a-condition-message-lists-problems)). `False` with `MaxOutputTokensDeclared` once none remain. A provider with no findings carries no such condition. The `Warning` event fires on the transition to `True` ([What does not translate](../gateways/llm/fallback.md#what-does-not)). |
+| `MaxOutputTokensUnset` | Advisory; never affects `Ready`. `True` with `MaxOutputTokensUnset` when a fallback edge from an `openai` or `openai-compatible` provider into an `anthropic` provider reaches models that declare no `maxOutputTokens`, or when the provider sets `tokensPerMinute` and one of its own models declares none. The message has one sentence per case, the crossing models first. The second sentence names the provider's own models and says that requests without their own output cap on them run one at a time per gateway replica until `maxOutputTokens` is set ([The token limit](../gateways/llm/budgets-and-rate-limits.md#what-the-reservation-holds)). Each sentence lists up to ten `provider/model` pairs, each quoted, in sorted order, and counts the rest ([How a condition message lists problems](validation-and-defaulting.md#how-a-condition-message-lists-problems)). `False` with `MaxOutputTokensDeclared` once both lists are empty. A provider with no findings carries no such condition. The `Warning` event fires on the transition to `True` ([What does not translate](../gateways/llm/fallback.md#what-does-not)). |
 | `BoundaryMarginRaised` | Hard enforcement only. `True` when a gateway replica observed traffic that needed a wider boundary margin than `hard.boundaryMarginPercent` configures ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). |
 
 `healthCheck.enabled: false` disables the probe and leaves `Healthy` `Unknown` with `NotProbed`; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers/modelprovider.md#probe-backoff)). `budgetUsage` is per-namespace spend. It holds the current period's entries and, from the first pass after a period rollover until the next rollover, the previous period's entries, so two periods can appear for a whole period. Each entry's `period` tells them apart; select on it when you sum or filter rows. `clusterSpentUSD` is the sum across namespaces for the current period only. Both are empty while the provider tracks no budget (`period: none`), and turning a budget off clears them, the previous-period entries included ([Budget reconciliation](../controller/reconcilers/modelprovider.md#budget-reconciliation) covers the details and the missing-ConfigMap case).
@@ -179,11 +184,11 @@ Budget state in status is the source of truth for display only. Enforcement read
 
 Periods reset at midnight UTC: `monthly` on the first day of the calendar month, `weekly` on Monday, `daily` every day. The `Retry-After` on `429 budget_exhausted` is the seconds to the next reset. When a block fires, `error.message` names which ceiling won ([LLM Gateway error responses](../gateways/api/errors.md#llm-gateway-error-responses)).
 
-There is no pre-request cost estimation: a request's cost is knowable only after the response, so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates.
+There is no pre-request cost estimation: a request's cost is knowable only after the response, so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates. The token rate limit is separate: it does reserve an estimate of a call's tokens at admission ([The token limit](../gateways/llm/budgets-and-rate-limits.md#the-token-limit)).
 
 ### Rate limit scope
 
-Both `rateLimits` fields are cluster-wide ceilings per (namespace, model), so N namespaces, or N models in one namespace, each get the full ceiling. `tokensPerMinute` therefore does not keep a shared provider key under the provider's own tokens-per-minute limit. The token limit is enforced after the call, so a large call blocks the next request, not itself ([Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting)).
+Both `rateLimits` fields are cluster-wide ceilings per (namespace, model), so N namespaces, or N models in one namespace, each get the full ceiling. `tokensPerMinute` therefore does not keep a shared provider key under the provider's own tokens-per-minute limit. Each call reserves an estimate of its tokens when it is admitted and settles the real usage when it ends, so concurrent calls cannot together exceed the limit by more than one reservation per replica ([The token limit](../gateways/llm/budgets-and-rate-limits.md#the-token-limit)). A model that declares no `maxOutputTokens` makes a call without its own cap reserve a whole replica share, which [The token limit](../gateways/llm/budgets-and-rate-limits.md#what-the-reservation-holds) explains.
 
 Each gateway replica enforces its share of a ceiling, so the split is approximate. When `requestsPerMinute` is lower than the replica count, a burst can admit up to one request per replica while the long-run rate stays at the limit ([Request limits below the replica count](../gateways/llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)).
 
