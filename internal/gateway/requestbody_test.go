@@ -397,9 +397,10 @@ func TestRewriteRequestBodyForcesIncludeUsage(t *testing.T) {
 }
 
 // TestRequestOutputCap: the output cap is read from the top-level
-// max_completion_tokens, max_tokens, or generationConfig.maxOutputTokens, in
-// that order, and counts only as a positive finite JSON number. Names match
-// the way encoding/json matches struct fields, and the last copy wins.
+// max_completion_tokens, max_tokens, or generationConfig.maxOutputTokens
+// (also spelled generation_config and max_output_tokens), in that order, and
+// counts only as a positive finite JSON number. Names match exactly, so a
+// case variant is no cap, and the last copy wins.
 func TestRequestOutputCap(t *testing.T) {
 	for _, c := range []struct {
 		body string
@@ -411,9 +412,19 @@ func TestRequestOutputCap(t *testing.T) {
 		{`{"max_completion_tokens":"300","max_tokens":400}`, 400, true},
 		{`{"generationConfig":{"temperature":1,"maxOutputTokens":256}}`, 256, true},
 		{`{"max_tokens":128,"generationConfig":{"maxOutputTokens":256}}`, 128, true},
-		{`{"Max_Tokens":400}`, 400, true},
+		{`{"Max_Tokens":400}`, 0, false},
+		{`{"max_tokens":4000,"MAX_TOKENS":1}`, 4000, true},
+		{`{"GenerationConfig":{"maxOutputTokens":256}}`, 0, false},
 		{`{"max_tokens":100,"max_tokens":200}`, 200, true},
-		{`{"generationConfig":{"maxOutputTokens":1,"MaxOutputTokens":2}}`, 2, true},
+		{`{"generationConfig":{"maxOutputTokens":1,"MaxOutputTokens":2}}`, 1, true},
+		{`{"generationConfig":{"maxOutputTokens":1,"maxOutputTokens":2}}`, 2, true},
+		{`{"max\u005ftokens":9}`, 9, true},
+		{`{"generation_config":{"max_output_tokens":512}}`, 512, true},
+		{`{"generationConfig":{"max_output_tokens":64}}`, 64, true},
+		{`{"generation_config":{"maxOutputTokens":32}}`, 32, true},
+		{`{"generationConfig":{"maxOutputTokens":8,"max_output_tokens":16}}`, 16, true},
+		{`{"generation_config":{"maxOutputTokens":8},"generationConfig":{"temperature":1}}`, 0, false},
+		{`{"generation_config":{"Max_Output_Tokens":8}}`, 0, false},
 		{`{"max_tokens":1.5e3}`, 1500, true},
 		{` { "max_tokens" : 7 } `, 7, true},
 		{`{"max_tokens":"400"}`, 0, false},

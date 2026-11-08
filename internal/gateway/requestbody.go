@@ -293,12 +293,16 @@ func needsStreamOptions(a providerAdapter, f requestFields) bool {
 
 // requestOutputCap returns the output cap a request body sets: the first of
 // the top-level max_completion_tokens, max_tokens, and
-// generationConfig.maxOutputTokens (the Vertex shape) that holds a positive
-// number, or false when none does. Names match the way encoding/json
-// matches struct fields, and a repeated member counts by its last copy, as
-// encoding/json keeps it. body must already pass json.Valid. The token rate
-// limit reserves this cap at admission; the proxy calls it only for a
-// provider with tokensPerMinute, so the unlimited path pays nothing.
+// generationConfig.maxOutputTokens (the Vertex shape, which Vertex also
+// takes as generation_config and max_output_tokens) that holds a positive
+// number, or false when none does. Names match exactly, unescaped: the
+// gateway never rewrites these members, and a provider that matches names
+// exactly would not apply a case variant, so a case variant is no cap and
+// the call reserves the model's maxOutputTokens or a replica share instead.
+// A repeated member, in either Vertex spelling, counts by its last copy.
+// body must already pass json.Valid. The token rate limit reserves this cap
+// at admission; the proxy calls it only for a provider with tokensPerMinute,
+// so the unlimited path pays nothing.
 func requestOutputCap(body []byte) (int64, bool) {
 	open := skipJSONSpace(body, 0)
 	if body[open] != '{' {
@@ -306,16 +310,16 @@ func requestOutputCap(body []byte) (int64, bool) {
 	}
 	var completion, maxTokens, generation []byte
 	forEachJSONMember(body, open, func(name string, start, end int) bool {
-		switch {
-		case jsonNameMatches(name, "max_completion_tokens"):
+		switch name {
+		case "max_completion_tokens":
 			completion = body[start:end]
-		case jsonNameMatches(name, "max_tokens"):
+		case "max_tokens":
 			maxTokens = body[start:end]
-		case jsonNameMatches(name, "generationConfig"):
+		case "generationConfig", "generation_config":
 			generation = nil
 			if body[start] == '{' {
 				forEachJSONMember(body, start, func(name string, s, e int) bool {
-					if jsonNameMatches(name, "maxOutputTokens") {
+					if name == "maxOutputTokens" || name == "max_output_tokens" {
 						generation = body[s:e]
 					}
 					return true
