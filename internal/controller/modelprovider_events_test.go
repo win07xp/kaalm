@@ -265,6 +265,12 @@ func TestModelProvider_AdvisoryWarningsFollowTheStatusWrite(t *testing.T) {
 		mp:     eventsProvider("ev-mp-nomax", crossIntoAnthropic("ev-mp-nomax-claude")),
 		extra:  []client.Object{anthropicBackup("ev-mp-nomax-claude", nil)},
 		reason: kaalmv1beta1.ReasonMaxOutputTokensUnset,
+	}, {
+		name: "a token-limited model with no maxOutputTokens",
+		mp: eventsProvider("ev-mp-tpm-case", func(mp *kaalmv1beta1.ModelProvider) {
+			mp.Spec.RateLimits.TokensPerMinute = 1000
+		}),
+		reason: kaalmv1beta1.ReasonMaxOutputTokensUnset,
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -389,8 +395,74 @@ func TestModelProvider_MaxOutputTokensUnsetCondition(t *testing.T) {
 	}
 }
 
+// A token-limited provider whose own models declare no maxOutputTokens is an
+// advisory state too: requests without an output cap on them reserve a whole
+// replica share, so the condition names them, the Warning fires once on its
+// rising edge, and declaring maxOutputTokens sets it False without an event.
+func TestModelProvider_TokenLimitedModelsWithoutMaxOutputTokensCondition(t *testing.T) {
+	mp := eventsProvider("ev-mp-tpm", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.RateLimits.TokensPerMinute = 1000
+	})
+	r, rec := eventsProviderReconciler(t, &statusConflicts{}, nil, mp, providerKey("ev-mp-tpm"))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-mp-tpm"}}
+	get := func() *kaalmv1beta1.ModelProvider {
+		var got kaalmv1beta1.ModelProvider
+		if err := r.Get(ctxT(), req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		return &got
+	}
+	cond := func() *metav1.Condition {
+		return condition(get().Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
+	}
+	reconcile := func() {
+		t.Helper()
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prefix := "Warning " + kaalmv1beta1.ReasonMaxOutputTokensUnset
+	for range 3 {
+		reconcile()
+	}
+	if got := withPrefix(drainEvents(rec), prefix); len(got) != 1 || !strings.Contains(got[0], `"ev-mp-tpm/m1"`) {
+		t.Fatalf("three passes emitted %q, want one naming ev-mp-tpm/m1", got)
+	}
+	if c := cond(); c == nil || c.Status != metav1.ConditionTrue || c.Reason != kaalmv1beta1.ReasonMaxOutputTokensUnset ||
+		!strings.Contains(c.Message, `"ev-mp-tpm/m1"`) || !strings.Contains(c.Message, "one at a time per gateway replica") {
+		t.Fatalf("MaxOutputTokensUnset = %+v, want True naming ev-mp-tpm/m1", c)
+	}
+
+	// Declaring the ceiling clears the condition without an event.
+	got := get()
+	limit := int64(4096)
+	got.Spec.Models[0].MaxOutputTokens = &limit
+	if err := r.Update(ctxT(), got); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if c := cond(); c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonMaxOutputTokensDeclared {
+		t.Fatalf("after declaring maxOutputTokens the condition = %+v, want False", c)
+	}
+	if got := drainEvents(rec); len(got) != 0 {
+		t.Fatalf("clearing the condition emitted %q", got)
+	}
+
+	// Removing it again is a new rising edge.
+	got = get()
+	got.Spec.Models[0].MaxOutputTokens = nil
+	if err := r.Update(ctxT(), got); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if got := withPrefix(drainEvents(rec), prefix); len(got) != 1 {
+		t.Fatalf("a new rising edge emitted %d events, want 1", len(got))
+	}
+}
+
 // A provider with no crossing into anthropic gets no MaxOutputTokensUnset
-// condition at all.
+// condition at all, even with models that declare no maxOutputTokens, when
+// it sets no tokensPerMinute.
 func TestModelProvider_NoCrossingNoMaxOutputTokensCondition(t *testing.T) {
 	mp := eventsProvider("ev-mp-plain", nil)
 	r, _ := eventsProviderReconciler(t, &statusConflicts{}, nil, mp, providerKey("ev-mp-plain"))

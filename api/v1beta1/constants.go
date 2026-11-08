@@ -198,10 +198,12 @@ const ConditionBoundaryMarginRaised = "BoundaryMarginRaised"
 // DegradeTargetNotCheapest Warning event fires on the rising edge only.
 const ConditionDegradeTargetNotCheapest = "DegradeTargetNotCheapest"
 
-// ConditionMaxOutputTokensUnset records the crossings into anthropic models
-// that declare no maxOutputTokens: True, with reason MaxOutputTokensUnset,
-// listing each provider/model a request without max_tokens cannot cross
-// into. It is advisory and never affects Ready; the controller keeps it so
+// ConditionMaxOutputTokensUnset records the models that declare no
+// maxOutputTokens where the gateway needs one: True, with reason
+// MaxOutputTokensUnset, listing each provider/model a request without
+// max_tokens cannot cross into (a crossing into anthropic), and, when the
+// provider sets tokensPerMinute, each of its own models on which a request
+// without an output cap reserves a whole replica share. It is advisory and never affects Ready; the controller keeps it so
 // the MaxOutputTokensUnset Warning event fires on the rising edge only.
 const ConditionMaxOutputTokensUnset = "MaxOutputTokensUnset"
 
