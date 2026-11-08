@@ -213,18 +213,34 @@ func TestForwardOnce_NonStreamedSuccessOutlivesTheCaller(t *testing.T) {
 }
 
 // cancelOnSpanEnd runs onEnd, once, when a span with the given name ends.
+// A non-empty provider limits it to the span whose kaalm.provider attribute
+// names that provider.
 type cancelOnSpanEnd struct {
-	name  string
-	once  sync.Once
-	onEnd func()
+	name     string
+	provider string
+	once     sync.Once
+	onEnd    func()
 }
 
 func (*cancelOnSpanEnd) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
 
 func (p *cancelOnSpanEnd) OnEnd(s sdktrace.ReadOnlySpan) {
-	if s.Name() == p.name {
-		p.once.Do(p.onEnd)
+	if s.Name() != p.name {
+		return
 	}
+	if p.provider != "" && !spanHasProvider(s, p.provider) {
+		return
+	}
+	p.once.Do(p.onEnd)
+}
+
+func spanHasProvider(s sdktrace.ReadOnlySpan, provider string) bool {
+	for _, kv := range s.Attributes() {
+		if kv.Key == "kaalm.provider" && kv.Value.AsString() == provider {
+			return true
+		}
+	}
+	return false
 }
 
 func (*cancelOnSpanEnd) Shutdown(context.Context) error   { return nil }
