@@ -186,6 +186,22 @@ func (res *tokenReservation) settle(usage int64) {
 	}
 }
 
+// settleAtLeast settles a call that did not finish cleanly at the larger of
+// usage and what the reservation took. Such a call may have sent output the
+// usage read does not count yet (an Anthropic stream reports output tokens
+// only in its last event), so the reservation stays as the charge unless the
+// usage read already exceeds it.
+func (res *tokenReservation) settleAtLeast(usage int64) {
+	if res == nil {
+		return
+	}
+	if float64(usage) <= res.taken {
+		res.keep()
+		return
+	}
+	res.settle(usage)
+}
+
 // release returns the reservation in full, for a call that ends without a
 // 2xx from any candidate: it settles zero usage.
 func (res *tokenReservation) release() { res.settle(0) }

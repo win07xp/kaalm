@@ -298,6 +298,24 @@ func TestRateLimiter_KeepHoldsReservation(t *testing.T) {
 	expectRefused(t, rl, p, 30)
 }
 
+// TestRateLimiter_SettleAtLeastChargesTheLarger: settleAtLeast, for a call
+// that did not finish cleanly, keeps the reservation when the usage read is
+// smaller and settles the usage when it is larger, once.
+func TestRateLimiter_SettleAtLeastChargesTheLarger(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	small := admit(t, rl, p, tokenEstimate{Output: 500}) // 500
+	small.settleAtLeast(7)                               // keeps 500 taken: 500
+	small.settle(7)                                      // done: no effect
+	big := admit(t, rl, p, tokenEstimate{Output: 100})   // 400
+	big.settleAtLeast(300)                               // 400 + 100 - 300 = 200
+	admit(t, rl, p, tokenEstimate{Output: 200})          // 0
+	expectRefused(t, rl, p, 1)
+}
+
 // TestRateLimiter_NoOutputCapReservesOneShare: with no output cap known,
 // the reservation is the input estimate plus one replica share.
 func TestRateLimiter_NoOutputCapReservesOneShare(t *testing.T) {

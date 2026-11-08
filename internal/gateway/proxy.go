@@ -381,8 +381,9 @@ func (s *Server) settleCallerLeft(
 // crossed, a JSON answer held whole and translated back. Usage is read by
 // the serving candidate's adapter from the untranslated bytes as they pass.
 // reservation is the request's token reservation: a relay settles it with
-// the usage it read, or keeps it when it read none, and a non-2xx relayed
-// verbatim releases it. A 2xx is counted on kaalm_llm_requests_total when
+// the usage it read (at least the reservation when the relay did not finish
+// cleanly), or keeps it when it read none, and a non-2xx relayed verbatim
+// releases it. A 2xx is counted on kaalm_llm_requests_total when
 // its relay ends, so the status says how it ended. A non-streamed 2xx comes
 // here after the caller left too: the JSON relay and the hold read it to
 // its end, settle its usage, and count client_closed.
@@ -783,14 +784,14 @@ func readsOnAfterCallerLeft(res forwardResult) bool {
 // relayStream forwards SSE events to the caller as each one completes, and
 // events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
-// token reservation settled with the usage, after the stream ends. A stream
-// that ends without usage settles at zero spend, keeps its token
-// reservation, and is reported by usageMissing. When the upstream read fails after the status is sent (the
-// idle bound passed, or the connection broke), the relay ends the stream
-// with one error event in the caller's format, so the agent can tell a
-// truncated stream from a complete one. It returns the outcome for
-// kaalm_llm_requests_total and marks the llm.request span (ctx) the same
-// way: ok, error for a stream the provider broke or let go idle, or
+// token reservation settled, after the stream ends (see settleRelay). A
+// stream that ends without usage settles at zero spend, keeps its token
+// reservation, and is reported by usageMissing. When the upstream read fails
+// after the status is sent (the idle bound passed, or the connection broke),
+// the relay ends the stream with one error event in the caller's format, so
+// the agent can tell a truncated stream from a complete one. It returns the
+// outcome for kaalm_llm_requests_total and marks the llm.request span (ctx)
+// the same way: ok, error for a stream the provider broke or let go idle, or
 // client_closed for a caller that left, which gets no event. ctx derives
 // from the caller's request context, and the upstream read from ctx, so
 // ctx.Err() is set only when the caller left.
@@ -798,7 +799,7 @@ func (s *Server) relayStream(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
 	translator llmtranslate.Stream, callerFormat llmtranslate.Format, namespace, workload string,
 	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), reservation *tokenReservation,
-) string {
+) (outcome string) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
@@ -808,7 +809,7 @@ func (s *Server) relayStream(
 	// write error: near a hard ceiling, dropping accumulated usage would
 	// under-settle exactly where undercounting voids the cap, and a held
 	// admission slot must always free.
-	defer func() { s.settleRelay(usage, provider, namespace, workload, modelID, settle, reservation) }()
+	defer func() { s.settleRelay(usage, outcome, provider, namespace, workload, modelID, settle, reservation) }()
 
 	ef := &eventFlusher{r: resp.Body, f: flusher}
 	scanner := bufio.NewScanner(ef)
@@ -881,13 +882,21 @@ func (s *Server) relayStream(
 
 // settleRelay settles a relay when it ends, on every exit: the usage it
 // read, or, when it read none, zero spend reported by usageMissing, with the
-// token reservation kept as the call's charge. A held admission slot always
-// frees. Every 2xx settles here.
+// token reservation kept as the call's charge. A relay whose outcome is not
+// ok (the caller left, or the provider broke the answer or let it go idle)
+// may have sent output its usage read does not count, so its token
+// reservation settles at the larger of that usage and what it took; spend
+// still settles the usage read. A held admission slot always frees. Every
+// 2xx settles here.
 func (s *Server) settleRelay(
-	usage Usage, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
+	usage Usage, outcome string, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
 	settle func(float64), reservation *tokenReservation,
 ) {
 	if !usage.isZero() {
+		if outcome != outcomeOK {
+			// Settled first, so the settle in settleUsage does nothing.
+			reservation.settleAtLeast(usage.InputTokens + usage.OutputTokens)
+		}
 		s.settleUsage(provider, namespace, workload, modelID, usage, settle, reservation)
 		return
 	}
@@ -987,7 +996,9 @@ func (s *Server) relayJSON(
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	reader := adapter.usageReader()
-	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, reservation) }()
+	defer func() {
+		s.settleRelay(reader.usage, outcome, provider, namespace, workload, modelID, settle, reservation)
+	}()
 
 	sink := &flushWriter{w: w}
 	sink.f, _ = w.(http.Flusher)
@@ -1064,9 +1075,11 @@ func (s *Server) relayCrossing(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, servingAdapter providerAdapter,
 	from, to llmtranslate.Format, limit int64, namespace, workload string,
 	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), reservation *tokenReservation,
-) string {
+) (outcome string) {
 	reader := servingAdapter.usageReader()
-	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, reservation) }()
+	defer func() {
+		s.settleRelay(reader.usage, outcome, provider, namespace, workload, modelID, settle, reservation)
+	}()
 
 	hold := &holdBuffer{limit: limit}
 	readErr, _ := relayBody(resp.Body, hold, reader)

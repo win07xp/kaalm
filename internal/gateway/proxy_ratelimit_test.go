@@ -17,6 +17,7 @@ limitations under the License.
 package gateway
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"math"
@@ -372,4 +373,66 @@ func TestProxy_TokensPerMinuteFailedCallReleasesReservation(t *testing.T) {
 		t.Fatalf("failed call = %d, want 502", resp.StatusCode)
 	}
 	waitTokenLevel(t, h, 1000)
+}
+
+// TestProxy_TokensPerMinuteCutAnthropicStreamKeepsReservation: an Anthropic
+// stream reports input tokens on message_start and output tokens only on
+// its last message_delta. A stream cut in between, by the provider or by a
+// caller that leaves, has read input usage only, so it settles at the larger
+// of that usage and its reservation: the output it may have sent stays
+// charged.
+func TestProxy_TokensPerMinuteCutAnthropicStreamKeepsReservation(t *testing.T) {
+	const start = "event: message_start\n" +
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}` + "\n\n"
+	for _, tc := range []struct {
+		name         string
+		callerLeaves bool
+	}{
+		{name: "provider breaks the stream"},
+		{name: "caller leaves", callerLeaves: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := tpmHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, start)
+				w.(http.Flusher).Flush()
+				if tc.callerLeaves {
+					<-r.Context().Done()
+					return
+				}
+				panic(http.ErrAbortHandler)
+			})
+			h.store.providers["prov"].Spec.Type = "anthropic"
+			cert := agentCert(t, h.ca)
+			body := map[string]any{"model": "prov/m1", "stream": true, "max_tokens": 400}
+			reserve := reservationFor(body, 400)
+
+			resp := postJSON(t, h.client(&cert), h.url("/v1/messages"), body, nil)
+			if resp.StatusCode != http.StatusOK {
+				_ = resp.Body.Close()
+				t.Fatalf("stream = %d, want 200", resp.StatusCode)
+			}
+			if tc.callerLeaves {
+				br := bufio.NewReader(resp.Body)
+				for {
+					line, err := br.ReadString('\n')
+					if err != nil {
+						t.Fatalf("stream ended before the first delta: %v", err)
+					}
+					if strings.Contains(line, "content_block_delta") {
+						break
+					}
+				}
+			} else {
+				_, _ = io.ReadAll(resp.Body)
+			}
+			_ = resp.Body.Close()
+			for i := 0; i < 100 && h.spend.Total("team-a", "prov", "m1").InputTokens != 7; i++ {
+				time.Sleep(10 * time.Millisecond)
+			}
+			waitTokenLevel(t, h, float64(1000-reserve))
+		})
+	}
 }

@@ -203,8 +203,9 @@ const ConditionDegradeTargetNotCheapest = "DegradeTargetNotCheapest"
 // MaxOutputTokensUnset, listing each provider/model a request without
 // max_tokens cannot cross into (a crossing into anthropic), and, when the
 // provider sets tokensPerMinute, each of its own models on which a request
-// without an output cap reserves a whole replica share. It is advisory and never affects Ready; the controller keeps it so
-// the MaxOutputTokensUnset Warning event fires on the rising edge only.
+// without an output cap reserves a whole replica share. It is advisory and
+// never affects Ready; the controller keeps it so the MaxOutputTokensUnset
+// Warning event fires on the rising edge only.
 const ConditionMaxOutputTokensUnset = "MaxOutputTokensUnset"
 
 // ConditionFallbackIneligible records the reconcile-time fallback
