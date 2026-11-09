@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -605,23 +607,36 @@ func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
 
 // A caller that leaves while a crossing answer is held does not end the
 // hold: the answer is read to its end, spend settles from its usage, which
-// the provider sends last, and the request counts as client_closed.
+// the provider sends last, and the request counts as client_closed. The
+// caller leaves when the backup's llm.forward span ends, which is after
+// forwardOnce returned the unread 2xx. Leaving when the backup first writes
+// would race the gateway reading the headers, and a caller that wins that
+// race left before any 2xx, which settles zero.
 func TestIntegration_CrossFormatFallback_CallerLeftDuringTheHoldSettlesUsage(t *testing.T) {
-	arrived := make(chan struct{}, 1)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","object":"chat.completion","model":"gpt-5-mini",`+
 			`"choices":[{"index":0,"message":{"role":"assistant","content":"Co`)
 		w.(http.Flusher).Flush()
-		arrived <- struct{}{}
 		<-release
 		_, _ = io.WriteString(w, `ld."},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`)
 	})
-	raw, _ := json.Marshal(map[string]any{"model": "prov/m1", "max_tokens": 64,
-		"messages": []any{map[string]any{"role": "user", "content": "hi"}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(&cancelOnSpanEnd{
+		name: "llm.forward", provider: "backup", onEnd: func() {
+			cancel()
+			// Let the gateway see the caller leave before the rest arrives.
+			time.Sleep(100 * time.Millisecond)
+			releaseOnce.Do(func() { close(release) })
+		}}))
+	h.server.Tracing = &Tracing{tracer: tp.Tracer("test"), prop: propagation.TraceContext{}, tp: tp}
+
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/messages"), bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -635,16 +650,10 @@ func TestIntegration_CrossFormatFallback_CallerLeftDuringTheHoldSettlesUsage(t *
 		}
 	}()
 	select {
-	case <-arrived:
+	case <-done:
 	case <-time.After(5 * time.Second):
-		close(release)
-		t.Fatal("the backup never answered")
+		t.Fatal("the request never ended")
 	}
-	cancel()
-	<-done
-	// Let the gateway see the caller leave before the rest arrives.
-	time.Sleep(100 * time.Millisecond)
-	close(release)
 
 	waitForSpend(t, h, "backup", "gpt-5-mini", 7)
 	requests := func(status string) float64 {
