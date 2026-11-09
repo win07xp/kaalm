@@ -785,6 +785,9 @@ func readsOnAfterCallerLeft(res forwardResult) bool {
 // events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
 // token reservation settled, after the stream ends (see settleRelay). A
+// stream counts as finished once the adapter reports its final event read,
+// even when the caller leaves or the read fails after it: its usage is then
+// complete. A
 // stream that ends without usage settles at zero spend, keeps its token
 // reservation, and is reported by usageMissing. When the upstream read fails
 // after the status is sent (the idle bound passed, or the connection broke),
@@ -805,11 +808,14 @@ func (s *Server) relayStream(
 	flusher, _ := w.(http.Flusher)
 
 	var usage Usage
+	finalRead := false
 	// Settle on EVERY exit, including the early return on a downstream
 	// write error: near a hard ceiling, dropping accumulated usage would
 	// under-settle exactly where undercounting voids the cap, and a held
 	// admission slot must always free.
-	defer func() { s.settleRelay(usage, outcome, provider, namespace, workload, modelID, settle, reservation) }()
+	defer func() {
+		s.settleRelay(usage, outcome == outcomeOK || finalRead, provider, namespace, workload, modelID, settle, reservation)
+	}()
 
 	ef := &eventFlusher{r: resp.Body, f: flusher}
 	scanner := bufio.NewScanner(ef)
@@ -831,7 +837,9 @@ func (s *Server) relayStream(
 		line := scanner.Bytes()
 		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 			// Usage comes from the upstream's own events, before translation.
-			adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage)
+			if adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage) {
+				finalRead = true
+			}
 			bodyLog("llm stream", data)
 		}
 		if translator == nil {
@@ -882,18 +890,21 @@ func (s *Server) relayStream(
 
 // settleRelay settles a relay when it ends, on every exit: the usage it
 // read, or, when it read none, zero spend reported by usageMissing, with the
-// token reservation kept as the call's charge. A relay whose outcome is not
-// ok (the caller left, or the provider broke the answer or let it go idle)
-// may have sent output its usage read does not count, so its token
-// reservation settles at the larger of that usage and what it took; spend
-// still settles the usage read. A held admission slot always frees. Every
-// 2xx settles here.
+// token reservation kept as the call's charge. finished reports that the
+// relay finished cleanly: its outcome is ok, or, for a stream, the
+// provider's final event was read, whatever happened after it. A relay that
+// did not (outcome client_closed or error: the caller left, the provider
+// broke the answer or let it go idle, or a crossing answer read in full
+// went over the hold limit or could not be translated) may have sent output
+// its usage read does not count, so its token reservation settles at the
+// larger of that usage and what it took; spend still settles the usage
+// read. A held admission slot always frees. Every 2xx settles here.
 func (s *Server) settleRelay(
-	usage Usage, outcome string, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
+	usage Usage, finished bool, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
 	settle func(float64), reservation *tokenReservation,
 ) {
 	if !usage.isZero() {
-		if outcome != outcomeOK {
+		if !finished {
 			// Settled first, so the settle in settleUsage does nothing.
 			reservation.settleAtLeast(usage.InputTokens + usage.OutputTokens)
 		}
@@ -997,7 +1008,7 @@ func (s *Server) relayJSON(
 	w.WriteHeader(resp.StatusCode)
 	reader := adapter.usageReader()
 	defer func() {
-		s.settleRelay(reader.usage, outcome, provider, namespace, workload, modelID, settle, reservation)
+		s.settleRelay(reader.usage, outcome == outcomeOK, provider, namespace, workload, modelID, settle, reservation)
 	}()
 
 	sink := &flushWriter{w: w}
@@ -1078,7 +1089,7 @@ func (s *Server) relayCrossing(
 ) (outcome string) {
 	reader := servingAdapter.usageReader()
 	defer func() {
-		s.settleRelay(reader.usage, outcome, provider, namespace, workload, modelID, settle, reservation)
+		s.settleRelay(reader.usage, outcome == outcomeOK, provider, namespace, workload, modelID, settle, reservation)
 	}()
 
 	hold := &holdBuffer{limit: limit}

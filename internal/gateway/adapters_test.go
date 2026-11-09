@@ -247,11 +247,46 @@ func TestAccumulateStreamUsage_Malformed(t *testing.T) {
 	}
 }
 
+// TestAccumulateStreamUsage_FinalEvent: each adapter reports the stream's
+// final event (Anthropic message_stop, OpenAI [DONE], a Vertex chunk whose
+// candidate carries a finishReason) and no other.
+func TestAccumulateStreamUsage_FinalEvent(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		adapter providerAdapter
+		data    string
+		final   bool
+	}{
+		{"anthropic message_stop", anthropicAdapter{}, `{"type":"message_stop"}`, true},
+		{"anthropic message_delta", anthropicAdapter{}, `{"type":"message_delta","usage":{"output_tokens":3}}`, false},
+		{"anthropic text naming message_stop", anthropicAdapter{},
+			`{"type":"content_block_delta","delta":{"type":"text_delta","text":"message_stop"}}`, false},
+		{"openai [DONE]", openaiAdapter{}, `[DONE]`, true},
+		{"openai usage chunk", openaiAdapter{}, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}`, false},
+		{"vertex finishReason", vertexAdapter{},
+			`{"candidates":[{"content":{},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`, true},
+		{"vertex content chunk", vertexAdapter{}, `{"candidates":[{"content":{}}]}`, false},
+		{"vertex null finishReason", vertexAdapter{}, `{"candidates":[{"finishReason":null}]}`, false},
+		{"vertex usage only", vertexAdapter{}, `{"usageMetadata":{"promptTokenCount":5}}`, false},
+	} {
+		var u Usage
+		if got := c.adapter.accumulateStreamUsage([]byte(c.data), &u); got != c.final {
+			t.Errorf("%s: final = %v, want %v", c.name, got, c.final)
+		}
+	}
+	// A finishReason of an unexpected type still reads the chunk's usage.
+	var u Usage
+	if !(vertexAdapter{}).accumulateStreamUsage(
+		[]byte(`{"candidates":[{"finishReason":1}],"usageMetadata":{"promptTokenCount":5}}`), &u) || u.InputTokens != 5 {
+		t.Errorf("vertex numeric finishReason: usage %+v", u)
+	}
+}
+
 // referenceOpenAIStreamUsage is openaiAdapter.accumulateStreamUsage without
 // its prefilter: every payload decoded.
-func referenceOpenAIStreamUsage(data []byte, u *Usage) {
+func referenceOpenAIStreamUsage(data []byte, u *Usage) bool {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
-		return
+		return true
 	}
 	var chunk struct {
 		Usage *struct {
@@ -260,15 +295,16 @@ func referenceOpenAIStreamUsage(data []byte, u *Usage) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &chunk); err != nil || chunk.Usage == nil {
-		return
+		return false
 	}
 	u.InputTokens = chunk.Usage.PromptTokens
 	u.OutputTokens = chunk.Usage.CompletionTokens
+	return false
 }
 
 // referenceAnthropicStreamUsage is anthropicAdapter.accumulateStreamUsage
 // without its prefilter.
-func referenceAnthropicStreamUsage(data []byte, u *Usage) {
+func referenceAnthropicStreamUsage(data []byte, u *Usage) bool {
 	var evt struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -282,7 +318,7 @@ func referenceAnthropicStreamUsage(data []byte, u *Usage) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &evt); err != nil {
-		return
+		return false
 	}
 	switch evt.Type {
 	case "message_start":
@@ -294,7 +330,10 @@ func referenceAnthropicStreamUsage(data []byte, u *Usage) {
 		if tools := serverToolCounts(evt.Usage.ServerToolUse); tools != nil {
 			u.ServerTools = tools
 		}
+	case "message_stop":
+		return true
 	}
+	return false
 }
 
 // streamUsageSeeds are payloads around the prefilters' edges.
@@ -313,9 +352,12 @@ var streamUsageSeeds = []string{
 	`{"type":"content_block_delta","delta":{"type":"text_delta","text":"message_start"}}`,
 	`{"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
 	`{"TYPE":"message_delta","USAGE":{"OUTPUT_TOKENS":4}}`,
+	`{"type":"message_stop"}`,
+	`{"type":"message_\u0073top"}`,
+	`{"type":"content_block_delta","delta":{"type":"text_delta","text":"message_stop"}}`,
 }
 
-func fuzzStreamUsage(f *testing.F, got, want func([]byte, *Usage)) {
+func fuzzStreamUsage(f *testing.F, got, want func([]byte, *Usage) bool) {
 	for _, s := range streamUsageSeeds {
 		f.Add([]byte(s))
 	}
@@ -324,10 +366,13 @@ func fuzzStreamUsage(f *testing.F, got, want func([]byte, *Usage)) {
 			g := prior
 			w := prior
 			g.ServerTools, w.ServerTools = maps.Clone(prior.ServerTools), maps.Clone(prior.ServerTools)
-			got(data, &g)
-			want(data, &w)
+			gotFinal := got(data, &g)
+			wantFinal := want(data, &w)
 			if !reflect.DeepEqual(g, w) {
 				t.Fatalf("payload %q from %+v: got %+v, want %+v", data, prior, g, w)
+			}
+			if gotFinal != wantFinal {
+				t.Fatalf("payload %q: final = %v, want %v", data, gotFinal, wantFinal)
 			}
 		}
 	})

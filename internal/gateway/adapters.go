@@ -52,8 +52,9 @@ type providerAdapter interface {
 	// fed the body's bytes as the relay copies them.
 	usageReader() *usageReader
 	// accumulateStreamUsage inspects one SSE data payload and folds any usage
-	// it carries into u.
-	accumulateStreamUsage(data []byte, u *Usage)
+	// it carries into u. It reports whether the payload is the stream's
+	// final event, after which the stream's usage is complete.
+	accumulateStreamUsage(data []byte, u *Usage) (final bool)
 	// streamUsageOption reports whether a streaming request in this format
 	// needs stream_options.include_usage set for the stream to carry usage.
 	streamUsageOption() bool
@@ -146,10 +147,10 @@ func serverToolCounts(raw json.RawMessage) map[string]int64 {
 
 // accumulateStreamUsage: input_tokens arrive on message_start, cumulative
 // output_tokens (and cumulative server_tool_use counts) on message_delta.
-// message_stop carries no usage.
-func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
-	if !mayBeAnthropicUsageEvent(data) {
-		return
+// message_stop carries no usage and is the final event.
+func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
+	if !mayBeAnthropicStreamEvent(data) {
+		return false
 	}
 	var evt struct {
 		Type    string `json:"type"`
@@ -164,7 +165,7 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &evt); err != nil {
-		return
+		return false
 	}
 	switch evt.Type {
 	case "message_start":
@@ -177,17 +178,21 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 		if tools := serverToolCounts(evt.Usage.ServerToolUse); tools != nil {
 			u.ServerTools = tools
 		}
+	case "message_stop":
+		return true
 	}
+	return false
 }
 
-// mayBeAnthropicUsageEvent reports whether an Anthropic stream payload can
-// be a message_start or message_delta event, the only events whose usage
+// mayBeAnthropicStreamEvent reports whether an Anthropic stream payload can
+// be a message_start, message_delta, or message_stop event, the only events
 // accumulateStreamUsage reads, so the other events (the text deltas) skip
 // the decode. The decoder compares the type value exactly, so it must hold
-// one of the two names as written, or a \u escape that could spell one.
-func mayBeAnthropicUsageEvent(data []byte) bool {
+// one of the three names as written, or a \u escape that could spell one.
+func mayBeAnthropicStreamEvent(data []byte) bool {
 	return bytes.Contains(data, []byte("message_start")) ||
 		bytes.Contains(data, []byte("message_delta")) ||
+		bytes.Contains(data, []byte("message_stop")) ||
 		bytes.Contains(data, []byte(`\u`))
 }
 
@@ -211,13 +216,13 @@ func (openaiAdapter) usageReader() *usageReader { return newOpenAIUsageReader() 
 
 // accumulateStreamUsage: a usage object appears in the final chunk preceding
 // [DONE], present only when stream_options.include_usage was set (which
-// the proxy sets on every streaming request).
-func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
+// the proxy sets on every streaming request). [DONE] is the final event.
+func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
-		return
+		return true
 	}
 	if !mayCarryOpenAIUsage(data) {
-		return
+		return false
 	}
 	var chunk struct {
 		Usage *struct {
@@ -226,10 +231,11 @@ func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &chunk); err != nil || chunk.Usage == nil {
-		return
+		return false
 	}
 	u.InputTokens = chunk.Usage.PromptTokens
 	u.OutputTokens = chunk.Usage.CompletionTokens
+	return false
 }
 
 // mayCarryOpenAIUsage reports whether an OpenAI stream payload can hold a

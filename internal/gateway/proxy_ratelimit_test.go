@@ -432,7 +432,79 @@ func TestProxy_TokensPerMinuteCutAnthropicStreamKeepsReservation(t *testing.T) {
 			for i := 0; i < 100 && h.spend.Total("team-a", "prov", "m1").InputTokens != 7; i++ {
 				time.Sleep(10 * time.Millisecond)
 			}
+			// Spend is recorded after the settle, so it shows the relay
+			// settled and did not just leave the reservation in place.
+			if got := h.spend.Total("team-a", "prov", "m1").InputTokens; got != 7 {
+				t.Fatalf("spend input tokens = %d, want 7: the relay never settled", got)
+			}
 			waitTokenLevel(t, h, float64(1000-reserve))
+		})
+	}
+}
+
+// TestProxy_TokensPerMinuteCallerLeftAfterFinalEventSettlesUsage: a stream
+// whose final event (OpenAI [DONE], Anthropic message_stop) the gateway has
+// read is finished, even when the caller closes before the provider ends the
+// body. Its usage is complete, so it settles at that usage, not at its
+// reservation.
+func TestProxy_TokensPerMinuteCallerLeftAfterFinalEventSettlesUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name, provType, path, final string
+		events                      []string
+	}{
+		{
+			name: "openai", provType: "openai", path: "/v1/chat/completions", final: "[DONE]",
+			events: []string{
+				`data: {"choices":[{"delta":{"content":"hi"}}]}`,
+				`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":100}}`,
+				`data: [DONE]`,
+			},
+		},
+		{
+			name: "anthropic", provType: "anthropic", path: "/v1/messages", final: "message_stop",
+			events: []string{
+				"event: message_start\n" + `data: {"type":"message_start","message":{"usage":{"input_tokens":100}}}`,
+				"event: content_block_delta\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+				"event: message_delta\n" + `data: {"type":"message_delta","usage":{"output_tokens":100}}`,
+				"event: message_stop\n" + `data: {"type":"message_stop"}`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := tpmHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				writeSSE(w, tc.events...)
+				// The answer is complete, but the body stays open until the
+				// caller leaves.
+				<-r.Context().Done()
+			})
+			h.store.providers["prov"].Spec.Type = tc.provType
+			cert := agentCert(t, h.ca)
+			body := map[string]any{"model": "prov/m1", "stream": true, "max_tokens": 400}
+
+			resp := postJSON(t, h.client(&cert), h.url(tc.path), body, nil)
+			if resp.StatusCode != http.StatusOK {
+				_ = resp.Body.Close()
+				t.Fatalf("stream = %d, want 200", resp.StatusCode)
+			}
+			br := bufio.NewReader(resp.Body)
+			for {
+				line, err := br.ReadString('\n')
+				if err != nil {
+					t.Fatalf("stream ended before %s: %v", tc.final, err)
+				}
+				if strings.Contains(line, tc.final) {
+					break
+				}
+			}
+			_ = resp.Body.Close()
+			for i := 0; i < 100 && h.spend.Total("team-a", "prov", "m1").InputTokens != 100; i++ {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got := h.spend.Total("team-a", "prov", "m1").InputTokens; got != 100 {
+				t.Fatalf("spend input tokens = %d, want 100: the relay never settled", got)
+			}
+			waitTokenLevel(t, h, 800)
 		})
 	}
 }
