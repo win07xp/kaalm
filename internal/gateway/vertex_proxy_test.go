@@ -23,11 +23,13 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -330,6 +332,69 @@ func TestLLMProxy_VertexTokenRejected(t *testing.T) {
 			t.Errorf("%d calls reached the Vertex upstream, want 0", len(calls))
 		}
 	})
+}
+
+// A 401 from Vertex means the token is bad: the caller gets the usual
+// refusal and the next request mints a new token. A 403 means a valid token
+// lacks permission, which a new token does not fix, so the token stays.
+func TestLLMProxy_VertexTokenRefused(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		status       int
+		wantMints    int
+		wantNewToken bool
+	}{
+		{"401 mints again on the next request", http.StatusUnauthorized, 2, true},
+		{"403 keeps the token", http.StatusForbidden, 1, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var mints, generates atomic.Int64
+			h, cert := vertexHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/token-n") {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = fmt.Fprintf(w, `{"access_token":"tok-%d","token_type":"Bearer","expires_in":3600}`, mints.Add(1))
+					return
+				}
+				if generates.Add(1) == 1 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(c.status)
+					_, _ = w.Write([]byte(`{"error":{"message":"refused"}}`))
+					return
+				}
+				vertexJSON(w, r)
+			})
+			h.store.creds["prov"] = vertexServiceAccountJSON(t, h.upstream.URL+"/token-n")
+
+			resp := postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(), nil)
+			if resp.StatusCode != http.StatusBadGateway {
+				t.Errorf("first call = %d, want 502", resp.StatusCode)
+			}
+			if got := errType(t, resp); got != errProviderError {
+				t.Errorf("first call error type %q, want %q", got, errProviderError)
+			}
+			resp = postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(), nil)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("second call = %d, want 200", resp.StatusCode)
+			}
+
+			minted, calls := vertexCalls(capturedUpstream(h))
+			if len(minted) != c.wantMints || len(calls) != 2 {
+				t.Fatalf("upstream saw %d mints and %d calls, want %d and 2", len(minted), len(calls), c.wantMints)
+			}
+			first, second := calls[0].header.Get("Authorization"), calls[1].header.Get("Authorization")
+			if first != "Bearer tok-1" {
+				t.Errorf("first call Authorization %q, want Bearer tok-1", first)
+			}
+			want := first
+			if c.wantNewToken {
+				want = "Bearer tok-2"
+			}
+			if second != want {
+				t.Errorf("second call Authorization %q, want %q", second, want)
+			}
+		})
+	}
 }
 
 // A Secret value that is not a service-account key is refused like a

@@ -476,7 +476,8 @@ func (s *Server) candidateRequest(
 // errorBodyLimit and closed, which releases the watchdog. A credential the store
 // refuses is a connect-class failure, logged at most once a minute per provider.
 // For google-vertex the credential is a service-account key, exchanged for
-// an access token first (see vertexCredential).
+// an access token first (see vertexCredential), and a 401 forgets the token
+// the attempt sent.
 func (s *Server) forwardOnce(
 	ctx context.Context, r *http.Request, provider *kaalmv1beta1.ModelProvider,
 	outBody []byte, inboundPath string, adapter, typeAdapter providerAdapter, modelID string,
@@ -519,6 +520,13 @@ func (s *Server) forwardOnce(
 	dog.kick()
 	resp.Body = dog.watch(resp.Body)
 
+	// A 401 means Vertex refused this token, so the next request mints
+	// instead of resending it for up to 55 minutes. A 403 is a valid token
+	// that lacks permission, which a new token does not fix, so it stays.
+	// Only the token this attempt sent is dropped, so a newer one stays.
+	if provider.Spec.Type == providerTypeVertex && resp.StatusCode == http.StatusUnauthorized {
+		s.vertexTokens.forget(provider.Name, credential)
+	}
 	fallback, class := isFallbackable(resp.StatusCode)
 	fr := forwardResult{resp: resp, fallilable: fallback, class: class, provider: provider.Name, chosen: provider}
 	if class == classNone {

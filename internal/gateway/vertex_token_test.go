@@ -229,3 +229,26 @@ func TestVertexTokenCache(t *testing.T) {
 		}
 	})
 }
+
+// A refused token is forgotten, so the next read mints. A late refusal of the
+// old token leaves the newer one in place.
+func TestVertexTokenCache_Forget(t *testing.T) {
+	e := newTokenEndpoint(t, 3600, false)
+	c := &vertexTokenCache{}
+	key := vertexServiceAccountJSON(t, e.srv.URL+"/token")
+	expect := func(want string, wantMints int64) {
+		t.Helper()
+		got, err := c.token(context.Background(), e.srv.Client(), "prov", key, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want || e.mints.Load() != wantMints {
+			t.Errorf("got %q after %d mints, want %q after %d", got, e.mints.Load(), want, wantMints)
+		}
+	}
+	expect("tok-1", 1)
+	c.forget("prov", "tok-1")
+	expect("tok-2", 2)
+	c.forget("prov", "tok-1")
+	expect("tok-2", 2)
+}
