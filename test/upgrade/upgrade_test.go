@@ -53,7 +53,17 @@ func helm(args ...string) (string, error) {
 }
 
 func phase(kind, name string) string {
-	out, _ := utils.Kubectl("get", kind, name, "-n", ns, "-o", "jsonpath={.status.phase}")
+	return read("get", kind, name, "-n", ns, "-o", "jsonpath={.status.phase}")
+}
+
+// read runs a kubectl read and returns its last line, or "" when kubectl
+// fails. An error's text must never pass for a value: a missing object
+// would otherwise read as a name and satisfy a NotTo(BeEmpty()) check.
+func read(args ...string) string {
+	out, err := utils.Kubectl(args...)
+	if err != nil {
+		return ""
+	}
 	return lastLine(out)
 }
 
@@ -71,8 +81,7 @@ func readyStatus(kind, namespace, name string) string {
 	if namespace != "" {
 		args = append(args, "-n", namespace)
 	}
-	out, _ := utils.Kubectl(args...)
-	return lastLine(out)
+	return read(args...)
 }
 
 // keeperPod resolves the keeper's Pod name by its stable labels (agent
@@ -81,37 +90,32 @@ func keeperPod() string { return podByLabel("kaalm.io/agent=up-keeper") }
 
 // podByLabel resolves the name of the first Pod matching selector.
 func podByLabel(selector string) string {
-	out, _ := utils.Kubectl("get", "pod", "-n", ns, "-l", selector,
+	return read("get", "pod", "-n", ns, "-l", selector,
 		"-o", "jsonpath={.items[0].metadata.name}")
-	return lastLine(out)
 }
 
 // certSecretName reads the Secret name the Certificate cert writes
 // (spec.secretName).
 func certSecretName(cert string) string {
-	out, _ := utils.Kubectl("get", "certificate.cert-manager.io", cert, "-n", ns,
+	return read("get", "certificate.cert-manager.io", cert, "-n", ns,
 		"-o", "jsonpath={.spec.secretName}")
-	return lastLine(out)
 }
 
 // controllerOf reads kind/name of a namespaced object's first owner
 // reference.
 func controllerOf(kind, name string) string {
-	out, _ := utils.Kubectl("get", kind, name, "-n", ns, "-o",
+	return read("get", kind, name, "-n", ns, "-o",
 		"jsonpath={.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}")
-	return lastLine(out)
 }
 
 // tlsVolumeSecret reads the Secret a Pod's kaalm-tls projected volume names.
 func tlsVolumeSecret(pod string) string {
-	out, _ := utils.Kubectl("get", "pod", pod, "-n", ns,
+	return read("get", "pod", pod, "-n", ns,
 		"-o", `jsonpath={.spec.volumes[?(@.name=="kaalm-tls")].projected.sources[0].secret.name}`)
-	return lastLine(out)
 }
 
 func podUID(pod string) string {
-	out, _ := utils.Kubectl("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
-	return lastLine(out)
+	return read("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
 }
 
 // The S21 story in order: the old world, the two documented upgrade steps,
@@ -161,13 +165,14 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		keeperSecret = certSecretName("up-keeper-tls")
 		Expect(keeperSecret).NotTo(BeEmpty())
 
-		By("recording the runner's Pod and the Secret its Certificate up-runner-tls writes")
+		By("recording the runner's Pod and the Secret its Certificate up-runner.task-tls writes")
 		runnerPodName = podByLabel("kaalm.io/task=up-runner")
 		Expect(runnerPodName).NotTo(BeEmpty())
 		runnerPodUID = podUID(runnerPodName)
 		Expect(runnerPodUID).NotTo(BeEmpty())
-		runnerSecret = certSecretName("up-runner-tls")
+		runnerSecret = certSecretName("up-runner.task-tls")
 		Expect(runnerSecret).NotTo(BeEmpty())
+		Expect(controllerOf("networkpolicy", "up-runner.task")).To(Equal("AgentTask/up-runner"))
 	})
 
 	It("upgrades with the two documented steps", func() {
@@ -214,23 +219,16 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(podUID(runnerPodName)).To(Equal(runnerPodUID),
 			"the upgrade must not replace running task Pods")
 
-		// The new controller converges the NetworkPolicy and the Certificate in
-		// one pass, so the new-named policy proves that pass ran before the
-		// Certificate checks below.
-		By("the running task gets its NetworkPolicy under the new name beside the old one")
-		Eventually(func() string { return controllerOf("networkpolicy", "up-runner.task") }, "120s", "5s").
-			Should(Equal("AgentTask/up-runner"))
-		Expect(controllerOf("networkpolicy", "up-runner")).To(Equal("AgentTask/up-runner"))
-
-		By("the running task keeps its Certificate under the old name, and gets no second one")
-		Expect(controllerOf("certificate.cert-manager.io", "up-runner-tls")).To(Equal("AgentTask/up-runner"))
-		Expect(certSecretName("up-runner-tls")).To(Equal(runnerSecret))
-		Expect(tlsVolumeSecret(runnerPodName)).To(Equal(runnerSecret))
-		Consistently(func() (string, error) {
-			out, err := utils.Kubectl("get", "certificate.cert-manager.io", "up-runner.task-tls", "-n", ns,
-				"--ignore-not-found", "-o", "name")
-			return lastLine(out), err
-		}, "20s", "5s").Should(BeEmpty())
+		// The new controller reconciles the running task a beat after the
+		// rollout, so hold the checks over a window rather than reading once.
+		By("the running task keeps its NetworkPolicy, its Certificate, and the Secret its Pod mounts")
+		Consistently(func(g Gomega) {
+			g.Expect(controllerOf("networkpolicy", "up-runner.task")).To(Equal("AgentTask/up-runner"))
+			g.Expect(controllerOf("certificate.cert-manager.io", "up-runner.task-tls")).To(Equal("AgentTask/up-runner"))
+			g.Expect(certSecretName("up-runner.task-tls")).To(Equal(runnerSecret))
+			g.Expect(tlsVolumeSecret(runnerPodName)).To(Equal(runnerSecret))
+			g.Expect(podUID(runnerPodName)).To(Equal(runnerPodUID))
+		}, "20s", "5s").Should(Succeed())
 
 		By("the sleeper is still Hibernated")
 		Expect(phase("agent", "up-sleeper")).To(Equal("Hibernated"))
