@@ -177,8 +177,9 @@ the request limit:
   request's output cap, or the model's `maxOutputTokens` when the request sets
   no cap. When the call ends, its real usage replaces the estimate. A call that
   does not finish cleanly (the caller leaves, or the provider breaks the
-  answer) is charged the larger of its usage and the estimate, because the
-  usage read before the cut can miss output already sent. Concurrent streams
+  answer; a stream that already sent its final event counts as finished) is
+  charged the larger of its usage and the estimate, because the usage read
+  before the cut can miss output already sent. Concurrent streams
   therefore cannot together exceed the limit by more than one call per gateway
   replica.
 - On a token-limited provider, declare `maxOutputTokens` on each model, or have
