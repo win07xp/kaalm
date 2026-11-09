@@ -294,46 +294,69 @@ func needsStreamOptions(a providerAdapter, f requestFields) bool {
 // requestOutputCap returns the output cap a request body sets: the first of
 // the top-level max_completion_tokens, max_tokens, and
 // generationConfig.maxOutputTokens (the Vertex shape, which Vertex also
-// takes as generation_config and max_output_tokens) that holds a positive
-// number, or false when none does. Names match exactly, unescaped: the
-// gateway never rewrites these members, and a provider that matches names
-// exactly would not apply a case variant, so a case variant is no cap and
+// takes as generation_config and max_output_tokens) that sets one, or false
+// when none does. The gateway never rewrites these members, so the cap must
+// hold for an upstream that matches names exactly and for one that folds
+// case and keeps the last copy, as encoding/json does. A member sets a cap
+// only when a copy spelled exactly holds a positive number: an exact-match
+// upstream applies no case variant, so a case variant alone is no cap and
 // the call reserves the model's maxOutputTokens or a replica share instead.
-// A repeated member, in either Vertex spelling, counts by its last copy.
-// body must already pass json.Valid. The token rate limit reserves this cap
-// at admission; the proxy calls it only for a provider with tokensPerMinute,
-// so the unlimited path pays nothing.
+// The cap is then the largest positive number among all the member's
+// copies, exact or case variant, since a case-folding upstream may apply
+// any of them. body must already pass json.Valid. The token rate limit
+// reserves this cap at admission; the proxy calls it only for a provider
+// with tokensPerMinute, so the unlimited path pays nothing.
 func requestOutputCap(body []byte) (int64, bool) {
 	open := skipJSONSpace(body, 0)
 	if body[open] != '{' {
 		return 0, false
 	}
-	var completion, maxTokens, generation []byte
+	var completion, maxTokens, generation outputCap
 	forEachJSONMember(body, open, func(name string, start, end int) bool {
-		switch name {
-		case "max_completion_tokens":
-			completion = body[start:end]
-		case "max_tokens":
-			maxTokens = body[start:end]
-		case "generationConfig", "generation_config":
-			generation = nil
-			if body[start] == '{' {
-				forEachJSONMember(body, start, func(name string, s, e int) bool {
-					if name == "maxOutputTokens" || name == "max_output_tokens" {
-						generation = body[s:e]
-					}
-					return true
-				})
+		switch {
+		case jsonNameMatches(name, "max_completion_tokens"):
+			completion.add(name == "max_completion_tokens", body[start:end])
+		case jsonNameMatches(name, "max_tokens"):
+			maxTokens.add(name == "max_tokens", body[start:end])
+		case jsonNameMatches(name, "generationConfig"), jsonNameMatches(name, "generation_config"):
+			if body[start] != '{' {
+				break
 			}
+			outerExact := name == "generationConfig" || name == "generation_config"
+			forEachJSONMember(body, start, func(name string, s, e int) bool {
+				if jsonNameMatches(name, "maxOutputTokens") || jsonNameMatches(name, "max_output_tokens") {
+					generation.add(outerExact && (name == "maxOutputTokens" || name == "max_output_tokens"), body[s:e])
+				}
+				return true
+			})
 		}
 		return true
 	})
-	for _, token := range [...][]byte{completion, maxTokens, generation} {
-		if n, ok := jsonCapValue(token); ok {
-			return n, true
+	for _, c := range [...]outputCap{completion, maxTokens, generation} {
+		if c.exact {
+			return c.largest, true
 		}
 	}
 	return 0, false
+}
+
+// outputCap gathers the copies of one output cap member: largest is the
+// largest cap any copy holds, and exact reports that a copy spelled exactly
+// holds one.
+type outputCap struct {
+	largest int64
+	exact   bool
+}
+
+// add records one copy of the member, spelled exactly or not, with its
+// value token. A value that is no cap (see jsonCapValue) is ignored.
+func (c *outputCap) add(exact bool, token []byte) {
+	n, ok := jsonCapValue(token)
+	if !ok {
+		return
+	}
+	c.largest = max(c.largest, n)
+	c.exact = c.exact || exact
 }
 
 // jsonCapValue reads an output cap value: a JSON number that is finite and
