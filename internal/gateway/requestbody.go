@@ -303,7 +303,10 @@ func needsStreamOptions(a providerAdapter, f requestFields) bool {
 // the call reserves the model's maxOutputTokens or a replica share instead.
 // The cap is then the largest positive number among all the member's
 // copies, exact or case variant, since a case-folding upstream may apply
-// any of them. body must already pass json.Valid. The token rate limit
+// any of them. A copy in any spelling that holds no cap (0, a negative
+// number, null, a string, or a generation config with no inner cap) makes
+// the whole member no cap, since an upstream that keeps that copy applies
+// none. body must already pass json.Valid. The token rate limit
 // reserves this cap at admission; the proxy calls it only for a provider
 // with tokensPerMinute, so the unlimited path pays nothing.
 func requestOutputCap(body []byte) (int64, bool) {
@@ -320,20 +323,32 @@ func requestOutputCap(body []byte) (int64, bool) {
 			maxTokens.add(name == "max_tokens", body[start:end])
 		case jsonNameMatches(name, "generationConfig"), jsonNameMatches(name, "generation_config"):
 			if body[start] != '{' {
+				generation.noCap = true
 				break
 			}
+			// This outer copy must hold an inner cap, and an exact-match
+			// upstream that keeps an exactly spelled outer copy reads only
+			// an exactly spelled inner cap in it.
 			outerExact := name == "generationConfig" || name == "generation_config"
+			var inner outputCap
 			forEachJSONMember(body, start, func(name string, s, e int) bool {
 				if jsonNameMatches(name, "maxOutputTokens") || jsonNameMatches(name, "max_output_tokens") {
-					generation.add(outerExact && (name == "maxOutputTokens" || name == "max_output_tokens"), body[s:e])
+					inner.add(name == "maxOutputTokens" || name == "max_output_tokens", body[s:e])
 				}
 				return true
 			})
+			switch {
+			case inner.noCap || inner.largest == 0 || (outerExact && !inner.exact):
+				generation.noCap = true
+			default:
+				generation.largest = max(generation.largest, inner.largest)
+				generation.exact = generation.exact || (outerExact && inner.exact)
+			}
 		}
 		return true
 	})
 	for _, c := range [...]outputCap{completion, maxTokens, generation} {
-		if c.exact {
+		if c.exact && !c.noCap {
 			return c.largest, true
 		}
 	}
@@ -341,18 +356,21 @@ func requestOutputCap(body []byte) (int64, bool) {
 }
 
 // outputCap gathers the copies of one output cap member: largest is the
-// largest cap any copy holds, and exact reports that a copy spelled exactly
-// holds one.
+// largest cap any copy holds, exact reports that a copy spelled exactly
+// holds one, and noCap reports that some copy, in any spelling, holds no
+// cap.
 type outputCap struct {
 	largest int64
 	exact   bool
+	noCap   bool
 }
 
 // add records one copy of the member, spelled exactly or not, with its
-// value token. A value that is no cap (see jsonCapValue) is ignored.
+// value token. A value that is no cap (see jsonCapValue) sets noCap.
 func (c *outputCap) add(exact bool, token []byte) {
 	n, ok := jsonCapValue(token)
 	if !ok {
+		c.noCap = true
 		return
 	}
 	c.largest = max(c.largest, n)
