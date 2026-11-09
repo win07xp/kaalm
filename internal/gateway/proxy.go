@@ -784,20 +784,19 @@ func readsOnAfterCallerLeft(res forwardResult) bool {
 // relayStream forwards SSE events to the caller as each one completes, and
 // events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
-// token reservation settled, after the stream ends (see settleRelay). A
-// stream counts as finished once the adapter reports its final event read,
-// even when the caller leaves or the read fails after it: its usage is then
-// complete. A
+// token reservation settled, after the stream ends (see settleRelay). A stream
+// counts as finished once the adapter reports its final event read, even when
+// the caller leaves or the read fails after it: its usage is then complete. A
 // stream that ends without usage settles at zero spend, keeps its token
 // reservation, and is reported by usageMissing. When the upstream read fails
 // after the status is sent (the idle bound passed, or the connection broke),
-// the relay ends the stream with one error event in the caller's format, so
-// the agent can tell a truncated stream from a complete one. It returns the
-// outcome for kaalm_llm_requests_total and marks the llm.request span (ctx)
-// the same way: ok, error for a stream the provider broke or let go idle, or
-// client_closed for a caller that left, which gets no event. ctx derives
-// from the caller's request context, and the upstream read from ctx, so
-// ctx.Err() is set only when the caller left.
+// the relay ends the stream with one error event in the caller's format, so the
+// agent can tell a truncated stream from a complete one. It returns the outcome
+// for kaalm_llm_requests_total and marks the llm.request span (ctx) the same
+// way: ok, error for a stream the provider broke or let go idle, or
+// client_closed for a caller that left, which gets no event. ctx derives from
+// the caller's request context, and the upstream read from ctx, so ctx.Err() is
+// set only when the caller left.
 func (s *Server) relayStream(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
 	translator llmtranslate.Stream, callerFormat llmtranslate.Format, namespace, workload string,
