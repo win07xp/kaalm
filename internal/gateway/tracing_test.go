@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
@@ -87,14 +88,29 @@ func TestTracing_OneMessageOneConnectedTrace(t *testing.T) {
 		t.Fatalf("sync delivery = %d", resp.StatusCode)
 	}
 
+	// The fake agent can read the whole answer before the gateway's handler
+	// returns and ends llm.request, so wait for every span to end.
 	byName := map[string]tracetest.SpanStub{}
-	for _, s := range exp.GetSpans() {
-		byName[s.Name] = s
-	}
-	for _, name := range []string{"channel.receive", "agent.deliver", "llm.request", "llm.forward"} {
-		if _, ok := byName[name]; !ok {
-			t.Fatalf("span %s missing; got %v", name, spanNames(exp))
+	want := []string{"channel.receive", "agent.deliver", "llm.request", "llm.forward"}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		for _, s := range exp.GetSpans() {
+			byName[s.Name] = s
 		}
+		missing := ""
+		for _, name := range want {
+			if _, ok := byName[name]; !ok {
+				missing = name
+				break
+			}
+		}
+		if missing == "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("span %s missing; got %v", missing, spanNames(exp))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	traceID := byName["channel.receive"].SpanContext.TraceID()
 	for name, s := range byName {
