@@ -197,17 +197,44 @@ Rate limits are enforced at the gateway. Limits come from `ModelProvider.spec.ra
 | Request bucket | `requestsPerMinute` | Requests | It holds at least one request |
 | Token bucket | `tokensPerMinute` | Input plus output LLM tokens | It holds more than 0 tokens |
 
-An unset or zero limit disables its bucket. A request refused by either bucket gets `429 rate_limited` with a computed `Retry-After` ([Retry-After](#retry-after)). The rejection is retryable and does not fall back.
+An unset or zero limit disables its bucket. An admitted request also reserves an estimate of its tokens ([The token limit](#the-token-limit)). A request refused by either bucket gets `429 rate_limited` with a computed `Retry-After` ([Retry-After](#retry-after)). The rejection is retryable and does not fall back.
 
 ### The token limit
 
-The token limit is enforced after the fact, because the gateway cannot know a call's token count before the provider answers.
+The provider reports a call's tokens only when it answers. If the gateway counted them then, every call admitted on a positive bucket would run, however many started together. So the gateway reserves an estimate of the call's tokens when it admits the call, and settles the reservation when the call ends.
 
-1. **Admit.** The gateway admits a request while the token bucket is above 0. The request does not need a whole token, and admission consumes no tokens. The token check runs first, and the request check then takes one request token, so a request the token bucket refuses keeps its request token.
-2. **Debit.** After the call, the gateway subtracts the settled input plus output tokens from the token bucket that admitted the request: the primary provider's bucket for the requested model, after any budget `degrade` rewrite, even when a fallback provider served the call. The debit happens when the relay ends, for every answer ([Request flow](request-handling.md#request-flow), step 10).
-3. **Block.** A large call blocks the next request, not itself.
+1. **Admit.** The gateway admits a request while the token bucket is above 0. The request does not need a whole token. The token check runs first, and the request check then takes one request token, so a request the token bucket refuses keeps its request token.
+2. **Reserve.** Once both buckets admit, the gateway takes the estimate off the token bucket: the primary provider's bucket for the requested model, after any budget `degrade` rewrite, even when a fallback provider serves the call.
+3. **Settle.** When the call ends, the gateway settles the reservation (see [Settling the reservation](#settling-the-reservation)).
 
-The token bucket may go negative. The debt is clamped at minus one burst (`tokensPerMinute / number_of_replicas`), so one call larger than a burst blocks the key for at most about one minute.
+#### What the reservation holds
+
+The estimate is an input estimate plus an output cap:
+
+- **Input:** the request body's size in bytes divided by 4, about four bytes per token.
+- **Output cap**, the first of these that exists:
+  1. The request's own cap (`max_completion_tokens` or `max_tokens`, or `generationConfig.maxOutputTokens` for Vertex, which also reads the snake_case spelling `generation_config.max_output_tokens`), lowered to the model's `maxOutputTokens` when that is smaller, because the provider never generates more than its ceiling. A member counts only when a copy spelled exactly as above holds a positive number. The cap is then the largest positive value among all copies of that member, case variants included, because an upstream that matches names case-insensitively and keeps the last copy may apply any of them. A case variant alone (`Max_Tokens`) is no cap, because an upstream that matches names exactly applies none. A copy of a member in any spelling that holds no cap (`0`, a negative number, `null`, or a string) makes that member set no cap, because an upstream that keeps that copy applies none. For the Vertex `generationConfig` member, a copy that is not an object or holds no `maxOutputTokens` does the same. When a member sets no cap, the next member is tried. When none sets a cap, the call reserves the model's `maxOutputTokens`, or one replica share when the model declares none.
+  2. The model's `maxOutputTokens`, when the request sets no cap.
+  3. One replica share (`tokensPerMinute / number_of_replicas`), when neither exists, because the gateway then has no other bound on the call.
+
+A call with no cap anywhere takes a whole share, so it holds its (namespace, model) key on its replica until it settles or the bucket refills above 0. Other callers meanwhile get `429 rate_limited` with a `Retry-After` of up to about a minute, so such calls run about one at a time per replica. A larger `tokensPerMinute` does not help, because the reservation grows with it. Declaring `maxOutputTokens` on the model, or sending a cap with each request, restores concurrency. The ModelProvider's `MaxOutputTokensUnset` condition names the models this applies to ([ModelProvider status](../../resources/modelprovider.md#status)).
+
+The reservation may push the bucket below 0, so an estimate larger than the limit is never refused outright. It delays the next call instead. The debt is clamped at minus one burst (`tokensPerMinute / number_of_replicas`) twice: when the reservation is taken and again when the settled usage is charged. The bucket is never more than about one minute of refill below 0, so after a large reservation or a large settled charge the key admits again within about a minute.
+
+#### Settling the reservation
+
+The bucket that admitted the call settles it when the relay ends ([Request flow](request-handling.md#request-flow), step 10). A non-streamed answer finishes cleanly when its outcome is `ok`. A stream finishes cleanly once the gateway has read its final event: Anthropic `message_stop`, OpenAI `[DONE]`, or the Vertex chunk whose candidate has a `finishReason`. Its usage is complete then, so it settles at that usage even if the caller closes, or the provider read fails, before the body ends.
+
+- **A 2xx that finished cleanly, with usage:** the usage replaces the reservation. The gateway credits the reservation back, then debits the input plus output tokens the response reported.
+- **A 2xx that finished cleanly, with no usage:** the call keeps its reservation as its charge. Without that, an answer that carried no usage would pay nothing on the token bucket. Dollar spend for such an answer still settles zero ([Streaming responses](request-handling.md#streaming-responses)).
+- **A 2xx that did not finish cleanly:** the outcome is `client_closed` or `error`, and for a stream the final event was not read. That covers a caller that left, a provider that broke the answer or let it go idle, and a [crossing](fallback.md#holding-a-translated-answer) answer read in full that went over the hold limit or could not be translated (`502 provider_error`). The bucket settles at the larger of the usage read and the reservation. The usage read is only a floor: an Anthropic stream reports input tokens first and output tokens only in its last event, so a stream cut before that event has partial usage, and the output already sent would go uncharged. A call with no usage read keeps its reservation. Dollar spend still settles from the usage read.
+- **No 2xx from any candidate:** the gateway returns the reservation in full, because no provider served the call. A 4xx relayed verbatim is in this case.
+
+The credit returns only what the reservation took, and never lifts the bucket above the current burst. The debt clamp can cut a reservation short, and a refund of tokens the bucket never gave up would widen the limit. Refills during a long call, and a share that changed while it ran, would otherwise lift the bucket past full.
+
+#### The bound
+
+Concurrent calls on one replica cannot together exceed the replica's share by more than one reservation, so the cluster-wide overshoot is at most one reservation per replica.
 
 ### Retry-After
 
@@ -220,11 +247,13 @@ The gateway computes `Retry-After` from how far the refused bucket is from admit
 
 For example, with `requestsPerMinute: 2` and one replica, the third request in a burst gets `Retry-After: 30`. When each replica's share is 60 or more requests or calls per minute, a refusal gives `Retry-After: 1`. Heartbeat `rate_limited` responses send `Retry-After: 1`.
 
+For the token bucket the wait is a worst case: a call that settles below its reservation frees the bucket sooner.
+
 ### Limits of the token limit
 
-- **Concurrent long streams all pass.** The debit lands only when each stream ends, so streams that start while the bucket is positive are all admitted.
-- **The split is approximate.** The per-replica split is approximate, as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the debit lands only on the replica that served the call.
-- **Only input plus output tokens count.** The debit is the input plus output count from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, `prompt_tokens` already includes cached prompt tokens, so cache hits count. A response with no usage debits nothing, the case counted as `kaalm_llm_usage_missing_total` ([Streaming responses](request-handling.md#streaming-responses)).
+- **The bound holds when the output cap holds.** A call whose provider generates past its declared ceiling overshoots by the difference ([The bound](#the-bound)).
+- **The split is approximate.** The per-replica split is approximate, as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the reservation and its settle land only on the replica that served the call.
+- **Only input plus output tokens count.** The settled charge is the input plus output count from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, `prompt_tokens` already includes cached prompt tokens, so cache hits count. A response with no usage counts on `kaalm_llm_usage_missing_total`, and [Settling the reservation](#settling-the-reservation) gives its charge.
 - **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `requestsPerMinute` and the full `tokensPerMinute`. Together, tenants can still reach the provider's own rate limit, so these limits do not keep a shared provider key under it.
 
 ### Dividing by live replica count

@@ -368,7 +368,10 @@ func readyFalseFromProblems(problems []validationProblem) (reason, message strin
 // own fallbacks are walked once, as the gateway's walk skips the repeat. A
 // crossing into anthropic whose mapped models declare no maxOutputTokens sets
 // the advisory MaxOutputTokensUnset condition on the primary: it stays valid,
-// but a request without max_tokens cannot cross it. Each list of problems is
+// but a request without max_tokens cannot cross it. The same condition names
+// the primary's own models without maxOutputTokens when it sets
+// tokensPerMinute, since a request without an output cap on them reserves a
+// whole replica share of the token limit. Each list of problems is
 // bounded as entryList bounds every per-entry list; the modelMap keys are
 // checked in sorted order, so the same entries are listed on every pass. A
 // fallback read that fails with anything but NotFound is returned, so the
@@ -462,7 +465,7 @@ func (r *ModelProviderReconciler) validateFallback(
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	r.setMaxOutputTokensUnset(primary, names)
+	r.setMaxOutputTokensUnset(primary, names, uncappedTokenLimitedModels(primary))
 	var problems []validationProblem
 	for _, msg := range ineligible.messages(
 		"fallback tree has 1 more ineligible fallback, not listed",
@@ -477,17 +480,39 @@ func (r *ModelProviderReconciler) validateFallback(
 	return problems, nil
 }
 
-// setMaxOutputTokensUnset records the anthropic models a crossing reaches
-// without a declared maxOutputTokens in the advisory MaxOutputTokensUnset
-// condition, whose message names the first maxListedEntries provider/model
-// pairs of the sorted names, quoted, and counts the rest. It holds a Warning
-// event for finish to send when the condition turns True. A steady finding,
-// even with a changed list, does not warn again; clearing it sets the
-// condition False without an event, and a provider that never had a finding
-// gets no condition. Ready is not touched.
-func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.ModelProvider, names []string) {
+// uncappedTokenLimitedModels returns, when mp sets tokensPerMinute, the
+// sorted provider/model pairs of its models that declare no maxOutputTokens:
+// a request without its own output cap on one of them reserves a whole
+// replica share of the token limit, so such requests run one at a time per
+// gateway replica. It returns nil for a provider with no token limit.
+func uncappedTokenLimitedModels(mp *kaalmv1beta1.ModelProvider) []string {
+	if mp.Spec.RateLimits.TokensPerMinute <= 0 {
+		return nil
+	}
+	var names []string
+	for _, m := range mp.Spec.Models {
+		if m.MaxOutputTokens == nil {
+			names = append(names, mp.Name+"/"+m.ID)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// setMaxOutputTokensUnset records two findings in the advisory
+// MaxOutputTokensUnset condition: crossing, the anthropic models a crossing
+// reaches without a declared maxOutputTokens, and uncapped, the token-limited
+// primary's own models without one (uncappedTokenLimitedModels). The message
+// carries one sentence per non-empty list, the crossing one first, each
+// naming the first maxListedEntries provider/model pairs of its sorted
+// names, quoted, and counting the rest. It holds a Warning event for finish
+// to send when the condition turns True. A steady finding, even with a
+// changed list, does not warn again; clearing both lists sets the condition
+// False without an event, and a provider that never had a finding gets no
+// condition. Ready is not touched.
+func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.ModelProvider, crossing, uncapped []string) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
-	if len(names) == 0 {
+	if len(crossing) == 0 && len(uncapped) == 0 {
 		if apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset) != nil {
 			apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 				Type:   kaalmv1beta1.ConditionMaxOutputTokensUnset,
@@ -497,12 +522,23 @@ func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.Model
 		}
 		return
 	}
-	var l entryList
-	for _, n := range names {
-		l.add(n, quotedEntry(n))
+	listed := func(names []string) string {
+		var l entryList
+		for _, n := range names {
+			l.add(n, quotedEntry(n))
+		}
+		return strings.Join(l.messages("1 more model, not listed", "%d more models, not listed"), ", ")
 	}
-	msg := cutConditionMessage("a request without max_tokens cannot cross into these anthropic models until they declare " +
-		"maxOutputTokens: " + strings.Join(l.messages("1 more model, not listed", "%d more models, not listed"), ", "))
+	var sentences []string
+	if len(crossing) > 0 {
+		sentences = append(sentences, "a request without max_tokens cannot cross into these anthropic models "+
+			"until they declare maxOutputTokens: "+listed(crossing))
+	}
+	if len(uncapped) > 0 {
+		sentences = append(sentences, "requests without their own output cap on these models run one at a time "+
+			"per gateway replica under tokensPerMinute until they declare maxOutputTokens: "+listed(uncapped))
+	}
+	msg := cutConditionMessage(strings.Join(sentences, "; "))
 	apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 		Type:    kaalmv1beta1.ConditionMaxOutputTokensUnset,
 		Status:  metav1.ConditionTrue,

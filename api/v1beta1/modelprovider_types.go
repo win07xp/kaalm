@@ -103,7 +103,11 @@ type ModelProviderModel struct {
 	// MaxOutputTokens is the model's declared output ceiling. The gateway
 	// supplies it as max_tokens when a request crossing into an
 	// anthropic provider omits one (Anthropic requires the field); a request
-	// carrying more is capped to it.
+	// carrying more is capped to it. When the provider sets tokensPerMinute,
+	// the token rate limit reserves it at admission for a request that sets
+	// no output cap, and reserves it in place of a larger request cap; on a
+	// token-limited model without it, such a request reserves a whole
+	// replica share.
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MaxOutputTokens *int64 `json:"maxOutputTokens,omitempty"`

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -48,9 +49,19 @@ func (vertexAdapter) usageReader() *usageReader { return newVertexUsageReader() 
 // stream usage reads: grounding with Google Search reports its executed queries in
 // groundingMetadata.webSearchQueries.
 type vertexCandidate struct {
+	// FinishReason is kept raw so that no value of it fails the decode,
+	// which would drop the chunk's usage too.
+	FinishReason      json.RawMessage `json:"finishReason"`
 	GroundingMetadata struct {
 		WebSearchQueries []string `json:"webSearchQueries"`
 	} `json:"groundingMetadata"`
+}
+
+// finished reports whether the candidate carries a finishReason, which
+// Vertex sets on a candidate's last chunk.
+func (c vertexCandidate) finished() bool {
+	r := string(c.FinishReason)
+	return r != "" && r != "null" && r != `""`
 }
 
 // vertexServerTools counts executed grounding queries across candidates as
@@ -66,10 +77,11 @@ func vertexServerTools(candidates []vertexCandidate) map[string]int64 {
 	return map[string]int64{"google_search": queries}
 }
 
-// accumulateStreamUsage: usageMetadata arrives on the final streamed chunk;
-// groundingMetadata arrives once, on the chunk closing its candidate, so a
-// non-empty count replaces the last snapshot rather than accumulating.
-func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
+// accumulateStreamUsage: usageMetadata arrives on the final streamed chunk,
+// the one whose candidate carries a finishReason; groundingMetadata arrives
+// once, on the chunk closing its candidate, so a non-empty count replaces
+// the last snapshot rather than accumulating.
+func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
 	var chunk struct {
 		UsageMetadata *struct {
 			PromptTokenCount     int64 `json:"promptTokenCount"`
@@ -79,16 +91,16 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 		Candidates []vertexCandidate `json:"candidates"`
 	}
 	if err := json.Unmarshal(data, &chunk); err != nil {
-		return
+		return false
 	}
 	if tools := vertexServerTools(chunk.Candidates); tools != nil {
 		u.ServerTools = tools
 	}
-	if chunk.UsageMetadata == nil {
-		return
+	if chunk.UsageMetadata != nil {
+		u.InputTokens = chunk.UsageMetadata.PromptTokenCount
+		u.OutputTokens = chunk.UsageMetadata.CandidatesTokenCount + chunk.UsageMetadata.ThoughtsTokenCount
 	}
-	u.InputTokens = chunk.UsageMetadata.PromptTokenCount
-	u.OutputTokens = chunk.UsageMetadata.CandidatesTokenCount + chunk.UsageMetadata.ThoughtsTokenCount
+	return slices.ContainsFunc(chunk.Candidates, vertexCandidate.finished)
 }
 
 // streamUsageOption is false: a Vertex request needs no body change, since

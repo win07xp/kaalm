@@ -100,7 +100,7 @@ Seven other conditions follow the same bound, one list each:
 
 - ModelProvider `FallbackIneligible`: the findings of the [eligibility scan](../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan).
 - ModelProvider `DegradeTargetNotCheapest`: the `degradeTo` targets that cost more than the cheapest priced model.
-- ModelProvider `MaxOutputTokensUnset`: the `provider/model` pairs that declare no `maxOutputTokens`.
+- ModelProvider `MaxOutputTokensUnset`: the `provider/model` pairs that declare no `maxOutputTokens`. The condition can hold two such lists, one for fallback crossings and one for the provider's own models under `tokensPerMinute`, each cut at ten.
 - AgentClass `SecurityBaseline`: the `capabilities.add` entries other than `NET_BIND_SERVICE`. The other fields it names are single fields, so each is always named.
 - Agent `ProvidersReady`: the `spec.providers` entries with a problem.
 - Agent `Degraded` with `reason=BudgetExhausted`: the ModelProviders that block the Agent's namespace. A provider repeated in `spec.providers` is named once.

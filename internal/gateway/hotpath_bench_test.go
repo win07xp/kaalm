@@ -188,8 +188,11 @@ func BenchmarkLLMProxyMTLS(b *testing.B) {
 
 // rateLimitedProxyHarness is the BenchmarkLLMProxyMTLS setup with request and
 // token rate limits on the provider, set far above any rate a benchmark
-// reaches, so every request runs the limiter (admission, and the token debit
-// once usage settles) and none is refused.
+// reaches, so every request runs the limiter (admission with its token
+// reservation, and the settle once usage arrives) and none is refused. The
+// body sets no max_tokens, so the model declares maxOutputTokens: without
+// it each request would reserve the whole share and the next one would be
+// refused.
 func rateLimitedProxyHarness(b *testing.B) (*harness, *http.Client, map[string]any) {
 	b.Helper()
 	h := newHarness(b, func(w http.ResponseWriter, _ *http.Request) {
@@ -201,6 +204,8 @@ func rateLimitedProxyHarness(b *testing.B) (*harness, *http.Client, map[string]a
 		RequestsPerMinute: 2_000_000_000,
 		TokensPerMinute:   2_000_000_000,
 	}
+	maxOutput := int64(64)
+	h.store.providers["prov"].Spec.Models[0].MaxOutputTokens = &maxOutput
 	cert := agentCert(b, h.ca)
 	body := map[string]any{"model": "prov/m1", "messages": []any{map[string]any{"role": "user", "content": "hi"}}}
 	return h, h.client(&cert), body

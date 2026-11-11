@@ -169,23 +169,37 @@ says, not at a period boundary.
 
 `tokensPerMinute` is a second ceiling on the input plus output tokens per
 minute, with the same per-`(namespace, model)` key. Leave it unset for no token
-limit. Tokens are counted after the call, so it behaves differently from the
-request limit:
+limit. Each call reserves its tokens up front, so it behaves differently from
+the request limit:
 
 - The gateway admits a request while the namespace's token bucket for that
-  model is above 0, then subtracts the call's tokens when the call ends, or
-  when a stream ends. A large call blocks the next request, not itself, and
-  concurrent long streams all pass while the bucket is positive.
-- The call's tokens come off the primary provider's bucket for the model you
+  model is above 0, and reserves an estimate: the input size plus the
+  request's output cap, or the model's `maxOutputTokens` when the request sets
+  no cap. When the call ends, its real usage replaces the estimate. A call that
+  does not finish cleanly (the caller leaves, or the provider breaks the
+  answer; a stream that already sent its final event counts as finished) is
+  charged the larger of its usage and the estimate, because the usage read
+  before the cut can miss output already sent. Concurrent streams
+  therefore cannot together exceed the limit by more than one call per gateway
+  replica.
+- On a token-limited provider, declare `maxOutputTokens` on each model, or have
+  agents send `max_tokens`. A call with neither reserves the whole per-replica
+  share, so it runs about one at a time per `(namespace, model)` on that
+  replica. Other calls get `429` with error type `rate_limited` and a
+  `Retry-After` of up to about a minute until it finishes. The provider's
+  `MaxOutputTokensUnset` condition lists the models to fix.
+- The call's tokens settle on the primary provider's bucket for the model you
   asked for, even when a fallback provider answered.
 - Anthropic cache tokens are not counted. OpenAI and OpenAI-compatible input
   counts include cached prompt tokens, so cache hits count. A response with no
-  usage debits nothing.
+  usage keeps its reservation, so the call is charged its estimate.
 - Every namespace, and every model in a namespace, gets the full ceiling, so
   the limit does not keep a shared provider key under the provider's own
   tokens-per-minute limit.
 
-The design book's [Rate limiting](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/budgets-and-rate-limits.md#rate-limiting)
+The design book's [The token limit](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/budgets-and-rate-limits.md#the-token-limit)
+has the estimate rules and the overshoot bound. Its
+[Rate limiting](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/budgets-and-rate-limits.md#rate-limiting)
 section has the bucket sizes and the `Retry-After` arithmetic, including how
 the delay grows when the request limit is below the replica count.
 

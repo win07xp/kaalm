@@ -56,7 +56,7 @@ The gateway exposes Prometheus metrics on `:9090/metrics`:
 - `kaalm_budget_threshold_events_total{provider,namespace,action}` (action = warn|degrade|block; one increment per request the budget ladder acted on)
 - `kaalm_llm_budget_boundary_events_total{provider,namespace,event}` (event = engaged|throttled|fail_closed|margin_raised; emitted only by hard-enforcement providers, see [Hard enforcement](budgets-and-rate-limits.md#hard-enforcement))
 - `kaalm_llm_server_tool_use_total{provider,namespace,tool}` (provider-side tool calls extracted from response usage, such as `web_search`; see [the tool plane](../tool-plane.md#provider-side-tools))
-- `kaalm_llm_usage_missing_total{provider,model}` (successful responses, streamed or not, that carried no usage and settled at zero spend; see [Streaming responses](request-handling.md#streaming-responses))
+- `kaalm_llm_usage_missing_total{provider,model}` (successful responses, streamed or not, that carried no usage, settled zero spend, and kept their token reservation; see [Settling the reservation](budgets-and-rate-limits.md#settling-the-reservation))
 
 The `status` values of `kaalm_llm_requests_total`:
 

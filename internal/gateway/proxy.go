@@ -204,10 +204,15 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit per (namespace, model), sharing the configured ceilings
-	// across live replicas. The settled tokens are debited after the call
-	// from the bucket that admitted it: the primary's limits and this
-	// model, even when a fallback serves the request.
-	if ok, retryAfter := s.RateLimiter.Allow(provider, c.Namespace, modelID); !ok {
+	// across live replicas. Under a token limit, the request's estimate (its
+	// body size over four, plus its output cap or the model's
+	// maxOutputTokens, or one replica share when neither exists) is reserved
+	// on the bucket that admits it: the primary's limits and this model. The
+	// reservation is settled when the call ends, even when a fallback serves
+	// the request.
+	ok, retryAfter, reservation := s.RateLimiter.Allow(provider, c.Namespace, modelID,
+		requestTokenEstimate(provider, modelID, body))
+	if !ok {
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
 		spanError(ctx, errRateLimited)
 		writeError(w, http.StatusTooManyRequests, errorBody{
@@ -215,10 +220,10 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 			Message: fmt.Sprintf("rate limit exceeded for namespace %s on model %s", c.Namespace, modelID)}, retryAfter)
 		return
 	}
-	admittedModel := modelID
-	debitTokens := func(u Usage) {
-		s.RateLimiter.DebitTokens(provider, c.Namespace, admittedModel, u.InputTokens+u.OutputTokens)
-	}
+	// The safety net for every early return (an exhausted walk, a caller
+	// that left before a 2xx, a cut JSON relay's unwind): the first settle,
+	// keep, or release wins, so this does nothing after a real one.
+	defer reservation.release()
 
 	// Strip the provider prefix so the upstream sees the raw model ID, write
 	// the routing member names exactly, and set stream_options.include_usage
@@ -301,7 +306,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return fr
 	})
 	if ctx.Err() != nil && !readsOnAfterCallerLeft(res) {
-		s.settleCallerLeft(ctx, res, c.Namespace, &modelID, &answered)
+		s.settleCallerLeft(ctx, res, c.Namespace, &modelID, &answered, reservation)
 		return
 	}
 	if !ok {
@@ -311,18 +316,41 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, body, retryAfter)
 		return
 	}
-	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered, debitTokens)
+	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered, reservation)
+}
+
+// requestTokenEstimate is what a request reserves on provider's token
+// bucket: its body size over four (about four bytes per token) as the input
+// estimate, plus its output cap. The cap is the request's own, lowered to
+// the model's maxOutputTokens when that is smaller (the provider generates
+// no more than its ceiling); the model's maxOutputTokens when the request
+// sets none; or outputCapUnknown when neither exists. A provider with no
+// tokensPerMinute reserves nothing, and its body is not read for the cap.
+func requestTokenEstimate(provider *kaalmv1beta1.ModelProvider, modelID string, body []byte) tokenEstimate {
+	if provider.Spec.RateLimits.TokensPerMinute <= 0 {
+		return tokenEstimate{}
+	}
+	outputCap, ok := requestOutputCap(body)
+	if m := maxOutputTokensOf(provider, modelID); m > 0 && (!ok || outputCap > m) {
+		outputCap, ok = m, true
+	}
+	if !ok {
+		outputCap = outputCapUnknown
+	}
+	return tokenEstimate{Input: int64(len(body) / 4), Output: outputCap}
 }
 
 // settleCallerLeft ends a request whose caller left before the gateway
 // answered, and writes nothing. A 2xx that reaches it is a stream: it
 // arrives unread and can no longer be read, since its read derives from the
-// caller's context, so it counts as usage missing and settles zero. A
-// non-streamed 2xx goes to its relay instead and is read to its end (see
-// readsOnAfterCallerLeft). Any other attempt settles zero. A relay that had
+// caller's context, so it counts as usage missing, keeps its token
+// reservation, and settles zero spend. A non-streamed 2xx goes to its relay
+// instead and is read to its end (see readsOnAfterCallerLeft). Any other
+// attempt releases its token reservation and settles zero. A relay that had
 // started settles what it read itself. The request counts as client_closed.
 func (s *Server) settleCallerLeft(
 	ctx context.Context, res forwardResult, namespace string, modelID, answered *string,
+	reservation *tokenReservation,
 ) {
 	if res.resp != nil {
 		defer func() { _ = res.resp.Body.Close() }()
@@ -334,7 +362,10 @@ func (s *Server) settleCallerLeft(
 		*modelID = res.model
 	}
 	if res.resp != nil && res.resp.StatusCode >= 200 && res.resp.StatusCode <= 299 {
+		reservation.keep()
 		s.usageMissing(namespace, *answered, *modelID)
+	} else {
+		reservation.release()
 	}
 	if res.settle != nil {
 		res.settle(0)
@@ -349,15 +380,17 @@ func (s *Server) settleCallerLeft(
 // when it crossed), a JSON answer through the JSON relay, or, when it
 // crossed, a JSON answer held whole and translated back. Usage is read by
 // the serving candidate's adapter from the untranslated bytes as they pass.
-// debitTokens takes the settled usage off the token rate limit that
-// admitted the request. A 2xx is counted on kaalm_llm_requests_total when
+// reservation is the request's token reservation: a relay settles it with
+// the usage it read (at least the reservation when the relay did not finish
+// cleanly), or keeps it when it read none, and a non-2xx relayed verbatim
+// releases it. A 2xx is counted on kaalm_llm_requests_total when
 // its relay ends, so the status says how it ended. A non-streamed 2xx comes
 // here after the caller left too: the JSON relay and the hold read it to
 // its end, settle its usage, and count client_closed.
 func (s *Server) writeWalkResult(
 	ctx context.Context, w http.ResponseWriter, res forwardResult, adapter providerAdapter,
 	inboundFormat llmtranslate.Format, namespace, workload string, modelID, answered *string,
-	debitTokens func(Usage),
+	reservation *tokenReservation,
 ) {
 	defer func() { _ = res.resp.Body.Close() }()
 	*answered = res.provider
@@ -377,6 +410,7 @@ func (s *Server) writeWalkResult(
 	// A non-fallbackable failure (400/422/other 4xx) is relayed verbatim, in
 	// the caller's envelope shape when the candidate crossed formats.
 	if res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {
+		reservation.release()
 		if res.settle != nil {
 			res.settle(0)
 		}
@@ -406,18 +440,18 @@ func (s *Server) writeWalkResult(
 			translator = llmtranslate.NewStream(res.format, inboundFormat, *modelID)
 		}
 		outcome := s.relayStream(ctx, w, res.resp, servingAdapter, translator, formatForType(adapter.formatName()),
-			namespace, workload, res.chosen, *modelID, res.settle, debitTokens)
+			namespace, workload, res.chosen, *modelID, res.settle, reservation)
 		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 		return
 	}
 	if crossing {
 		outcome := s.relayCrossing(ctx, w, res.resp, servingAdapter, res.format, inboundFormat, res.holdLimit,
-			namespace, workload, res.chosen, *modelID, res.settle, debitTokens)
+			namespace, workload, res.chosen, *modelID, res.settle, reservation)
 		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 		return
 	}
 	outcome, cut := s.relayJSON(ctx, w, res.resp, servingAdapter, namespace, workload, res.chosen, *modelID,
-		res.settle, debitTokens)
+		res.settle, reservation)
 	s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 	if cut {
 		// The status is sent and JSON has no in-band error event, so the
@@ -681,15 +715,13 @@ func (s *Server) applyBudgetDecision(
 // metrics. When the request holds a boundary admission slot (hard
 // enforcement), the cost lands through its settle so the slot frees and the
 // cost records in one atomic step; otherwise it lands through the plain
-// ledger Add. debitTokens (nil for none) charges the input plus output
-// tokens to the token bucket that admitted the request.
+// ledger Add. reservation (nil for none) is settled with the input plus
+// output tokens on the token bucket that admitted the request.
 func (s *Server) settleUsage(
 	provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string, usage Usage,
-	settle func(float64), debitTokens func(Usage),
+	settle func(float64), reservation *tokenReservation,
 ) {
-	if debitTokens != nil {
-		debitTokens(usage)
-	}
+	reservation.settle(usage.InputTokens + usage.OutputTokens)
 	cost := costOf(provider, modelID, usage)
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
 	if settle != nil {
@@ -752,32 +784,37 @@ func readsOnAfterCallerLeft(res forwardResult) bool {
 // relayStream forwards SSE events to the caller as each one completes, and
 // events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
-// tokens debited from the token rate limit, after the stream ends. A stream
-// that ends without usage settles at zero spend and is reported by
-// usageMissing. When the upstream read fails after the status is sent (the
-// idle bound passed, or the connection broke), the relay ends the stream
-// with one error event in the caller's format, so the agent can tell a
-// truncated stream from a complete one. It returns the outcome for
-// kaalm_llm_requests_total and marks the llm.request span (ctx) the same
+// token reservation settled, after the stream ends (see settleRelay). A stream
+// counts as finished once the adapter reports its final event read, even when
+// the caller leaves or the read fails after it: its usage is then complete. A
+// stream that ends without usage settles at zero spend, keeps its token
+// reservation, and is reported by usageMissing. When the upstream read fails
+// after the status is sent (the idle bound passed, or the connection broke),
+// the relay ends the stream with one error event in the caller's format, so the
+// agent can tell a truncated stream from a complete one. It returns the outcome
+// for kaalm_llm_requests_total and marks the llm.request span (ctx) the same
 // way: ok, error for a stream the provider broke or let go idle, or
-// client_closed for a caller that left, which gets no event. ctx derives
-// from the caller's request context, and the upstream read from ctx, so
-// ctx.Err() is set only when the caller left.
+// client_closed for a caller that left, which gets no event. ctx derives from
+// the caller's request context, and the upstream read from ctx, so ctx.Err() is
+// set only when the caller left.
 func (s *Server) relayStream(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
 	translator llmtranslate.Stream, callerFormat llmtranslate.Format, namespace, workload string,
-	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), debitTokens func(Usage),
-) string {
+	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), reservation *tokenReservation,
+) (outcome string) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
 
 	var usage Usage
+	finalRead := false
 	// Settle on EVERY exit, including the early return on a downstream
 	// write error: near a hard ceiling, dropping accumulated usage would
 	// under-settle exactly where undercounting voids the cap, and a held
 	// admission slot must always free.
-	defer func() { s.settleRelay(usage, provider, namespace, workload, modelID, settle, debitTokens) }()
+	defer func() {
+		s.settleRelay(usage, outcome == outcomeOK || finalRead, provider, namespace, workload, modelID, settle, reservation)
+	}()
 
 	ef := &eventFlusher{r: resp.Body, f: flusher}
 	scanner := bufio.NewScanner(ef)
@@ -799,7 +836,9 @@ func (s *Server) relayStream(
 		line := scanner.Bytes()
 		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 			// Usage comes from the upstream's own events, before translation.
-			adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage)
+			if adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage) {
+				finalRead = true
+			}
 			bodyLog("llm stream", data)
 		}
 		if translator == nil {
@@ -849,16 +888,29 @@ func (s *Server) relayStream(
 }
 
 // settleRelay settles a relay when it ends, on every exit: the usage it
-// read, or, when it read none, zero spend reported by usageMissing. A held
-// admission slot always frees.
+// read, or, when it read none, zero spend reported by usageMissing, with the
+// token reservation kept as the call's charge. finished reports that the
+// relay finished cleanly: its outcome is ok, or, for a stream, the
+// provider's final event was read, whatever happened after it. A relay that
+// did not (outcome client_closed or error: the caller left, the provider
+// broke the answer or let it go idle, or a crossing answer read in full
+// went over the hold limit or could not be translated) may have sent output
+// its usage read does not count, so its token reservation settles at the
+// larger of that usage and what it took; spend still settles the usage
+// read. A held admission slot always frees. Every 2xx settles here.
 func (s *Server) settleRelay(
-	usage Usage, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
-	settle func(float64), debitTokens func(Usage),
+	usage Usage, finished bool, provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string,
+	settle func(float64), reservation *tokenReservation,
 ) {
 	if !usage.isZero() {
-		s.settleUsage(provider, namespace, workload, modelID, usage, settle, debitTokens)
+		if !finished {
+			// Settled first, so the settle in settleUsage does nothing.
+			reservation.settleAtLeast(usage.InputTokens + usage.OutputTokens)
+		}
+		s.settleUsage(provider, namespace, workload, modelID, usage, settle, reservation)
 		return
 	}
+	reservation.keep()
 	s.usageMissing(namespace, provider.Name, modelID)
 	if settle != nil {
 		settle(0)
@@ -949,12 +1001,14 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 func (s *Server) relayJSON(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
 	namespace, workload string, provider *kaalmv1beta1.ModelProvider, modelID string,
-	settle func(float64), debitTokens func(Usage),
+	settle func(float64), reservation *tokenReservation,
 ) (outcome string, cut bool) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	reader := adapter.usageReader()
-	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, debitTokens) }()
+	defer func() {
+		s.settleRelay(reader.usage, outcome == outcomeOK, provider, namespace, workload, modelID, settle, reservation)
+	}()
 
 	sink := &flushWriter{w: w}
 	sink.f, _ = w.(http.Flusher)
@@ -1030,10 +1084,12 @@ func (h *holdBuffer) Write(p []byte) (int, error) {
 func (s *Server) relayCrossing(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, servingAdapter providerAdapter,
 	from, to llmtranslate.Format, limit int64, namespace, workload string,
-	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), debitTokens func(Usage),
-) string {
+	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), reservation *tokenReservation,
+) (outcome string) {
 	reader := servingAdapter.usageReader()
-	defer func() { s.settleRelay(reader.usage, provider, namespace, workload, modelID, settle, debitTokens) }()
+	defer func() {
+		s.settleRelay(reader.usage, outcome == outcomeOK, provider, namespace, workload, modelID, settle, reservation)
+	}()
 
 	hold := &holdBuffer{limit: limit}
 	readErr, _ := relayBody(resp.Body, hold, reader)

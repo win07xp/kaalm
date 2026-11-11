@@ -64,13 +64,54 @@ func TestSetMaxOutputTokensUnsetIsBounded(t *testing.T) {
 	}
 	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	r := &ModelProviderReconciler{}
-	r.setMaxOutputTokensUnset(mp, names)
+	r.setMaxOutputTokensUnset(mp, names, nil)
 	r.events.take(mp)
 	want := "a request without max_tokens cannot cross into these anthropic models until they declare maxOutputTokens: " +
 		strings.Join(quoted, ", ") + ", 2 more models, not listed"
 	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
 	if c == nil || c.Message != want {
 		t.Errorf("MaxOutputTokensUnset = %+v\nwant message %q", c, want)
+	}
+}
+
+// setMaxOutputTokensUnset with both lists gives one bounded sentence each,
+// the crossing one first; with only the token-limit list, only its sentence.
+func TestSetMaxOutputTokensUnsetNamesBothCases(t *testing.T) {
+	list := func(prefix string) (names []string, listed string) {
+		var quoted []string
+		for i := range 12 {
+			names = append(names, fmt.Sprintf("%s/m%02d", prefix, i))
+			if i < maxListed {
+				quoted = append(quoted, fmt.Sprintf("%q", names[i]))
+			}
+		}
+		return names, strings.Join(quoted, ", ") + ", 2 more models, not listed"
+	}
+	crossing, crossingListed := list("claude")
+	uncapped, uncappedListed := list("p")
+	crossingSentence := "a request without max_tokens cannot cross into these anthropic models until they declare " +
+		"maxOutputTokens: " + crossingListed
+	uncappedSentence := "requests without their own output cap on these models run one at a time per gateway replica " +
+		"under tokensPerMinute until they declare maxOutputTokens: " + uncappedListed
+	for _, tc := range []struct {
+		name               string
+		crossing, uncapped []string
+		want               string
+	}{
+		{"both", crossing, uncapped, crossingSentence + "; " + uncappedSentence},
+		{"token limit only", nil, uncapped, uncappedSentence},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+			r := &ModelProviderReconciler{}
+			r.setMaxOutputTokensUnset(mp, tc.crossing, tc.uncapped)
+			r.events.take(mp)
+			c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
+			if c == nil || c.Status != metav1.ConditionTrue || c.Reason != kaalmv1beta1.ReasonMaxOutputTokensUnset ||
+				c.Message != tc.want {
+				t.Errorf("MaxOutputTokensUnset = %+v\nwant True with message %q", c, tc.want)
+			}
+		})
 	}
 }
 

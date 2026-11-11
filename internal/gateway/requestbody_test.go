@@ -396,6 +396,96 @@ func TestRewriteRequestBodyForcesIncludeUsage(t *testing.T) {
 	}
 }
 
+// TestRequestOutputCap: the output cap is read from the top-level
+// max_completion_tokens, max_tokens, or generationConfig.maxOutputTokens
+// (also spelled generation_config and max_output_tokens), in that order, and
+// counts only as a positive finite JSON number. A member is a cap only when
+// a copy spelled exactly holds one; the cap is then the largest value among
+// all its copies, case variants included, since an upstream that folds case
+// may apply any of them. A case variant alone is no cap.
+func TestRequestOutputCap(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want int64
+		ok   bool
+	}{
+		{`{"model":"p/m","max_tokens":400}`, 400, true},
+		{`{"max_tokens":400,"max_completion_tokens":300}`, 300, true},
+		{`{"max_completion_tokens":"300","max_tokens":400}`, 400, true},
+		{`{"generationConfig":{"temperature":1,"maxOutputTokens":256}}`, 256, true},
+		{`{"max_tokens":128,"generationConfig":{"maxOutputTokens":256}}`, 128, true},
+		{`{"Max_Tokens":400}`, 0, false},
+		{`{"Max_Tokens":1}`, 0, false},
+		{`{"max_tokens":4000,"MAX_TOKENS":1}`, 4000, true},
+		{`{"max_tokens":1,"MAX_TOKENS":4000}`, 4000, true},
+		{`{"MAX_TOKENS":4000,"max_tokens":1}`, 4000, true},
+		{`{"max_tokens":"1","MAX_TOKENS":4000}`, 0, false},
+		{`{"max_completion_tokens":5,"Max_Completion_Tokens":50,"max_tokens":400}`, 50, true},
+		{`{"Max_Completion_Tokens":50,"max_tokens":400}`, 400, true},
+		{`{"GenerationConfig":{"maxOutputTokens":256}}`, 0, false},
+		{`{"generationConfig":{"MaxOutputTokens":256}}`, 0, false},
+		{`{"GenerationConfig":{"maxOutputTokens":256},"generationConfig":{"maxOutputTokens":1}}`, 256, true},
+		{`{"generationConfig":{"maxOutputTokens":1},"GENERATION_CONFIG":{"Max_Output_Tokens":300}}`, 300, true},
+		{`{"max_tokens":100,"max_tokens":200}`, 200, true},
+		{`{"max_tokens":200,"max_tokens":100}`, 200, true},
+		{`{"generationConfig":{"maxOutputTokens":1,"MaxOutputTokens":2}}`, 2, true},
+		{`{"generationConfig":{"maxOutputTokens":1,"maxOutputTokens":2}}`, 2, true},
+		{`{"max\u005ftokens":9}`, 9, true},
+		{`{"generation_config":{"max_output_tokens":512}}`, 512, true},
+		{`{"generationConfig":{"max_output_tokens":64}}`, 64, true},
+		{`{"generation_config":{"maxOutputTokens":32}}`, 32, true},
+		{`{"generationConfig":{"maxOutputTokens":8,"max_output_tokens":16}}`, 16, true},
+		{`{"generation_config":{"maxOutputTokens":8},"generationConfig":{"temperature":1}}`, 0, false},
+		{`{"max_tokens":1,"max_tokens":-1}`, 0, false},
+		{`{"max_tokens":1,"max_tokens":0}`, 0, false},
+		{`{"max_tokens":1,"max_tokens":null}`, 0, false},
+		{`{"max_tokens":1,"MAX_TOKENS":-1}`, 0, false},
+		{`{"max_tokens":-1,"max_completion_tokens":1,"max_completion_tokens":null}`, 0, false},
+		{`{"max_tokens":1,"max_tokens":null,"max_completion_tokens":"5"}`, 0, false},
+		{`{"max_completion_tokens":1,"max_completion_tokens":0,"max_tokens":400}`, 400, true},
+		{`{"generationConfig":{"maxOutputTokens":8},"generationConfig":null}`, 0, false},
+		{`{"generationConfig":{"maxOutputTokens":8},"GenerationConfig":{}}`, 0, false},
+		{`{"generationConfig":{"maxOutputTokens":8,"MaxOutputTokens":0}}`, 0, false},
+		{`{"generationConfig":{"maxOutputTokens":8},"generationConfig":{"MaxOutputTokens":8}}`, 0, false},
+		{`{"generationConfig":{"maxOutputTokens":8},"GenerationConfig":{"MaxOutputTokens":16}}`, 16, true},
+		{`{"generation_config":{"Max_Output_Tokens":8}}`, 0, false},
+		{`{"max_tokens":1.5e3}`, 1500, true},
+		{` { "max_tokens" : 7 } `, 7, true},
+		{`{"max_tokens":"400"}`, 0, false},
+		{`{"max_tokens":0}`, 0, false},
+		{`{"max_tokens":-5}`, 0, false},
+		{`{"max_tokens":0.5}`, 0, false},
+		{`{"max_tokens":1e400}`, 0, false},
+		{`{"max_tokens":{"n":4}}`, 0, false},
+		{`{"max_tokens":null}`, 0, false},
+		{`{"model":"p/m"}`, 0, false},
+		{`{}`, 0, false},
+		{`null`, 0, false},
+		{`{"generationConfig":[{"maxOutputTokens":5}]}`, 0, false},
+		{`{"generationConfig":null}`, 0, false},
+		{`{"messages":[{"role":"user","max_tokens":5}],"options":{"max_tokens":6}}`, 0, false},
+	} {
+		got, ok := requestOutputCap([]byte(c.body))
+		if got != c.want || ok != c.ok {
+			t.Errorf("requestOutputCap(%s) = (%d, %v), want (%d, %v)", c.body, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// The rewrite leaves an output cap member's name and bytes as sent: the
+// gateway reads the cap, never rewrites it.
+func TestRewriteRequestBodyKeepsOutputCapMembers(t *testing.T) {
+	body := []byte(`{"Max_Tokens":1.50e3,"model":"p/m","generationConfig":{"MaxOutputTokens" : 256}}`)
+	f, err := scanRequestFields(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"Max_Tokens":1.50e3,"model":"n","generationConfig":{"MaxOutputTokens" : 256}}`
+	if got := string(rewriteRequestBody(body, f, "n", false)); got != want {
+		t.Errorf("rewrite:\n got %s\nwant %s", got, want)
+	}
+}
+
 // decodeNumbers decodes b keeping numbers as their text.
 func decodeNumbers(b []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))

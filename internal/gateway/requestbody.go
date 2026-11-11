@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -34,6 +36,8 @@ import (
 // therefore reads the few top-level members it routes by from the bytes,
 // rewrites the model value, and writes the routing member names exactly, so
 // a provider that matches names exactly reads the members the gateway read.
+// For a provider with a token rate limit it also reads the request's output
+// cap members (requestOutputCap), and never rewrites them.
 
 // requestFields locates the top-level members of a request body the
 // gateway routes and meters by.
@@ -285,6 +289,109 @@ func rewriteRequestBody(body []byte, f requestFields, model string, forceUsage b
 // spend, and an agent must not be able to opt out of metering.
 func needsStreamOptions(a providerAdapter, f requestFields) bool {
 	return a.streamUsageOption() && f.streamTrue
+}
+
+// requestOutputCap returns the output cap a request body sets: the first of
+// the top-level max_completion_tokens, max_tokens, and
+// generationConfig.maxOutputTokens (the Vertex shape, which Vertex also
+// takes as generation_config and max_output_tokens) that sets one, or false
+// when none does. The gateway never rewrites these members, so the cap must
+// hold for an upstream that matches names exactly and for one that folds
+// case and keeps the last copy, as encoding/json does. A member sets a cap
+// only when a copy spelled exactly holds a positive number: an exact-match
+// upstream applies no case variant, so a case variant alone is no cap and
+// the call reserves the model's maxOutputTokens or a replica share instead.
+// The cap is then the largest positive number among all the member's
+// copies, exact or case variant, since a case-folding upstream may apply
+// any of them. A copy in any spelling that holds no cap (0, a negative
+// number, null, a string, or a generation config with no inner cap) makes
+// the whole member no cap, since an upstream that keeps that copy applies
+// none. body must already pass json.Valid. The token rate limit
+// reserves this cap at admission; the proxy calls it only for a provider
+// with tokensPerMinute, so the unlimited path pays nothing.
+func requestOutputCap(body []byte) (int64, bool) {
+	open := skipJSONSpace(body, 0)
+	if body[open] != '{' {
+		return 0, false
+	}
+	var completion, maxTokens, generation outputCap
+	forEachJSONMember(body, open, func(name string, start, end int) bool {
+		switch {
+		case jsonNameMatches(name, "max_completion_tokens"):
+			completion.add(name == "max_completion_tokens", body[start:end])
+		case jsonNameMatches(name, "max_tokens"):
+			maxTokens.add(name == "max_tokens", body[start:end])
+		case jsonNameMatches(name, "generationConfig"), jsonNameMatches(name, "generation_config"):
+			if body[start] != '{' {
+				generation.noCap = true
+				break
+			}
+			// This outer copy must hold an inner cap, and an exact-match
+			// upstream that keeps an exactly spelled outer copy reads only
+			// an exactly spelled inner cap in it.
+			outerExact := name == "generationConfig" || name == "generation_config"
+			var inner outputCap
+			forEachJSONMember(body, start, func(name string, s, e int) bool {
+				if jsonNameMatches(name, "maxOutputTokens") || jsonNameMatches(name, "max_output_tokens") {
+					inner.add(name == "maxOutputTokens" || name == "max_output_tokens", body[s:e])
+				}
+				return true
+			})
+			switch {
+			case inner.noCap || inner.largest == 0 || (outerExact && !inner.exact):
+				generation.noCap = true
+			default:
+				generation.largest = max(generation.largest, inner.largest)
+				generation.exact = generation.exact || (outerExact && inner.exact)
+			}
+		}
+		return true
+	})
+	for _, c := range [...]outputCap{completion, maxTokens, generation} {
+		if c.exact && !c.noCap {
+			return c.largest, true
+		}
+	}
+	return 0, false
+}
+
+// outputCap gathers the copies of one output cap member: largest is the
+// largest cap any copy holds, exact reports that a copy spelled exactly
+// holds one, and noCap reports that some copy, in any spelling, holds no
+// cap.
+type outputCap struct {
+	largest int64
+	exact   bool
+	noCap   bool
+}
+
+// add records one copy of the member, spelled exactly or not, with its
+// value token. A value that is no cap (see jsonCapValue) sets noCap.
+func (c *outputCap) add(exact bool, token []byte) {
+	n, ok := jsonCapValue(token)
+	if !ok {
+		c.noCap = true
+		return
+	}
+	c.largest = max(c.largest, n)
+	c.exact = c.exact || exact
+}
+
+// jsonCapValue reads an output cap value: a JSON number that is finite and
+// at least 1, truncated to a whole number of tokens. Anything else (absent,
+// a string, null, 0, a negative number, an object) is no cap.
+func jsonCapValue(token []byte) (int64, bool) {
+	if len(token) == 0 || (token[0] != '-' && (token[0] < '0' || token[0] > '9')) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(string(token), 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) || f < 1 {
+		return 0, false
+	}
+	if f >= math.MaxInt64 {
+		return math.MaxInt64, true
+	}
+	return int64(f), true
 }
 
 // skipJSONSpace returns the offset of the first non-space byte at or after i.
