@@ -38,26 +38,27 @@ const (
 // in logs and Events to keep cardinality bounded at 1000+ agents. A nil
 // *Metrics no-ops every method, so tests need no registry.
 type Metrics struct {
-	llmRequests     *prometheus.CounterVec
-	llmDuration     *prometheus.HistogramVec
-	llmTokens       *prometheus.CounterVec
-	llmSpend        *prometheus.CounterVec
-	llmFallback     *prometheus.CounterVec
-	budgetThreshld  *prometheus.CounterVec
-	budgetBoundary  *prometheus.CounterVec
-	llmServerTools  *prometheus.CounterVec
-	llmUsageMissing *prometheus.CounterVec
-	toolCalls       *prometheus.CounterVec
-	toolDuration    *prometheus.HistogramVec
-	channelMsgs     *prometheus.CounterVec
-	channelMsgDur   *prometheus.HistogramVec
-	channelWake     *prometheus.CounterVec
-	channelWakeDur  *prometheus.HistogramVec
-	channelCB       *prometheus.CounterVec
-	channelDelivery *prometheus.CounterVec
-	channelCBDur    *prometheus.HistogramVec
-	tooLarge        *prometheus.CounterVec
-	patchFailed     *prometheus.CounterVec
+	llmRequests       *prometheus.CounterVec
+	llmDuration       *prometheus.HistogramVec
+	llmTokens         *prometheus.CounterVec
+	llmSpend          *prometheus.CounterVec
+	llmSpendEstimated *prometheus.CounterVec
+	llmFallback       *prometheus.CounterVec
+	budgetThreshld    *prometheus.CounterVec
+	budgetBoundary    *prometheus.CounterVec
+	llmServerTools    *prometheus.CounterVec
+	llmUsageMissing   *prometheus.CounterVec
+	toolCalls         *prometheus.CounterVec
+	toolDuration      *prometheus.HistogramVec
+	channelMsgs       *prometheus.CounterVec
+	channelMsgDur     *prometheus.HistogramVec
+	channelWake       *prometheus.CounterVec
+	channelWakeDur    *prometheus.HistogramVec
+	channelCB         *prometheus.CounterVec
+	channelDelivery   *prometheus.CounterVec
+	channelCBDur      *prometheus.HistogramVec
+	tooLarge          *prometheus.CounterVec
+	patchFailed       *prometheus.CounterVec
 }
 
 // wakeDurationBuckets are kaalm_channel_wake_duration_seconds's buckets. A
@@ -86,6 +87,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		llmSpend: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_llm_spend_usd_total", Help: "Accumulated LLM spend in USD.",
 		}, []string{labelProvider, labelNamespace}),
+		llmSpendEstimated: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "kaalm_llm_spend_estimated_usd_total",
+			Help: "The share of kaalm_llm_spend_usd_total that is the gateway's estimate, " +
+				"for streams whose usage the provider did not report in full.",
+		}, []string{labelProvider, labelNamespace}),
 		llmFallback: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_llm_fallback_total", Help: "Fallback attempts by reason.",
 		}, []string{"from_provider", "to_provider", "reason"}),
@@ -99,7 +105,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "kaalm_llm_server_tool_use_total", Help: "Provider-side tool calls extracted from response usage.",
 		}, []string{labelProvider, labelNamespace, labelTool}),
 		llmUsageMissing: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "kaalm_llm_usage_missing_total", Help: "Successful LLM responses that carried no usage and settled at zero spend.",
+			Name: "kaalm_llm_usage_missing_total", Help: "Successful LLM responses whose usage the provider did not report in full: " +
+				"settled at zero spend, or at the gateway's estimate for a stream.",
 		}, []string{labelProvider, labelModel}),
 		toolCalls: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_tool_calls_total", Help: "Brokered MCP calls by outcome.",
@@ -193,6 +200,16 @@ func (m *Metrics) Spend(provider, namespace string, usd float64) {
 	m.llmSpend.WithLabelValues(provider, namespace).Add(usd)
 }
 
+// SpendEstimated adds the estimated share of a call's spend: the cost of the
+// usage parts the gateway estimated because the provider did not report
+// them. Spend has already counted the same dollars.
+func (m *Metrics) SpendEstimated(provider, namespace string, usd float64) {
+	if m == nil || usd == 0 {
+		return
+	}
+	m.llmSpendEstimated.WithLabelValues(provider, namespace).Add(usd)
+}
+
 // ServerToolUse counts provider-side tool calls extracted from a response.
 func (m *Metrics) ServerToolUse(provider, namespace, tool string, count int64) {
 	if m == nil || count <= 0 {
@@ -201,8 +218,9 @@ func (m *Metrics) ServerToolUse(provider, namespace, tool string, count int64) {
 	m.llmServerTools.WithLabelValues(provider, namespace, tool).Add(float64(count))
 }
 
-// UsageMissing counts one 2xx LLM response, streamed or not, that carried no
-// usage and so settled at zero spend.
+// UsageMissing counts one 2xx LLM response, streamed or not, whose usage the
+// provider did not report in full: it settled at zero spend, or, for a
+// stream, partly or wholly at the gateway's estimate.
 func (m *Metrics) UsageMissing(provider, model string) {
 	if m == nil {
 		return

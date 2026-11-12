@@ -1019,7 +1019,7 @@
           "sort": "desc"
         }
       },
-      "description": "Successful responses that carried no usage and settled at zero spend."
+      "description": "Successful responses whose usage the provider did not report in full: settled at zero spend, or at the gateway's estimate for a stream."
     }
   ]
 }

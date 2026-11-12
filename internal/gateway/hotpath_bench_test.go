@@ -434,7 +434,7 @@ func BenchmarkRelayStream(b *testing.B) {
 				}
 				w := newCountingWriter()
 				b.StartTimer()
-				if out := h.server.relayStream(context.Background(), w, resp, adapter, translator, callerFormat,
+				if out := h.server.relayStream(context.Background(), w, resp, adapter, nil, translator, callerFormat,
 					"team-a", "agent/sup", provider, "m1", nil, nil); out != outcomeOK {
 					b.Fatalf("outcome %q", out)
 				}
@@ -443,6 +443,50 @@ func BenchmarkRelayStream(b *testing.B) {
 			}
 			b.ReportMetric(float64(writes)/float64(b.N), "writes/op")
 			b.ReportMetric(float64(flushes)/float64(b.N), "flushes/op")
+		})
+	}
+}
+
+// streamData is the trimmed data payload of one SSE event, as the relay
+// hands it to the adapter.
+func streamData(event []byte) []byte {
+	for _, line := range bytes.Split(event, []byte("\n")) {
+		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			return bytes.TrimSpace(data)
+		}
+	}
+	return nil
+}
+
+// BenchmarkStreamEstimator feeds one content event to each adapter's stream
+// estimator: a text delta and a tool-argument delta per format. The
+// estimator runs on every event of every stream, so it must allocate
+// nothing per event.
+func BenchmarkStreamEstimator(b *testing.B) {
+	for _, c := range []struct {
+		name, providerType string
+		data               []byte
+	}{
+		{"openai/text", providerTypeOpenAI, streamData(openAIStreamEvents(1)[0])},
+		{"openai/tool", providerTypeOpenAI, streamData(openAIToolStreamEvents(1)[1])},
+		{"anthropic/text", providerTypeAnthropic, streamData(anthropicStreamEvents(1)[2])},
+		{"anthropic/tool", providerTypeAnthropic, streamData(anthropicToolStreamEvents(1)[2])},
+		{"vertex/text", providerTypeVertex, []byte(`{"candidates":[{"content":{"role":"model",` +
+			`"parts":[{"text":"tok "}]}}],"modelVersion":"gemini-2.5-flash"}`)},
+		{"vertex/tool", providerTypeVertex, []byte(`{"candidates":[{"content":{"role":"model",` +
+			`"parts":[{"functionCall":{"name":"lookup","args":{"k":1}}}]}}],"modelVersion":"gemini-2.5-flash"}`)},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			adapter, _ := adapterForProviderType(c.providerType)
+			est := adapter.streamEstimator(nil)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				est.event(c.data)
+			}
+			if _, out := est.estimate(); out == 0 {
+				b.Fatal("the event added no output estimate")
+			}
 		})
 	}
 }

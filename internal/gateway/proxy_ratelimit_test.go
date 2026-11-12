@@ -267,9 +267,11 @@ func TestProxy_TokensPerMinuteConcurrentStreamsReserve(t *testing.T) {
 	}
 }
 
-// TestProxy_TokensPerMinuteStreamWithoutUsageKeepsReservation: a stream that
-// ends with no usage keeps its reservation as its charge.
-func TestProxy_TokensPerMinuteStreamWithoutUsageKeepsReservation(t *testing.T) {
+// TestProxy_TokensPerMinuteStreamWithoutUsageSettlesAtEstimate: a stream
+// that finishes cleanly with no usage settles its reservation at the
+// adapter's estimate (the body the provider received over four, plus the
+// content relayed), so the next request is admitted.
+func TestProxy_TokensPerMinuteStreamWithoutUsageSettlesAtEstimate(t *testing.T) {
 	h := tpmHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeSSE(w, `data: {"choices":[{"delta":{"content":"hi"}}]}`, `data: [DONE]`)
@@ -282,6 +284,7 @@ func TestProxy_TokensPerMinuteStreamWithoutUsageKeepsReservation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stream = %d, want 200", resp.StatusCode)
 	}
+	sent := <-h.upreqs
 	missing := func() float64 {
 		return testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1"))
 	}
@@ -291,9 +294,14 @@ func TestProxy_TokensPerMinuteStreamWithoutUsageKeepsReservation(t *testing.T) {
 	if got := missing(); got != 1 {
 		t.Fatalf("usage missing = %v, want 1", got)
 	}
-	// The reservation, cut at the floor of -1000, stays: a minute at 1000/min.
-	waitTokenLevel(t, h, -1000)
-	expectTokenRateLimited(t, h, "60")
+	// Input: the upstream body over four; output: one token for "hi".
+	waitTokenLevel(t, h, float64(1000-(int64(len(sent.raw)/4)+1)))
+	next := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	_, _ = io.ReadAll(next.Body)
+	_ = next.Body.Close()
+	if next.StatusCode != http.StatusOK {
+		t.Errorf("request after the estimate settled = %d, want 200", next.StatusCode)
+	}
 }
 
 // TestProxy_TokensPerMinuteNoCapReservesOneShare: a request with no output
@@ -378,9 +386,10 @@ func TestProxy_TokensPerMinuteFailedCallReleasesReservation(t *testing.T) {
 // TestProxy_TokensPerMinuteCutAnthropicStreamKeepsReservation: an Anthropic
 // stream reports input tokens on message_start and output tokens only on
 // its last message_delta. A stream cut in between, by the provider or by a
-// caller that leaves, has read input usage only, so it settles at the larger
-// of that usage and its reservation: the output it may have sent stays
-// charged.
+// caller that leaves, has read input usage only. Its output is the
+// adapter's estimate of the deltas read, it counts as usage missing, and the
+// token bucket settles at the larger of that usage and its reservation: the
+// output it may have sent stays charged.
 func TestProxy_TokensPerMinuteCutAnthropicStreamKeepsReservation(t *testing.T) {
 	const start = "event: message_start\n" +
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}` + "\n\n" +
@@ -437,6 +446,13 @@ func TestProxy_TokensPerMinuteCutAnthropicStreamKeepsReservation(t *testing.T) {
 			if got := h.spend.Total("team-a", "prov", "m1").InputTokens; got != 7 {
 				t.Fatalf("spend input tokens = %d, want 7: the relay never settled", got)
 			}
+			if got := h.spend.Total("team-a", "prov", "m1").OutputTokens; got != 1 {
+				t.Errorf("spend output tokens = %d, want 1 estimated for the delta read", got)
+			}
+			// usageMissing runs after the spend is recorded.
+			waitFor(t, func() bool {
+				return testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")) == 1
+			})
 			waitTokenLevel(t, h, float64(1000-reserve))
 		})
 	}

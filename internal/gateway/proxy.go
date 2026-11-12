@@ -306,7 +306,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return fr
 	})
 	if ctx.Err() != nil && !readsOnAfterCallerLeft(res) {
-		s.settleCallerLeft(ctx, res, c.Namespace, &modelID, &answered, reservation)
+		s.settleCallerLeft(ctx, res, c.Namespace, workload, &modelID, &answered, reservation)
 		return
 	}
 	if !ok {
@@ -320,7 +320,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // requestTokenEstimate is what a request reserves on provider's token
-// bucket: its body size over four (about four bytes per token) as the input
+// bucket: its body size over bytesPerToken as the input
 // estimate, plus its output cap. The cap is the request's own, lowered to
 // the model's maxOutputTokens when that is smaller (the provider generates
 // no more than its ceiling); the model's maxOutputTokens when the request
@@ -337,19 +337,21 @@ func requestTokenEstimate(provider *kaalmv1beta1.ModelProvider, modelID string, 
 	if !ok {
 		outputCap = outputCapUnknown
 	}
-	return tokenEstimate{Input: int64(len(body) / 4), Output: outputCap}
+	return tokenEstimate{Input: int64(len(body) / bytesPerToken), Output: outputCap}
 }
 
 // settleCallerLeft ends a request whose caller left before the gateway
 // answered, and writes nothing. A 2xx that reaches it is a stream: it
 // arrives unread and can no longer be read, since its read derives from the
-// caller's context, so it counts as usage missing, keeps its token
-// reservation, and settles zero spend. A non-streamed 2xx goes to its relay
-// instead and is read to its end (see readsOnAfterCallerLeft). Any other
-// attempt releases its token reservation and settles zero. A relay that had
-// started settles what it read itself. The request counts as client_closed.
+// caller's context. The provider read the request, so the stream is charged
+// the serving adapter's input estimate from the body it received (see
+// settleRelay): it counts as usage missing, and its token reservation stays
+// as the token charge. A non-streamed 2xx goes to its relay instead and is
+// read to its end (see readsOnAfterCallerLeft). Any other attempt releases
+// its token reservation and settles zero. A relay that had started settles
+// what it read itself. The request counts as client_closed.
 func (s *Server) settleCallerLeft(
-	ctx context.Context, res forwardResult, namespace string, modelID, answered *string,
+	ctx context.Context, res forwardResult, namespace, workload string, modelID, answered *string,
 	reservation *tokenReservation,
 ) {
 	if res.resp != nil {
@@ -362,13 +364,17 @@ func (s *Server) settleCallerLeft(
 		*modelID = res.model
 	}
 	if res.resp != nil && res.resp.StatusCode >= 200 && res.resp.StatusCode <= 299 {
-		reservation.keep()
-		s.usageMissing(namespace, *answered, *modelID)
+		var est streamEstimator
+		if a, ok := adapterForProviderType(res.chosen.Spec.Type); ok {
+			est = a.streamEstimator(res.request)
+		}
+		s.settleRelay(withEstimate(Usage{}, est), false, res.chosen, namespace, workload, *modelID,
+			res.settle, reservation)
 	} else {
 		reservation.release()
-	}
-	if res.settle != nil {
-		res.settle(0)
+		if res.settle != nil {
+			res.settle(0)
+		}
 	}
 	s.Metrics.LLMRequest(*answered, *modelID, namespace, outcomeClientClosed)
 	spanError(ctx, outcomeClientClosed)
@@ -439,7 +445,7 @@ func (s *Server) writeWalkResult(
 		if crossing {
 			translator = llmtranslate.NewStream(res.format, inboundFormat, *modelID)
 		}
-		outcome := s.relayStream(ctx, w, res.resp, servingAdapter, translator, formatForType(adapter.formatName()),
+		outcome := s.relayStream(ctx, w, res.resp, servingAdapter, res.request, translator, formatForType(adapter.formatName()),
 			namespace, workload, res.chosen, *modelID, res.settle, reservation)
 		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 		return
@@ -562,7 +568,8 @@ func (s *Server) forwardOnce(
 		s.vertexTokens.forget(provider.Name, credential)
 	}
 	fallback, class := isFallbackable(resp.StatusCode)
-	fr := forwardResult{resp: resp, fallilable: fallback, class: class, provider: provider.Name, chosen: provider}
+	fr := forwardResult{resp: resp, fallilable: fallback, class: class, provider: provider.Name, chosen: provider,
+		request: outBody}
 	if class == classNone {
 		// A 2xx goes to the relay unread: the walk never abandons a 2xx
 		// (tryWithFallbacks returns it), and the handler closes the body.
@@ -716,11 +723,13 @@ func (s *Server) applyBudgetDecision(
 // enforcement), the cost lands through its settle so the slot frees and the
 // cost records in one atomic step; otherwise it lands through the plain
 // ledger Add. reservation (nil for none) is settled with the input plus
-// output tokens on the token bucket that admitted the request.
+// output tokens on the token bucket that admitted the request. When part of
+// usage is the adapter's estimate, that part's cost also lands on the
+// estimated-spend counter and is returned as estimatedUSD.
 func (s *Server) settleUsage(
 	provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string, usage Usage,
 	settle func(float64), reservation *tokenReservation,
-) {
+) (estimatedUSD float64) {
 	reservation.settle(usage.InputTokens + usage.OutputTokens)
 	cost := costOf(provider, modelID, usage)
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
@@ -731,9 +740,14 @@ func (s *Server) settleUsage(
 	}
 	s.Metrics.Tokens(provider.Name, modelID, namespace, usage)
 	s.Metrics.Spend(provider.Name, namespace, cost)
+	if usage.estimated() {
+		estimatedUSD = costOf(provider, modelID, usage.estimatedPart())
+		s.Metrics.SpendEstimated(provider.Name, namespace, estimatedUSD)
+	}
 	for tool, count := range usage.ServerTools {
 		s.Metrics.ServerToolUse(provider.Name, namespace, tool, count)
 	}
+	return estimatedUSD
 }
 
 // copyForwardedHeaders applies the forwarded-header contract: strip inbound
@@ -783,12 +797,16 @@ func readsOnAfterCallerLeft(res forwardResult) bool {
 
 // relayStream forwards SSE events to the caller as each one completes, and
 // events that arrive together leave in one write (see eventFlusher). It folds
-// usage out of the events the adapter recognizes. Spend is recorded, and the
-// token reservation settled, after the stream ends (see settleRelay). A stream
-// counts as finished once the adapter reports its final event read, even when
-// the caller leaves or the read fails after it: its usage is then complete. A
-// stream that ends without usage settles at zero spend, keeps its token
-// reservation, and is reported by usageMissing. When the upstream read fails
+// usage out of the events the adapter recognizes, and feeds the same events
+// to the adapter's stream estimator, built from request, the body the
+// provider received. Spend is recorded, and the token reservation settled,
+// after the stream ends (see settleRelay). A stream counts as finished once
+// the adapter reports its final event read, even when the caller leaves or
+// the read fails after it: its usage is then complete. A stream that ends
+// without complete usage settles the parts the provider reported plus the
+// adapter's estimate for the rest, marked estimated and reported by
+// usageMissing; a stream with nothing reported or estimated settles at zero
+// spend and keeps its token reservation. When the upstream read fails
 // after the status is sent (the idle bound passed, or the connection broke),
 // the relay ends the stream with one error event in the caller's format, so the
 // agent can tell a truncated stream from a complete one. It returns the outcome
@@ -798,7 +816,7 @@ func readsOnAfterCallerLeft(res forwardResult) bool {
 // the caller's request context, and the upstream read from ctx, so ctx.Err() is
 // set only when the caller left.
 func (s *Server) relayStream(
-	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter, request []byte,
 	translator llmtranslate.Stream, callerFormat llmtranslate.Format, namespace, workload string,
 	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), reservation *tokenReservation,
 ) (outcome string) {
@@ -807,13 +825,15 @@ func (s *Server) relayStream(
 	flusher, _ := w.(http.Flusher)
 
 	var usage Usage
+	est := adapter.streamEstimator(request)
 	finalRead := false
 	// Settle on EVERY exit, including the early return on a downstream
 	// write error: near a hard ceiling, dropping accumulated usage would
 	// under-settle exactly where undercounting voids the cap, and a held
 	// admission slot must always free.
 	defer func() {
-		s.settleRelay(usage, outcome == outcomeOK || finalRead, provider, namespace, workload, modelID, settle, reservation)
+		s.settleRelay(withEstimate(usage, est), outcome == outcomeOK || finalRead, provider, namespace, workload,
+			modelID, settle, reservation)
 	}()
 
 	ef := &eventFlusher{r: resp.Body, f: flusher}
@@ -835,9 +855,14 @@ func (s *Server) relayStream(
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
-			// Usage comes from the upstream's own events, before translation.
-			if adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage) {
+			// Usage and the estimate come from the upstream's own events,
+			// before translation.
+			data = bytes.TrimSpace(data)
+			if adapter.accumulateStreamUsage(data, &usage) {
 				finalRead = true
+			}
+			if est != nil {
+				est.event(data)
 			}
 			bodyLog("llm stream", data)
 		}
@@ -889,7 +914,10 @@ func (s *Server) relayStream(
 
 // settleRelay settles a relay when it ends, on every exit: the usage it
 // read, or, when it read none, zero spend reported by usageMissing, with the
-// token reservation kept as the call's charge. finished reports that the
+// token reservation kept as the call's charge. A stream's usage can hold the
+// adapter's estimate for the parts the provider did not report; it settles
+// like reported usage, and usageMissing reports it with the estimated
+// dollars. finished reports that the
 // relay finished cleanly: its outcome is ok, or, for a stream, the
 // provider's final event was read, whatever happened after it. A relay that
 // did not (outcome client_closed or error: the caller left, the provider
@@ -907,11 +935,14 @@ func (s *Server) settleRelay(
 			// Settled first, so the settle in settleUsage does nothing.
 			reservation.settleAtLeast(usage.InputTokens + usage.OutputTokens)
 		}
-		s.settleUsage(provider, namespace, workload, modelID, usage, settle, reservation)
+		estimatedUSD := s.settleUsage(provider, namespace, workload, modelID, usage, settle, reservation)
+		if usage.estimated() {
+			s.usageMissing(namespace, provider.Name, modelID, usage, estimatedUSD)
+		}
 		return
 	}
 	reservation.keep()
-	s.usageMissing(namespace, provider.Name, modelID)
+	s.usageMissing(namespace, provider.Name, modelID, Usage{}, 0)
 	if settle != nil {
 		settle(0)
 	}
@@ -1168,14 +1199,35 @@ func streamErrorType(cause error) string {
 	return errProviderError
 }
 
-// usageMissing reports a 2xx response that settles at zero spend because it
-// carried no usage. Under hard enforcement such a response is invisible to
-// the budget, so it is counted, and logged at most once a minute per
-// provider: the line names the first response of each window.
-func (s *Server) usageMissing(namespace, provider, modelID string) {
+// usageMissing reports a 2xx response whose usage the provider did not
+// report in full: one that settles at zero spend because it carried no
+// usage, which under hard enforcement is invisible to the budget, or a
+// stream that settles partly or wholly at the adapter's estimate (usage,
+// whose estimated parts cost estimatedUSD). Each is counted, and logged at
+// most once a minute per provider: the line names the first response of
+// each window.
+func (s *Server) usageMissing(namespace, provider, modelID string, usage Usage, estimatedUSD float64) {
 	if s.usageMissingLog.allow(provider, usageMissingLogInterval) {
-		slog.Warn("LLM response carried no usage; settled at zero spend",
-			"namespace", namespace, "provider", provider, "model", modelID)
+		if usage.estimated() {
+			slog.Warn("LLM stream carried incomplete usage; settled at estimated spend",
+				"namespace", namespace, "provider", provider, "model", modelID,
+				"estimated", estimatedParts(usage), "usd", estimatedUSD)
+		} else {
+			slog.Warn("LLM response carried no usage; settled at zero spend",
+				"namespace", namespace, "provider", provider, "model", modelID)
+		}
 	}
 	s.Metrics.UsageMissing(provider, modelID)
+}
+
+// estimatedParts names the estimated parts of usage for the usageMissing
+// log line: input, output, or input,output.
+func estimatedParts(u Usage) string {
+	switch {
+	case u.InputEstimated && u.OutputEstimated:
+		return "input,output"
+	case u.InputEstimated:
+		return "input"
+	}
+	return "output"
 }

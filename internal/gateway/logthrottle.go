@@ -28,10 +28,10 @@ import (
 // the ModelProvider or ToolProvider status already carries the cause.
 const credentialLogInterval = time.Minute
 
-// usageMissingLogInterval paces the warning for an LLM response that
-// carried no usage: one line per provider per minute per replica. A
-// provider that never reports usage repeats it on every request, and
-// kaalm_llm_usage_missing_total counts each response.
+// usageMissingLogInterval paces the warning for an LLM response whose usage
+// the provider did not report in full: one line per provider per minute per
+// replica. A provider that never reports usage repeats it on every request,
+// and kaalm_llm_usage_missing_total counts each response.
 const usageMissingLogInterval = time.Minute
 
 // logThrottle paces a log line per key: allow grants at most one line per key

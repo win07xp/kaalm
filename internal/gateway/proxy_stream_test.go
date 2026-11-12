@@ -27,6 +27,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/llmtranslate"
 )
 
@@ -47,7 +50,7 @@ func TestRelayStream_CleanEndAfterCallerLeftIsClientClosed(t *testing.T) {
 		Header:     http.Header{"Content-Type": {"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n")),
 	}
-	outcome := h.server.relayStream(ctx, httptest.NewRecorder(), resp, adapter, nil, formatForType("openai"),
+	outcome := h.server.relayStream(ctx, httptest.NewRecorder(), resp, adapter, nil, nil, formatForType("openai"),
 		"team-a", "sup", h.store.providers["prov"], "m1", nil, nil)
 	if outcome != outcomeClientClosed {
 		t.Errorf("outcome = %q, want %q", outcome, outcomeClientClosed)
@@ -65,7 +68,7 @@ func relayCounted(t *testing.T, upstream llmtranslate.Format, translator llmtran
 	adapter, _ := adapterForProviderType(string(upstream))
 	resp := sseResponse(chunks)
 	w := newCountingWriter()
-	if out := h.server.relayStream(context.Background(), w, resp, adapter, translator, callerFormat,
+	if out := h.server.relayStream(context.Background(), w, resp, adapter, nil, translator, callerFormat,
 		"team-a", "agent/sup", h.store.providers["prov"], "m1", nil, nil); out != outcomeOK {
 		t.Fatalf("outcome = %q, want ok", out)
 	}
@@ -170,4 +173,108 @@ func TestRelayStream_CompleteEventNotHeldForTheNext(t *testing.T) {
 			}
 		})
 	}
+}
+
+// noEstimateAdapter is the OpenAI adapter with no stream estimator.
+type noEstimateAdapter struct{ openaiAdapter }
+
+func (noEstimateAdapter) streamEstimator([]byte) streamEstimator { return nil }
+
+// A stream that ends without its usage settles the parts the provider
+// reported plus the adapter's estimate for the rest. The estimate counts as
+// spend and on the estimated-spend counter, and the stream counts as usage
+// missing with a log line that says the spend was estimated. An adapter with
+// no estimator settles only what was reported, as before.
+func TestRelayStream_EstimatesUnreportedUsage(t *testing.T) {
+	const request = `{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello there, how are you?"}]}`
+	inputEstimate := int64(len(request) / 4)
+	const inPrice, outPrice = 2.0, 4.0
+	cases := []struct {
+		name         string
+		providerType string
+		adapter      providerAdapter
+		body         string
+		wantIn       int64
+		wantOut      int64
+		// wantEstimatedTokens are the input and output tokens priced on
+		// the estimated-spend counter.
+		wantEstimatedIn, wantEstimatedOut int64
+		wantLog                           string
+		wantParts                         string
+	}{
+		{name: "openai left before usage", providerType: "openai",
+			body:   "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+			wantIn: inputEstimate, wantOut: 1, wantEstimatedIn: inputEstimate, wantEstimatedOut: 1,
+			wantLog: "LLM stream carried incomplete usage; settled at estimated spend", wantParts: "input,output"},
+		{name: "anthropic cut after message_start", providerType: "anthropic",
+			body: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}\n\n" +
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+			wantIn: 7, wantOut: 1, wantEstimatedOut: 1,
+			wantLog: "LLM stream carried incomplete usage; settled at estimated spend", wantParts: "output"},
+		{name: "adapter without an estimator", adapter: noEstimateAdapter{}, providerType: "openai",
+			body:    "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+			wantLog: "LLM response carried no usage; settled at zero spend"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureSlog(t)
+			h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+			h.seedRoute()
+			prov := h.store.providers["prov"]
+			prov.Spec.Models = []kaalmv1beta1.ModelProviderModel{
+				{ID: "m1", CostPer1MInputTokens: "2", CostPer1MOutputTokens: "4"},
+			}
+			adapter := tc.adapter
+			if adapter == nil {
+				adapter, _ = adapterForProviderType(tc.providerType)
+			}
+			// The caller left: the relay reads what arrived, then ends
+			// client_closed without the usage event.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(tc.body)),
+			}
+			outcome := h.server.relayStream(ctx, httptest.NewRecorder(), resp, adapter, []byte(request), nil,
+				formatForType(tc.providerType), "team-a", "sup", prov, "m1", nil, nil)
+			if outcome != outcomeClientClosed {
+				t.Errorf("outcome = %q, want %q", outcome, outcomeClientClosed)
+			}
+			u := h.spend.Total("team-a", "prov", "m1")
+			if u.InputTokens != tc.wantIn || u.OutputTokens != tc.wantOut {
+				t.Errorf("settled usage = %d in, %d out; want %d, %d", u.InputTokens, u.OutputTokens, tc.wantIn, tc.wantOut)
+			}
+			wantSpend := (float64(tc.wantIn)*inPrice + float64(tc.wantOut)*outPrice) / 1e6
+			if got := testutil.ToFloat64(h.server.Metrics.llmSpend.WithLabelValues("prov", "team-a")); !nearlyEqual(got, wantSpend) {
+				t.Errorf("kaalm_llm_spend_usd_total = %v, want %v", got, wantSpend)
+			}
+			wantEstimated := (float64(tc.wantEstimatedIn)*inPrice + float64(tc.wantEstimatedOut)*outPrice) / 1e6
+			if got := testutil.ToFloat64(h.server.Metrics.llmSpendEstimated.WithLabelValues("prov", "team-a")); !nearlyEqual(got, wantEstimated) {
+				t.Errorf("kaalm_llm_spend_estimated_usd_total = %v, want %v", got, wantEstimated)
+			}
+			if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != 1 {
+				t.Errorf("usage missing = %v, want 1", got)
+			}
+			recs := logRecords(t, buf, tc.wantLog)
+			if len(recs) != 1 {
+				t.Fatalf("log lines %q = %d, want 1 (log: %s)", tc.wantLog, len(recs), buf.String())
+			}
+			if tc.wantParts != "" {
+				if got := recs[0]["estimated"]; got != tc.wantParts {
+					t.Errorf("estimated = %v, want %q", got, tc.wantParts)
+				}
+				if got, _ := recs[0]["usd"].(float64); !nearlyEqual(got, wantEstimated) {
+					t.Errorf("usd = %v, want %v", recs[0]["usd"], wantEstimated)
+				}
+			}
+		})
+	}
+}
+
+// nearlyEqual compares two dollar amounts up to float rounding.
+func nearlyEqual(a, b float64) bool {
+	d := a - b
+	return d < 1e-12 && d > -1e-12
 }

@@ -210,8 +210,8 @@ type Server struct {
 	// gateway credential" warning. It is separate from toolCredentialLog
 	// so neither warning holds back the other.
 	toolRejectedLog logThrottle
-	// usageMissingLog paces the warning for a 2xx LLM response that
-	// carried no usage, per ModelProvider.
+	// usageMissingLog paces the warning for a 2xx LLM response whose usage
+	// the provider did not report in full, per ModelProvider.
 	usageMissingLog logThrottle
 
 	// AgentResolver resolves agent Service names for delivery dials and

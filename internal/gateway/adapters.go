@@ -31,12 +31,61 @@ type Usage struct {
 	// ServerTools counts provider-side tool calls by normalized tool id
 	// (for example "web_search"). Nil when the response reported none.
 	ServerTools map[string]int64
+	// InputEstimated and OutputEstimated mark a count as the adapter's
+	// estimate, filled where the provider reported none (see withEstimate).
+	InputEstimated, OutputEstimated bool
 }
 
 // isZero reports whether nothing was extracted. Usage carries a map, so
 // struct equality is unavailable; "did we see usage" checks go through here.
 func (u Usage) isZero() bool {
 	return u.InputTokens == 0 && u.OutputTokens == 0 && len(u.ServerTools) == 0
+}
+
+// estimated reports whether any count is the adapter's estimate.
+func (u Usage) estimated() bool { return u.InputEstimated || u.OutputEstimated }
+
+// estimatedPart is the usage holding only the estimated counts, for pricing
+// the estimated share of a call.
+func (u Usage) estimatedPart() Usage {
+	var p Usage
+	if u.InputEstimated {
+		p.InputTokens, p.InputEstimated = u.InputTokens, true
+	}
+	if u.OutputEstimated {
+		p.OutputTokens, p.OutputEstimated = u.OutputTokens, true
+	}
+	return p
+}
+
+// streamEstimator keeps one stream's running token estimate, for the parts
+// of its usage the provider does not report: a stream the caller leaves
+// before its usage event, one the provider breaks, or one that finishes
+// with no usage. It returns tokens; costOf prices them.
+type streamEstimator interface {
+	// event reads one SSE data payload of the upstream's own stream,
+	// trimmed, before any translation.
+	event(data []byte)
+	// estimate returns the running input and output estimate.
+	estimate() (input, output int64)
+}
+
+// withEstimate fills the parts of reported the provider did not report with
+// est's estimate, input and output separately, and marks each part it
+// fills. A count of zero counts as not reported, and a part whose estimate
+// is zero stays zero and unmarked. A nil est returns reported unchanged.
+func withEstimate(reported Usage, est streamEstimator) Usage {
+	if est == nil {
+		return reported
+	}
+	input, output := est.estimate()
+	if reported.InputTokens == 0 && input > 0 {
+		reported.InputTokens, reported.InputEstimated = input, true
+	}
+	if reported.OutputTokens == 0 && output > 0 {
+		reported.OutputTokens, reported.OutputEstimated = output, true
+	}
+	return reported
 }
 
 // providerAdapter carries the per-provider knowledge: request-format paths,
@@ -55,6 +104,9 @@ type providerAdapter interface {
 	// it carries into u. It reports whether the payload is the stream's
 	// final event, after which the stream's usage is complete.
 	accumulateStreamUsage(data []byte, u *Usage) (final bool)
+	// streamEstimator returns a new estimator for one stream, given the body
+	// the provider received, or nil when the adapter estimates nothing.
+	streamEstimator(request []byte) streamEstimator
 	// streamUsageOption reports whether a streaming request in this format
 	// needs stream_options.include_usage set for the stream to carry usage.
 	streamUsageOption() bool
@@ -196,6 +248,17 @@ func mayBeAnthropicStreamEvent(data []byte) bool {
 		bytes.Contains(data, []byte(`\u`))
 }
 
+// streamEstimator estimates from the generated content of the deltas: text
+// (text_delta), tool input JSON (input_json_delta), and thinking
+// (thinking_delta). message_start, content_block_start with empty text,
+// message_delta, and message_stop hold no such member with content, so
+// they add nothing.
+func (anthropicAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, anthropicContentMembers)
+}
+
+var anthropicContentMembers = [][]byte{[]byte("text"), []byte("partial_json"), []byte("thinking")}
+
 func (anthropicAdapter) streamUsageOption() bool { return false }
 
 func (anthropicAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
@@ -265,6 +328,19 @@ func mayCarryOpenAIUsage(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// streamEstimator estimates from the generated content of the chunks'
+// deltas: content and refusal, the reasoning deltas some compatible
+// providers send (reasoning_content, reasoning), and tool-call arguments.
+// The role chunk (empty content), the finish chunk, the usage chunk, and
+// [DONE] hold no such member with content, so they add nothing.
+func (openaiAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, openaiContentMembers)
+}
+
+var openaiContentMembers = [][]byte{
+	[]byte("content"), []byte("refusal"), []byte("reasoning_content"), []byte("reasoning"), []byte("arguments"),
 }
 
 // streamUsageOption: without stream_options.include_usage, OpenAI-format
