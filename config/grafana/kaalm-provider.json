@@ -1020,6 +1020,63 @@
         }
       },
       "description": "Successful responses whose usage the provider did not report in full: settled at zero spend, or at the gateway's estimate for a stream."
+    },
+    {
+      "id": 39,
+      "type": "timeseries",
+      "title": "Estimated share of spend by namespace",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 39,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (namespace) (rate(kaalm_llm_spend_estimated_usd_total{provider=\"$provider\"}[$__rate_interval])) / sum by (namespace) (rate(kaalm_llm_spend_usd_total{provider=\"$provider\"}[$__rate_interval]))",
+          "refId": "A",
+          "range": true,
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "The share of each namespace's spend that is the gateway's estimate, for streams whose usage the provider did not report in full."
     }
   ]
 }
