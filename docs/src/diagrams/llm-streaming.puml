@@ -31,6 +31,6 @@ alt stream completes
   gw -> gw : settle spend
 else upstream fails or goes idle mid-stream
   gw --> agent : error event, stream ends
-  gw -> gw : settle the usage so far
+  gw -> gw : settle the usage read,\nestimated where not reported
 end
 @enduml

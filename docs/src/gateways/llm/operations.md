@@ -51,12 +51,13 @@ The gateway exposes Prometheus metrics on `:9090/metrics`:
 - `kaalm_llm_request_duration_seconds{provider,model}` (forwarded requests only, stream relay included, labeled with the provider that answered; local denials such as rate limiting and budget blocks are not observed)
 - `kaalm_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
 - `kaalm_llm_spend_usd_total{provider,namespace}`
+- `kaalm_llm_spend_estimated_usd_total{provider,namespace}` (the share of `kaalm_llm_spend_usd_total` that is the gateway's estimate, for streams whose usage the provider did not report in full; divide it by the spend counter for the estimated share; see [Estimated usage](request-handling.md#streaming-responses))
 - `kaalm_llm_fallback_total{from_provider,to_provider,reason}` (one increment per attempt on a fallback candidate; reason = success|connect_error|timeout|upstream_error|other|client_closed, where `client_closed` means the caller left during the attempt)
 - `kaalm_llm_budget_utilization{provider,namespace,period}` (gauge, 0-1)
 - `kaalm_budget_threshold_events_total{provider,namespace,action}` (action = warn|degrade|block; one increment per request the budget ladder acted on)
 - `kaalm_llm_budget_boundary_events_total{provider,namespace,event}` (event = engaged|throttled|fail_closed|margin_raised; emitted only by hard-enforcement providers, see [Hard enforcement](budgets-and-rate-limits.md#hard-enforcement))
 - `kaalm_llm_server_tool_use_total{provider,namespace,tool}` (provider-side tool calls extracted from response usage, such as `web_search`; see [the tool plane](../tool-plane.md#provider-side-tools))
-- `kaalm_llm_usage_missing_total{provider,model}` (successful responses, streamed or not, that carried no usage, settled zero spend, and kept their token reservation; see [Settling the reservation](budgets-and-rate-limits.md#settling-the-reservation))
+- `kaalm_llm_usage_missing_total{provider,model}` (successful responses whose usage the provider did not report in full: a non-streamed answer settles zero spend and keeps its token reservation, and a stream settles at the gateway's estimate and counts only when the estimate filled a part; see [Settling the reservation](budgets-and-rate-limits.md#settling-the-reservation) and [Estimated usage](request-handling.md#streaming-responses))
 
 The `status` values of `kaalm_llm_requests_total`:
 
