@@ -138,6 +138,9 @@ func TestStreamEstimator_OutputPerEvent(t *testing.T) {
 		{"openai legacy logprobs not counted", providerTypeOpenAI,
 			`{"choices":[{"text":"abcd","index":0,"logprobs":{"tokens":["abcd"],"token_logprobs":[-0.1],` +
 				`"top_logprobs":[{"abcd":-0.1,"text":-2.0}],"text_offset":[0]},"finish_reason":null}]}`, 1},
+		{"openai logprobs after many spaces not counted", providerTypeOpenAI,
+			`{"choices":[{"index":0,"delta":{"content":"Hi"},"logprobs":` + strings.Repeat(" ", 80) +
+				`{"content":[{"token":"Hi","logprob":-0.1,"bytes":[72,105]}]},"finish_reason":null}]}`, 1},
 		{"anthropic text delta", providerTypeAnthropic,
 			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello world!"}}`, 3},
 		{"anthropic input json delta", providerTypeAnthropic,
@@ -202,6 +205,8 @@ func TestJSONMembersLen(t *testing.T) {
 		{"truncated string", `{"text":"abc`, "text", 0},
 		{"truncated object", `{"args":{"a":"b"`, "args", 0},
 		{"name at the end", `{"text"`, "text", 0},
+		{"whitespace before an object counted once", `{"args":` + strings.Repeat(" ", 40) +
+			`{"args":{"a":"bcdefghijklmnop"}},"x":1}`, "args", 32},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

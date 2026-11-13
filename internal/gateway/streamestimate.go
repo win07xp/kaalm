@@ -178,13 +178,15 @@ func (s *memberScanner) next() (name int, value []byte, ok bool) {
 			s.i = max(s.i, end)
 			return name, nil, true
 		}
+		s.i = start
 		return name, data[start:end], true
 	}
 	s.i = len(data)
 	return 0, nil, false
 }
 
-// skip moves the scan past value, the last value next returned.
+// skip moves the scan past value, the last value next returned: next
+// leaves the scan at the value's first byte.
 func (s *memberScanner) skip(value []byte) { s.i += len(value) }
 
 // memberIndex returns the index in names of the string whose closing quote
