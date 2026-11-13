@@ -75,8 +75,9 @@ type streamEstimator interface {
 
 // withEstimate fills the parts of reported the provider did not report with
 // est's estimate, input and output separately, and marks each part it
-// fills. It asks est for an input estimate only when input is missing. A count of zero counts as not reported, and a part whose estimate
-// is zero stays zero and unmarked. A nil est returns reported unchanged.
+// fills. It asks est for an input estimate only when input is missing. A
+// count of zero counts as not reported, and a part whose estimate is zero
+// stays zero and unmarked. A nil est returns reported unchanged.
 func withEstimate(reported Usage, est streamEstimator) Usage {
 	if est == nil {
 		return reported
@@ -258,15 +259,17 @@ func mayBeAnthropicStreamEvent(data []byte) bool {
 // (text_delta), tool input JSON (input_json_delta), and thinking
 // (thinking_delta). message_start, content_block_start with empty text,
 // message_delta, and message_stop hold no such member with content, so
-// they add nothing. The input estimate leaves out the base64 source data of
-// image and document blocks.
+// they add nothing. The input estimate leaves out the data of a block's
+// source: the base64 data of image and document blocks, and also the plain
+// text of a document with a text source, an undercount used only for a
+// stream cut before message_start.
 func (anthropicAdapter) streamEstimator(request []byte) streamEstimator {
 	return newContentEstimator(request, anthropicContentMembers, nil, anthropicMediaMembers)
 }
 
 var (
 	anthropicContentMembers = [][]byte{[]byte("text"), []byte("partial_json"), []byte("thinking")}
-	anthropicMediaMembers   = []mediaMember{{name: []byte("data")}}
+	anthropicMediaMembers   = []mediaMember{{parent: []byte("source"), name: []byte("data")}}
 )
 
 func (anthropicAdapter) streamUsageOption() bool { return false }
@@ -349,7 +352,7 @@ func mayCarryOpenAIUsage(data []byte) bool {
 // with token metadata. The role chunk (empty content), the finish chunk,
 // the usage chunk, and [DONE] hold no such member with content, so they add
 // nothing. The input estimate leaves out base64 media: data URLs (image_url
-// and its url, file_data) and input_audio data.
+// and its url, file_data) and the data of input_audio.
 func (openaiAdapter) streamEstimator(request []byte) streamEstimator {
 	return newContentEstimator(request, openaiContentMembers, openaiSkippedMembers, openaiMediaMembers)
 }
@@ -364,7 +367,7 @@ var (
 		{name: []byte("url"), prefix: []byte("data:")},
 		{name: []byte("image_url"), prefix: []byte("data:")},
 		{name: []byte("file_data")},
-		{name: []byte("data")},
+		{parent: []byte("input_audio"), name: []byte("data")},
 	}
 )
 

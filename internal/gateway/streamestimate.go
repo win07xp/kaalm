@@ -44,9 +44,11 @@ type contentEstimator struct {
 
 // mediaMember names a request member whose string value is media and stays
 // out of the input estimate when it starts with prefix (any string value
-// when prefix is empty).
+// when prefix is empty). With a parent, the member is name inside an object
+// that is the value of a member named parent, such as data inside
+// inlineData; a member named name anywhere else is text and counts.
 type mediaMember struct {
-	name, prefix []byte
+	parent, name, prefix []byte
 }
 
 func newContentEstimator(request []byte, content, skipped [][]byte, media []mediaMember) *contentEstimator {
@@ -91,6 +93,9 @@ func mediaLen(data []byte, media []mediaMember) int {
 	names := make([][]byte, len(media))
 	for i, m := range media {
 		names[i] = m.name
+		if m.parent != nil {
+			names[i] = m.parent
+		}
 	}
 	total := 0
 	s := memberScanner{data: data, names: names}
@@ -99,9 +104,54 @@ func mediaLen(data []byte, media []mediaMember) int {
 		if !ok {
 			return total
 		}
-		if len(value) >= 2 && value[0] == '"' && bytes.HasPrefix(value[1:], media[name].prefix) {
-			total += valueLen(value)
+		m := media[name]
+		str := value
+		if m.parent != nil {
+			str = objectMember(value, m.name)
+		}
+		if len(str) >= 2 && str[0] == '"' && bytes.HasPrefix(str[1:], m.prefix) {
+			total += valueLen(str)
 			s.skip(value)
+		}
+	}
+}
+
+// objectMember returns the string value, with its quotes, of the member of
+// obj named name at obj's own level, or nil when obj is not an object or
+// has no such string member. obj is a complete object, as next returns it.
+func objectMember(obj, name []byte) []byte {
+	if len(obj) < 2 || obj[0] != '{' {
+		return nil
+	}
+	for i := 1; ; i++ {
+		i = skipSpace(obj, i)
+		if i >= len(obj) || obj[i] != '"' {
+			return nil
+		}
+		keyEnd, ok := stringEnd(obj, i)
+		if !ok {
+			return nil
+		}
+		key := obj[i+1 : keyEnd]
+		i = skipSpace(obj, keyEnd+1)
+		if i >= len(obj) || obj[i] != ':' {
+			return nil
+		}
+		i = skipSpace(obj, i+1)
+		end, complete := jsonValueEnd(obj, i)
+		if complete && obj[i] == '"' && bytes.Equal(key, name) {
+			return obj[i:end]
+		}
+		if !complete {
+			// A number, true, false, or null runs to the next comma or
+			// the closing brace.
+			for end < len(obj) && obj[end] != ',' && obj[end] != '}' {
+				end++
+			}
+		}
+		i = skipSpace(obj, end)
+		if i >= len(obj) || obj[i] != ',' {
+			return nil
 		}
 	}
 }

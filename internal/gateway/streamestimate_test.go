@@ -98,6 +98,40 @@ func TestStreamEstimator_InputLeavesOutMedia(t *testing.T) {
 	}
 }
 
+// A member named data outside a media member is text, and counts: tool
+// results, tool inputs, and other request members.
+func TestStreamEstimator_InputCountsDataOutsideMedia(t *testing.T) {
+	text := strings.Repeat("plain tool output ", 500)
+	cases := []struct {
+		name, typ, template string
+	}{
+		{"vertex functionResponse", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"f",` +
+				`"response":{"status":"ok","data":"%s"}}}]}]}`},
+		{"vertex functionCall args", providerTypeVertex,
+			`{"contents":[{"role":"model","parts":[{"functionCall":{"name":"f","args":{"data":"%s"}}}]}]}`},
+		{"anthropic tool_use input", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"assistant","content":[` +
+				`{"type":"tool_use","id":"t1","name":"f","input":{"data":"%s"}}]}],"stream":true}`},
+		{"anthropic tool_result object", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
+				`{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"x"}],"data":"%s"}]}],"stream":true}`},
+		{"openai metadata", providerTypeOpenAI,
+			`{"model":"gpt-4o","metadata":{"data":"%s"},"messages":[{"role":"user","content":"hi"}],"stream":true}`},
+		{"openai tool message", providerTypeOpenAI,
+			`{"model":"gpt-4o","messages":[{"role":"tool","tool_call_id":"c1","content":"{\"data\":\"%s\"}"}],"stream":true}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := fmt.Sprintf(tc.template, text)
+			want := int64(len(request) / bytesPerToken)
+			if in, _ := estimateOf(t, tc.typ, request); in != want {
+				t.Errorf("input estimate = %d, want %d (the whole request)", in, want)
+			}
+		})
+	}
+}
+
 // An image given by an https URL is text in the request, and counts.
 func TestStreamEstimator_InputCountsRemoteImageURL(t *testing.T) {
 	request := `{"model":"gpt-4o","messages":[{"role":"user","content":[` +
@@ -212,6 +246,28 @@ func TestJSONMembersLen(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := jsonMembersLen([]byte(tc.data), [][]byte{[]byte(tc.member)}); got != tc.want {
 				t.Errorf("jsonMembersLen(%s, %s) = %d, want %d", tc.data, tc.member, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestObjectMember(t *testing.T) {
+	cases := []struct {
+		name, obj, want string
+	}{
+		{"string member", `{"mimeType":"image/png","data":"abc"}`, `"abc"`},
+		{"after scalars", `{"n":1, "ok":true,"x":null , "data" : "abc"}`, `"abc"`},
+		{"after an object and an array", `{"o":{"data":"no"},"a":["data"],"data":"abc"}`, `"abc"`},
+		{"nested only", `{"o":{"data":"no"}}`, ``},
+		{"not a string", `{"data":{"a":"b"}}`, ``},
+		{"missing", `{"mimeType":"image/png"}`, ``},
+		{"empty object", `{}`, ``},
+		{"not an object", `"data"`, ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := objectMember([]byte(tc.obj), []byte("data")); string(got) != tc.want {
+				t.Errorf("objectMember(%s) = %q, want %q", tc.obj, got, tc.want)
 			}
 		})
 	}
