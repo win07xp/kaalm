@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // estimateOf feeds events to the adapter's estimator for request and returns
@@ -251,23 +252,59 @@ func TestJSONMembersLen(t *testing.T) {
 	}
 }
 
-func TestObjectMember(t *testing.T) {
+// mediaLen counts a parent rule's string member only at the parent
+// object's own level.
+func TestMediaLen_ParentRule(t *testing.T) {
+	media := []mediaMember{{parent: []byte("source"), name: []byte("data")}}
 	cases := []struct {
-		name, obj, want string
+		name, obj string
+		want      int
 	}{
-		{"string member", `{"mimeType":"image/png","data":"abc"}`, `"abc"`},
-		{"after scalars", `{"n":1, "ok":true,"x":null , "data" : "abc"}`, `"abc"`},
-		{"after an object and an array", `{"o":{"data":"no"},"a":["data"],"data":"abc"}`, `"abc"`},
-		{"nested only", `{"o":{"data":"no"}}`, ``},
-		{"not a string", `{"data":{"a":"b"}}`, ``},
-		{"missing", `{"mimeType":"image/png"}`, ``},
-		{"empty object", `{}`, ``},
-		{"not an object", `"data"`, ``},
+		{"string member", `{"mimeType":"image/png","data":"abc"}`, 3},
+		{"after scalars", `{"n":1, "ok":true,"x":null , "data" : "abc"}`, 3},
+		{"after an object and an array", `{"o":{"data":"no"},"a":["data"],"data":"abc"}`, 3},
+		{"nested only", `{"o":{"data":"no"}}`, 0},
+		{"not a string", `{"data":{"a":"b"}}`, 0},
+		{"missing", `{"mimeType":"image/png"}`, 0},
+		{"empty object", `{}`, 0},
+		{"not an object", `"data"`, 0},
+		{"an array", `[{"data":"no"}]`, 0},
+		{"escaped quotes", `{"k":"a\\\"b:","data":"a\\\"bc"}`, 7},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := objectMember([]byte(tc.obj), []byte("data")); string(got) != tc.want {
-				t.Errorf("objectMember(%s) = %q, want %q", tc.obj, got, tc.want)
+			body := `{"source":` + tc.obj + `,"data":"text"}`
+			if got := mediaLen([]byte(body), media); got != tc.want {
+				t.Errorf("mediaLen(%s) = %d, want %d", body, got, tc.want)
+			}
+		})
+	}
+}
+
+// mediaLen walks a body once, so a deep chain of objects under a media
+// member's name costs no more than a flat body of the same size.
+func TestMediaLen_DeepNestingIsOnePass(t *testing.T) {
+	const depth = 3000
+	filler := `[` + strings.Repeat(`1,`, 500_000) + `1]`
+	rules := []struct {
+		name  string
+		media []mediaMember
+	}{
+		{"source", anthropicMediaMembers},
+		{"inlineData", vertexMediaMembers},
+		{"input_audio", openaiMediaMembers},
+		{"image_url", openaiMediaMembers},
+	}
+	for _, r := range rules {
+		t.Run(r.name, func(t *testing.T) {
+			body := `{"x":` + strings.Repeat(`{"`+r.name+`":`, depth) + `{"t":` + filler + `}` +
+				strings.Repeat(`}`, depth) + `}`
+			start := time.Now()
+			if got := mediaLen([]byte(body), r.media); got != 0 {
+				t.Errorf("mediaLen = %d, want 0", got)
+			}
+			if took := time.Since(start); took > time.Second {
+				t.Errorf("mediaLen took %s on a %d byte body nested %d deep, want under a second", took, len(body), depth)
 			}
 		})
 	}

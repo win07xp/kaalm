@@ -85,75 +85,77 @@ func (e *contentEstimator) estimateInput() int64 {
 func (e *contentEstimator) estimateOutput() int64 { return e.output }
 
 // mediaLen sums the lengths of the string values of data's media members,
-// counted as jsonMembersLen counts a string.
+// counted as jsonMembersLen counts a string. It walks data once, jumping
+// each string, and keeps a stack of the open objects and arrays with the
+// member name that opened each, so a parent rule matches a string member of
+// the innermost open object without walking that object again. A string
+// cut off before it ends ends the walk.
 func mediaLen(data []byte, media []mediaMember) int {
 	if len(media) == 0 {
 		return 0
 	}
-	names := make([][]byte, len(media))
-	for i, m := range media {
-		names[i] = m.name
-		if m.parent != nil {
-			names[i] = m.parent
-		}
-	}
 	total := 0
-	s := memberScanner{data: data, names: names}
-	for {
-		name, value, ok := s.next()
-		if !ok {
-			return total
-		}
-		m := media[name]
-		str := value
-		if m.parent != nil {
-			str = objectMember(value, m.name)
-		}
-		if len(str) >= 2 && str[0] == '"' && bytes.HasPrefix(str[1:], m.prefix) {
-			total += valueLen(str)
-			s.skip(value)
+	// openers holds, for each open object, the name of the member whose
+	// value it is (nil for an array, a top-level value, or an array item).
+	var openers [][]byte
+	// key is the member name whose value comes next, nil when none does.
+	var key []byte
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '"':
+			end, ok := stringEnd(data, i)
+			if !ok {
+				return total
+			}
+			next := skipSpace(data, end+1)
+			if next < len(data) && data[next] == ':' {
+				key = data[i+1 : end]
+				i = next
+				continue
+			}
+			if key != nil {
+				var parent []byte
+				if len(openers) > 0 {
+					parent = openers[len(openers)-1]
+				}
+				if isMedia(media, parent, key, data[i+1:end]) {
+					total += end - i - 1
+				}
+			}
+			key = nil
+			i = end
+		case '{':
+			openers = append(openers, key)
+			key = nil
+		case '[':
+			openers = append(openers, nil)
+			key = nil
+		case '}', ']':
+			if len(openers) > 0 {
+				openers = openers[:len(openers)-1]
+			}
+			key = nil
+		case ' ', '\t', '\n', '\r':
+		default:
+			key = nil
 		}
 	}
+	return total
 }
 
-// objectMember returns the string value, with its quotes, of the member of
-// obj named name at obj's own level, or nil when obj is not an object or
-// has no such string member. obj is a complete object, as next returns it.
-func objectMember(obj, name []byte) []byte {
-	if len(obj) < 2 || obj[0] != '{' {
-		return nil
-	}
-	for i := 1; ; i++ {
-		i = skipSpace(obj, i)
-		if i >= len(obj) || obj[i] != '"' {
-			return nil
+// isMedia reports whether str, the string value of the member named key in
+// an object that is the value of a member named parent, is media under one
+// of the rules.
+func isMedia(media []mediaMember, parent, key, str []byte) bool {
+	for _, m := range media {
+		if !bytes.Equal(key, m.name) || !bytes.HasPrefix(str, m.prefix) {
+			continue
 		}
-		keyEnd, ok := stringEnd(obj, i)
-		if !ok {
-			return nil
-		}
-		key := obj[i+1 : keyEnd]
-		i = skipSpace(obj, keyEnd+1)
-		if i >= len(obj) || obj[i] != ':' {
-			return nil
-		}
-		i = skipSpace(obj, i+1)
-		end, complete := jsonValueEnd(obj, i)
-		if complete && obj[i] == '"' && bytes.Equal(key, name) {
-			return obj[i:end]
-		}
-		if !complete {
-			// A number, true, false, or null runs to the next comma or
-			// the closing brace.
-			for end < len(obj) && obj[end] != ',' && obj[end] != '}' {
-				end++
-			}
-		}
-		i = skipSpace(obj, end)
-		if i >= len(obj) || obj[i] != ',' {
-			return nil
+		if m.parent == nil || (parent != nil && bytes.Equal(parent, m.parent)) {
+			return true
 		}
 	}
+	return false
 }
 
 // jsonMembersLen sums the value lengths of every member of data named one of
