@@ -66,24 +66,30 @@ type streamEstimator interface {
 	// event reads one SSE data payload of the upstream's own stream,
 	// trimmed, before any translation.
 	event(data []byte)
-	// estimate returns the running input and output estimate.
-	estimate() (input, output int64)
+	// estimateInput returns the input estimate. It may scan the whole
+	// request, so it is called only when the provider reported no input.
+	estimateInput() int64
+	// estimateOutput returns the running output estimate.
+	estimateOutput() int64
 }
 
 // withEstimate fills the parts of reported the provider did not report with
 // est's estimate, input and output separately, and marks each part it
-// fills. A count of zero counts as not reported, and a part whose estimate
+// fills. It asks est for an input estimate only when input is missing. A count of zero counts as not reported, and a part whose estimate
 // is zero stays zero and unmarked. A nil est returns reported unchanged.
 func withEstimate(reported Usage, est streamEstimator) Usage {
 	if est == nil {
 		return reported
 	}
-	input, output := est.estimate()
-	if reported.InputTokens == 0 && input > 0 {
-		reported.InputTokens, reported.InputEstimated = input, true
+	if reported.InputTokens == 0 {
+		if input := est.estimateInput(); input > 0 {
+			reported.InputTokens, reported.InputEstimated = input, true
+		}
 	}
-	if reported.OutputTokens == 0 && output > 0 {
-		reported.OutputTokens, reported.OutputEstimated = output, true
+	if reported.OutputTokens == 0 {
+		if output := est.estimateOutput(); output > 0 {
+			reported.OutputTokens, reported.OutputEstimated = output, true
+		}
 	}
 	return reported
 }
@@ -252,12 +258,16 @@ func mayBeAnthropicStreamEvent(data []byte) bool {
 // (text_delta), tool input JSON (input_json_delta), and thinking
 // (thinking_delta). message_start, content_block_start with empty text,
 // message_delta, and message_stop hold no such member with content, so
-// they add nothing.
+// they add nothing. The input estimate leaves out the base64 source data of
+// image and document blocks.
 func (anthropicAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, anthropicContentMembers)
+	return newContentEstimator(request, anthropicContentMembers, nil, anthropicMediaMembers)
 }
 
-var anthropicContentMembers = [][]byte{[]byte("text"), []byte("partial_json"), []byte("thinking")}
+var (
+	anthropicContentMembers = [][]byte{[]byte("text"), []byte("partial_json"), []byte("thinking")}
+	anthropicMediaMembers   = []mediaMember{{name: []byte("data")}}
+)
 
 func (anthropicAdapter) streamUsageOption() bool { return false }
 
@@ -330,18 +340,33 @@ func mayCarryOpenAIUsage(data []byte) bool {
 	return false
 }
 
-// streamEstimator estimates from the generated content of the chunks'
-// deltas: content and refusal, the reasoning deltas some compatible
-// providers send (reasoning_content, reasoning), and tool-call arguments.
-// The role chunk (empty content), the finish chunk, the usage chunk, and
-// [DONE] hold no such member with content, so they add nothing.
+// streamEstimator estimates from the generated content of the chunks:
+// content and refusal, the reasoning deltas some compatible providers send
+// (reasoning_content, reasoning), tool-call arguments, and the text of a
+// legacy completions chunk. A provider that sends both text and content in
+// one chat chunk is counted twice, a known overcount used only when usage
+// is missing. Log probabilities are skipped, since they repeat the content
+// with token metadata. The role chunk (empty content), the finish chunk,
+// the usage chunk, and [DONE] hold no such member with content, so they add
+// nothing. The input estimate leaves out base64 media: data URLs (image_url
+// and its url, file_data) and input_audio data.
 func (openaiAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, openaiContentMembers)
+	return newContentEstimator(request, openaiContentMembers, openaiSkippedMembers, openaiMediaMembers)
 }
 
-var openaiContentMembers = [][]byte{
-	[]byte("content"), []byte("refusal"), []byte("reasoning_content"), []byte("reasoning"), []byte("arguments"),
-}
+var (
+	openaiContentMembers = [][]byte{
+		[]byte("content"), []byte("refusal"), []byte("reasoning_content"), []byte("reasoning"), []byte("arguments"),
+		[]byte("text"),
+	}
+	openaiSkippedMembers = [][]byte{[]byte("logprobs")}
+	openaiMediaMembers   = []mediaMember{
+		{name: []byte("url"), prefix: []byte("data:")},
+		{name: []byte("image_url"), prefix: []byte("data:")},
+		{name: []byte("file_data")},
+		{name: []byte("data")},
+	}
+)
 
 // streamUsageOption: without stream_options.include_usage, OpenAI-format
 // streams emit no usage at all, so every streaming request gets it (see

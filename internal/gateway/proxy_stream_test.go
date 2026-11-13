@@ -189,13 +189,19 @@ func TestRelayStream_EstimatesUnreportedUsage(t *testing.T) {
 	const request = `{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello there, how are you?"}]}`
 	inputEstimate := int64(len(request) / 4)
 	const inPrice, outPrice = 2.0, 4.0
+	imageData := "data:image/png;base64," + strings.Repeat("iVBORw0KGgo", 1000)
+	visionRequest := `{"model":"m1","stream":true,"messages":[{"role":"user","content":[` +
+		`{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"` + imageData + `"}}]}]}`
+	visionEstimate := int64((len(visionRequest) - len(imageData)) / 4)
 	cases := []struct {
 		name         string
 		providerType string
 		adapter      providerAdapter
-		body         string
-		wantIn       int64
-		wantOut      int64
+		// request is the body the provider received, when not the default.
+		request string
+		body    string
+		wantIn  int64
+		wantOut int64
 		// wantEstimatedTokens are the input and output tokens priced on
 		// the estimated-spend counter.
 		wantEstimatedIn, wantEstimatedOut int64
@@ -205,6 +211,14 @@ func TestRelayStream_EstimatesUnreportedUsage(t *testing.T) {
 		{name: "openai left before usage", providerType: "openai",
 			body:   "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
 			wantIn: inputEstimate, wantOut: 1, wantEstimatedIn: inputEstimate, wantEstimatedOut: 1,
+			wantLog: "LLM stream carried incomplete usage; settled at estimated spend", wantParts: "input,output"},
+		{name: "openai legacy completions left before usage", providerType: "openai",
+			body:   "data: {\"object\":\"text_completion\",\"choices\":[{\"text\":\"some generated text here\",\"index\":0}]}\n\n",
+			wantIn: inputEstimate, wantOut: 6, wantEstimatedIn: inputEstimate, wantEstimatedOut: 6,
+			wantLog: "LLM stream carried incomplete usage; settled at estimated spend", wantParts: "input,output"},
+		{name: "openai vision request left before usage", providerType: "openai", request: visionRequest,
+			body:   "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+			wantIn: visionEstimate, wantOut: 1, wantEstimatedIn: visionEstimate, wantEstimatedOut: 1,
 			wantLog: "LLM stream carried incomplete usage; settled at estimated spend", wantParts: "input,output"},
 		{name: "anthropic cut after message_start", providerType: "anthropic",
 			body: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}\n\n" +
@@ -237,7 +251,11 @@ func TestRelayStream_EstimatesUnreportedUsage(t *testing.T) {
 				Header:     http.Header{"Content-Type": {"text/event-stream"}},
 				Body:       io.NopCloser(strings.NewReader(tc.body)),
 			}
-			outcome := h.server.relayStream(ctx, httptest.NewRecorder(), resp, adapter, []byte(request), nil,
+			body := request
+			if tc.request != "" {
+				body = tc.request
+			}
+			outcome := h.server.relayStream(ctx, httptest.NewRecorder(), resp, adapter, []byte(body), nil,
 				formatForType(tc.providerType), "team-a", "sup", prov, "m1", nil, nil)
 			if outcome != outcomeClientClosed {
 				t.Errorf("outcome = %q, want %q", outcome, outcomeClientClosed)

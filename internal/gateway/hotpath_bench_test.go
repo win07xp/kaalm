@@ -484,7 +484,7 @@ func BenchmarkStreamEstimator(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				est.event(c.data)
 			}
-			if _, out := est.estimate(); out == 0 {
+			if est.estimateOutput() == 0 {
 				b.Fatal("the event added no output estimate")
 			}
 		})

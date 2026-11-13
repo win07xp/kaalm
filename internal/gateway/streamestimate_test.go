@@ -17,6 +17,7 @@ limitations under the License.
 package gateway
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func estimateOf(t *testing.T, providerType, request string, events ...string) (i
 	for _, e := range events {
 		est.event([]byte(e))
 	}
-	return est.estimate()
+	return est.estimateInput(), est.estimateOutput()
 }
 
 // The input estimate is the body the provider received over four, for every
@@ -47,6 +48,62 @@ func TestStreamEstimator_InputIsRequestBytesOverFour(t *testing.T) {
 		if in, out := estimateOf(t, typ, request); in != 10 || out != 0 {
 			t.Errorf("%s: estimate = %d, %d; want 10, 0", typ, in, out)
 		}
+	}
+}
+
+// The input estimate leaves out each adapter's base64 media values, so a
+// request is estimated by its text alone.
+func TestStreamEstimator_InputLeavesOutMedia(t *testing.T) {
+	b64 := strings.Repeat("iVBORw0KGgo", 1000)
+	dataURL := "data:image/png;base64," + b64
+	cases := []struct {
+		name, typ, template, media string
+	}{
+		{"openai image_url data URL", providerTypeOpenAI,
+			`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"what is this"},` +
+				`{"type":"image_url","image_url":{"url":"%s","detail":"auto"}}]}],"stream":true}`, dataURL},
+		{"openai responses input_image", providerTypeOpenAI,
+			`{"model":"gpt-4o","input":[{"role":"user","content":[{"type":"input_text","text":"what is this"},` +
+				`{"type":"input_image","image_url":"%s"}]}],"stream":true}`, dataURL},
+		{"openai input_audio", providerTypeOpenAI,
+			`{"model":"gpt-4o-audio","messages":[{"role":"user","content":[{"type":"text","text":"transcribe"},` +
+				`{"type":"input_audio","input_audio":{"data":"%s","format":"wav"}}]}],"stream":true}`, b64},
+		{"openai file part", providerTypeOpenAI,
+			`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"summarize"},` +
+				`{"type":"file","file":{"filename":"a.pdf","file_data":"%s"}}]}],"stream":true}`,
+			"data:application/pdf;base64," + b64},
+		{"anthropic image source", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
+				`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"%s"}},` +
+				`{"type":"text","text":"what is this"}]}],"stream":true}`, b64},
+		{"anthropic document source", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
+				`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"%s"}},` +
+				`{"type":"text","text":"summarize"}]}],"stream":true}`, b64},
+		{"vertex inlineData", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"text":"what is this"},` +
+				`{"inlineData":{"mimeType":"image/png","data":"%s"}}]}]}`, b64},
+		{"vertex inline_data", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"text":"what is this"},` +
+				`{"inline_data":{"mime_type":"image/png","data":"%s"}}]}]}`, b64},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := fmt.Sprintf(tc.template, tc.media)
+			want := int64((len(request) - len(tc.media)) / bytesPerToken)
+			if in, _ := estimateOf(t, tc.typ, request); in != want {
+				t.Errorf("input estimate = %d, want %d (the request without its media)", in, want)
+			}
+		})
+	}
+}
+
+// An image given by an https URL is text in the request, and counts.
+func TestStreamEstimator_InputCountsRemoteImageURL(t *testing.T) {
+	request := `{"model":"gpt-4o","messages":[{"role":"user","content":[` +
+		`{"type":"image_url","image_url":{"url":"https://example.com/` + strings.Repeat("a", 400) + `.png"}}]}]}`
+	if in, _ := estimateOf(t, providerTypeOpenAI, request); in != int64(len(request)/bytesPerToken) {
+		t.Errorf("input estimate = %d, want %d", in, len(request)/bytesPerToken)
 	}
 }
 
@@ -70,6 +127,17 @@ func TestStreamEstimator_OutputPerEvent(t *testing.T) {
 			`{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":200,"total_tokens":212}}`, 0},
 		{"openai finish chunk", providerTypeOpenAI, `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`, 0},
 		{"openai done", providerTypeOpenAI, `[DONE]`, 0},
+		{"openai legacy completions text", providerTypeOpenAI,
+			`{"id":"cmpl-1","object":"text_completion","choices":[{"text":"some generated text here","index":0,` +
+				`"logprobs":null,"finish_reason":null}]}`, 6},
+		{"openai chat logprobs not counted", providerTypeOpenAI,
+			`{"choices":[{"index":0,"delta":{"content":"Hi"},"logprobs":{"content":[{"token":"Hi","logprob":-0.1,` +
+				`"bytes":[72,105],"top_logprobs":[{"token":"Hi","logprob":-0.1,"bytes":[72,105]},` +
+				`{"token":"Hello","logprob":-2.3,"bytes":[72,101,108,108,111]},` +
+				`{"token":"Hey","logprob":-3.1,"bytes":[72,101,121]}]}]},"finish_reason":null}]}`, 1},
+		{"openai legacy logprobs not counted", providerTypeOpenAI,
+			`{"choices":[{"text":"abcd","index":0,"logprobs":{"tokens":["abcd"],"token_logprobs":[-0.1],` +
+				`"top_logprobs":[{"abcd":-0.1,"text":-2.0}],"text_offset":[0]},"finish_reason":null}]}`, 1},
 		{"anthropic text delta", providerTypeAnthropic,
 			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello world!"}}`, 3},
 		{"anthropic input json delta", providerTypeAnthropic,
@@ -147,8 +215,34 @@ func TestJSONMembersLen(t *testing.T) {
 // fixedEstimator is a streamEstimator with a set estimate.
 type fixedEstimator struct{ input, output int64 }
 
-func (fixedEstimator) event([]byte)                      {}
-func (f fixedEstimator) estimate() (input, output int64) { return f.input, f.output }
+func (fixedEstimator) event([]byte)            {}
+func (f fixedEstimator) estimateInput() int64  { return f.input }
+func (f fixedEstimator) estimateOutput() int64 { return f.output }
+
+// inputCountingEstimator counts the calls for an input estimate.
+type inputCountingEstimator struct {
+	fixedEstimator
+	inputCalls int
+}
+
+func (e *inputCountingEstimator) estimateInput() int64 {
+	e.inputCalls++
+	return e.input
+}
+
+// withEstimate asks for an input estimate only when the provider reported no
+// input, so a stream with reported input pays no scan of its request.
+func TestWithEstimate_InputEstimatedOnlyWhenMissing(t *testing.T) {
+	est := &inputCountingEstimator{fixedEstimator: fixedEstimator{10, 3}}
+	withEstimate(Usage{InputTokens: 7}, est)
+	if est.inputCalls != 0 {
+		t.Errorf("input estimated %d times for a stream with reported input, want 0", est.inputCalls)
+	}
+	withEstimate(Usage{OutputTokens: 2}, est)
+	if est.inputCalls != 1 {
+		t.Errorf("input estimated %d times for a stream with no reported input, want 1", est.inputCalls)
+	}
+}
 
 func TestWithEstimate(t *testing.T) {
 	cases := []struct {
