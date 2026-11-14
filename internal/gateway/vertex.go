@@ -103,6 +103,24 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
 	return slices.ContainsFunc(chunk.Candidates, vertexCandidate.finished)
 }
 
+// streamEstimator estimates from the generated content of the chunks'
+// parts: text (answer and thought parts) and functionCall args. A chunk
+// with only usageMetadata or a finishReason adds nothing; text in grounding
+// metadata counts too, a small overcount used only when usage is missing.
+// The input estimate leaves out the base64 data of inline parts
+// (inlineData or inline_data).
+func (vertexAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, vertexContentMembers, nil, vertexMediaMembers)
+}
+
+var (
+	vertexContentMembers = [][]byte{[]byte("text"), []byte("args")}
+	vertexMediaMembers   = []mediaMember{
+		{parent: []byte("inlineData"), name: []byte("data")},
+		{parent: []byte("inline_data"), name: []byte("data")},
+	}
+)
+
 // streamUsageOption is false: a Vertex request needs no body change, since
 // the streaming toggle is a query parameter (see upstreamPath).
 func (vertexAdapter) streamUsageOption() bool { return false }

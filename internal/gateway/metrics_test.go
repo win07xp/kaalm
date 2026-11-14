@@ -136,6 +136,12 @@ func TestMetrics_CountersAndHistogram(t *testing.T) {
 		t.Errorf("usageMissing = %v, want 1", got)
 	}
 
+	m.SpendEstimated("prov", "team-a", 1.25)
+	m.SpendEstimated("prov", "team-a", 0)
+	if got := testutil.ToFloat64(m.llmSpendEstimated.WithLabelValues("prov", "team-a")); got != 1.25 {
+		t.Errorf("spendEstimated = %v, want 1.25", got)
+	}
+
 	m.AsyncPatchFailed("team-a")
 	if got := testutil.ToFloat64(m.patchFailed.WithLabelValues("team-a")); got != 1 {
 		t.Errorf("asyncPatchFailed = %v, want 1", got)
@@ -163,6 +169,7 @@ func TestMetrics_NilReceiverNoOps(t *testing.T) {
 	m.ResponseTooLarge("ns", "async")
 	m.AsyncPatchFailed("ns")
 	m.UsageMissing("p", "m")
+	m.SpendEstimated("p", "ns", 1)
 }
 
 // TestGatewayCatalog_EveryDocumentedMetricIsRegistered pins the observability
@@ -252,8 +259,8 @@ func TestProxy_ObservesRequestDuration(t *testing.T) {
 }
 
 // TestProxy_CountsResponsesWithoutUsage pins kaalm_llm_usage_missing_total: a
-// 2xx that settles at zero because it carried no usage counts, streamed or
-// not; an error response never does.
+// 2xx that carried no usage counts, streamed (settled at the estimate) or
+// not (settled at zero); an error response never does.
 func TestProxy_CountsResponsesWithoutUsage(t *testing.T) {
 	cases := []struct {
 		name   string

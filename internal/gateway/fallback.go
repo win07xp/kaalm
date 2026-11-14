@@ -65,6 +65,9 @@ type forwardResult struct {
 	model      string                      // the model the candidate served (the edge's map applied)
 	format     llmtranslate.Format         // the candidate's wire format ("" when it cannot cross)
 	holdLimit  int64                       // for a crossing 2xx, the most bytes the translation hold keeps
+	// request is the body forwardOnce sent the candidate, set with resp,
+	// for the stream estimate (see providerAdapter.streamEstimator).
+	request []byte
 	// credentialRejected: the token endpoint refused the provider's
 	// service-account key: a credential failure with no upstream response.
 	credentialRejected bool

@@ -191,8 +191,10 @@ the request limit:
 - The call's tokens settle on the primary provider's bucket for the model you
   asked for, even when a fallback provider answered.
 - Anthropic cache tokens are not counted. OpenAI and OpenAI-compatible input
-  counts include cached prompt tokens, so cache hits count. A response with no
-  usage keeps its reservation, so the call is charged its estimate.
+  counts include cached prompt tokens, so cache hits count. A stream that
+  finishes cleanly with no usage is charged a token count the gateway works out
+  from the request and the streamed content, at about four bytes per token. Any
+  other response with no usage keeps its reservation as its charge.
 - Every namespace, and every model in a namespace, gets the full ceiling, so
   the limit does not keep a shared provider key under the provider's own
   tokens-per-minute limit.

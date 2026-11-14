@@ -33,13 +33,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // A request whose caller left before the relay started counts as
-// client_closed: a 2xx stream, which arrives unread and can no longer be
-// read, counts as usage missing and keeps its token reservation, any other
-// outcome releases it, and every outcome settles zero spend. A non-streamed
-// 2xx never reaches settleCallerLeft: its relay reads it.
+// client_closed. A 2xx stream, which arrives unread and can no longer be
+// read, is charged the adapter's input estimate from the body the provider
+// received, counts as usage missing, and keeps its token reservation. Any
+// other outcome releases its reservation and settles zero spend. A
+// non-streamed 2xx never reaches settleCallerLeft: its relay reads it.
 func TestSettleCallerLeft(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -47,27 +50,33 @@ func TestSettleCallerLeft(t *testing.T) {
 		body        string
 		noResponse  bool
 		stream      bool
+		request     string
 		wantInput   int64
 		wantMissing float64
-		// zeroSettle: the admission slot is freed with a zero cost.
-		zeroSettle bool
+		// wantSettle: the cost the admission slot is freed with.
+		wantSettle float64
 		// wantTokens: the token bucket after a 500-token reservation on a
 		// 1000-token share settles.
 		wantTokens float64
 	}{
 		{name: "2xx stream", status: 200, stream: true,
-			body:        "data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n",
-			wantMissing: 1, zeroSettle: true, wantTokens: 500},
-		{name: "provider error", status: 400, body: `{"error":{}}`, zeroSettle: true, wantTokens: 1000},
-		{name: "no response", noResponse: true, zeroSettle: true, wantTokens: 1000},
+			body:    "data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n",
+			request: `{"model":"m1","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			// 75 bytes over four, at $2 per million input tokens.
+			wantInput: 18, wantSettle: 18 * 2 / 1e6, wantMissing: 1, wantTokens: 500},
+		{name: "provider error", status: 400, body: `{"error":{}}`, wantTokens: 1000},
+		{name: "no response", noResponse: true, wantTokens: 1000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
 			h.seedRoute()
 			prov := h.store.providers["prov"]
+			prov.Spec.Models = []kaalmv1beta1.ModelProviderModel{
+				{ID: "m1", CostPer1MInputTokens: "2", CostPer1MOutputTokens: "4"},
+			}
 			settled := -1.0
-			res := forwardResult{provider: "prov", model: "m1", chosen: prov,
+			res := forwardResult{provider: "prov", model: "m1", chosen: prov, request: []byte(tc.request),
 				settle: func(cost float64) { settled = cost }}
 			if !tc.noResponse {
 				res.resp = &http.Response{StatusCode: tc.status, Header: http.Header{},
@@ -89,7 +98,7 @@ func TestSettleCallerLeft(t *testing.T) {
 			gone, cancel := context.WithCancel(context.Background())
 			cancel()
 			model, answered := "m1", "prov"
-			h.server.settleCallerLeft(gone, res, "team-a", &model, &answered, reservation)
+			h.server.settleCallerLeft(gone, res, "team-a", "sup", &model, &answered, reservation)
 			reservation.release() // the handler's safety net does nothing after a keep
 			if got := rl.buckets[tokenKey("team-a", "m1")].tokens; got != tc.wantTokens {
 				t.Errorf("token bucket = %v, want %v", got, tc.wantTokens)
@@ -104,8 +113,8 @@ func TestSettleCallerLeft(t *testing.T) {
 			if got := testutil.ToFloat64(h.server.Metrics.llmUsageMissing.WithLabelValues("prov", "m1")); got != tc.wantMissing {
 				t.Errorf("usage missing = %v, want %v", got, tc.wantMissing)
 			}
-			if tc.zeroSettle && settled != 0 {
-				t.Errorf("settle = %v, want 0", settled)
+			if !nearlyEqual(settled, tc.wantSettle) {
+				t.Errorf("settle = %v, want %v", settled, tc.wantSettle)
 			}
 		})
 	}
