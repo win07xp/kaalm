@@ -173,8 +173,8 @@ limit. Each call reserves its tokens up front, so it behaves differently from
 the request limit:
 
 - The gateway admits a request while the namespace's token bucket for that
-  model is above 0, and reserves an estimate: the input size plus the
-  request's output cap, or the model's `maxOutputTokens` when the request sets
+  model is above 0, and reserves an estimate: the input size, less any
+  base64 media in the request, plus the request's output cap, or the model's `maxOutputTokens` when the request sets
   no cap. When the call ends, its real usage replaces the estimate. A call that
   does not finish cleanly (the caller leaves, or the provider breaks the
   answer; a stream that already sent its final event counts as finished) is

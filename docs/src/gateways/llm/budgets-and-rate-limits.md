@@ -211,7 +211,7 @@ The provider reports a call's tokens only when it answers. If the gateway counte
 
 The estimate is an input estimate plus an output cap:
 
-- **Input:** the request body's size in bytes divided by 4, about four bytes per token.
+- **Input:** the request body's size in bytes, less its base64 media, divided by 4, about four bytes per token ([Media in the input estimate](#media-in-the-input-estimate)).
 - **Output cap**, the first of these that exists:
   1. The request's own cap (`max_completion_tokens` or `max_tokens`, or `generationConfig.maxOutputTokens` for Vertex, which also reads the snake_case spelling `generation_config.max_output_tokens`), lowered to the model's `maxOutputTokens` when that is smaller, because the provider never generates more than its ceiling. A member counts only when a copy spelled exactly as above holds a positive number. The cap is then the largest positive value among all copies of that member, case variants included, because an upstream that matches names case-insensitively and keeps the last copy may apply any of them. A case variant alone (`Max_Tokens`) is no cap, because an upstream that matches names exactly applies none. A copy of a member in any spelling that holds no cap (`0`, a negative number, `null`, or a string) makes that member set no cap, because an upstream that keeps that copy applies none. For the Vertex `generationConfig` member, a copy that is not an object or holds no `maxOutputTokens` does the same. When a member sets no cap, the next member is tried. When none sets a cap, the call reserves the model's `maxOutputTokens`, or one replica share when the model declares none.
   2. The model's `maxOutputTokens`, when the request sets no cap.
@@ -220,6 +220,14 @@ The estimate is an input estimate plus an output cap:
 A call with no cap anywhere takes a whole share, so it holds its (namespace, model) key on its replica until it settles or the bucket refills above 0. Other callers meanwhile get `429 rate_limited` with a `Retry-After` of up to about a minute, so such calls run about one at a time per replica. A larger `tokensPerMinute` does not help, because the reservation grows with it. Declaring `maxOutputTokens` on the model, or sending a cap with each request, restores concurrency. The ModelProvider's `MaxOutputTokensUnset` condition names the models this applies to ([ModelProvider status](../../resources/modelprovider.md#status)).
 
 The reservation may push the bucket below 0, so an estimate larger than the limit is never refused outright. It delays the next call instead. The debt is clamped at minus one burst (`tokensPerMinute / number_of_replicas`) twice: when the reservation is taken and again when the settled usage is charged. The bucket is never more than about one minute of refill below 0, so after a large reservation or a large settled charge the key admits again within about a minute.
+
+#### Media in the input estimate
+
+The input leaves out base64 media because a provider bills an image at a few thousand tokens at most, while its base64 bytes over 4 would count a 1 MiB image as about 262,000 tokens. That reservation would hold the (namespace, model) key at the debt clamp until the call settles, so other callers would get `429 rate_limited` for up to about a minute.
+
+- **Which members are media:** the primary provider's adapter decides, and it is the same list the stream estimate uses ([Provider adapters](provider-routing.md#provider-adapters)).
+- **Small bodies count whole:** a body under 16 KiB is not scanned for media. It can overcount by at most 4096 input tokens, about one output cap, and settling corrects the reservation when the call ends. The scan runs only where media can inflate the reservation by much.
+- **Agreement with the stream estimate:** for a body of 16 KiB or more, the input equals the stream estimate's input for the same body and provider ([Estimated usage](request-handling.md#streaming-responses)). A stream that finishes with no usage then settles at about what it reserved on the input side.
 
 #### Settling the reservation
 
