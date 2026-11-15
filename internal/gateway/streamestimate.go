@@ -23,8 +23,8 @@ import "bytes"
 const bytesPerToken = 4
 
 // contentEstimator is the stream estimator the adapters share, each with its
-// own member lists. Input is the body the provider received over
-// bytesPerToken, less the values of the format's media members (base64
+// own member lists. Input is inputEstimate of the body the provider
+// received: it leaves out the values of the format's media members (base64
 // images, audio, and files), which the provider bills by its own rules; it
 // is computed only when asked for, since most streams report their input.
 // Output adds, per event, the byte length of the values of the format's
@@ -78,8 +78,13 @@ func (e *contentEstimator) event(data []byte) {
 	}
 }
 
-func (e *contentEstimator) estimateInput() int64 {
-	return int64((len(e.request) - mediaLen(e.request, e.media)) / bytesPerToken)
+func (e *contentEstimator) estimateInput() int64 { return inputEstimate(e.request, e.media) }
+
+// inputEstimate is the input estimate the token reservation and the stream
+// estimate share: request's bytes less the values of its media members,
+// over bytesPerToken.
+func inputEstimate(request []byte, media []mediaMember) int64 {
+	return int64((len(request) - mediaLen(request, media)) / bytesPerToken)
 }
 
 func (e *contentEstimator) estimateOutput() int64 { return e.output }

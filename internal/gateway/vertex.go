@@ -109,9 +109,11 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
 // metadata counts too, a small overcount used only when usage is missing.
 // The input estimate leaves out the base64 data of inline parts
 // (inlineData or inline_data).
-func (vertexAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, vertexContentMembers, nil, vertexMediaMembers)
+func (a vertexAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, vertexContentMembers, nil, a.mediaMembers())
 }
+
+func (vertexAdapter) mediaMembers() []mediaMember { return vertexMediaMembers }
 
 var (
 	vertexContentMembers = [][]byte{[]byte("text"), []byte("args")}

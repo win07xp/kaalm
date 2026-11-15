@@ -114,6 +114,10 @@ type providerAdapter interface {
 	// streamEstimator returns a new estimator for one stream, given the body
 	// the provider received, or nil when the adapter estimates nothing.
 	streamEstimator(request []byte) streamEstimator
+	// mediaMembers lists the request members whose string values are media
+	// and stay out of the input estimates (see mediaLen). The token
+	// reservation and the stream estimate both use it.
+	mediaMembers() []mediaMember
 	// streamUsageOption reports whether a streaming request in this format
 	// needs stream_options.include_usage set for the stream to carry usage.
 	streamUsageOption() bool
@@ -263,9 +267,11 @@ func mayBeAnthropicStreamEvent(data []byte) bool {
 // source: the base64 data of image and document blocks, and also the plain
 // text of a document with a text source, an undercount used only for a
 // stream cut before message_start.
-func (anthropicAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, anthropicContentMembers, nil, anthropicMediaMembers)
+func (a anthropicAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, anthropicContentMembers, nil, a.mediaMembers())
 }
+
+func (anthropicAdapter) mediaMembers() []mediaMember { return anthropicMediaMembers }
 
 var (
 	anthropicContentMembers = [][]byte{[]byte("text"), []byte("partial_json"), []byte("thinking")}
@@ -353,9 +359,11 @@ func mayCarryOpenAIUsage(data []byte) bool {
 // the usage chunk, and [DONE] hold no such member with content, so they add
 // nothing. The input estimate leaves out base64 media: data URLs (image_url
 // and its url, file_data) and the data of input_audio.
-func (openaiAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, openaiContentMembers, openaiSkippedMembers, openaiMediaMembers)
+func (a openaiAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, openaiContentMembers, openaiSkippedMembers, a.mediaMembers())
 }
+
+func (openaiAdapter) mediaMembers() []mediaMember { return openaiMediaMembers }
 
 var (
 	openaiContentMembers = [][]byte{

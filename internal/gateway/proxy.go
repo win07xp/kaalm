@@ -205,13 +205,14 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Rate limit per (namespace, model), sharing the configured ceilings
 	// across live replicas. Under a token limit, the request's estimate (its
-	// body size over four, plus its output cap or the model's
-	// maxOutputTokens, or one replica share when neither exists) is reserved
-	// on the bucket that admits it: the primary's limits and this model. The
-	// reservation is settled when the call ends, even when a fallback serves
-	// the request.
+	// body size less its media under the primary type's rule, over four,
+	// for a body of mediaScanMinBytes or more, plus its output cap or the
+	// model's maxOutputTokens, or one replica share when neither exists) is
+	// reserved on the bucket that admits it: the primary's limits and this
+	// model. The reservation is settled when the call ends, even when a
+	// fallback serves the request.
 	ok, retryAfter, reservation := s.RateLimiter.Allow(provider, c.Namespace, modelID,
-		requestTokenEstimate(provider, modelID, body))
+		requestTokenEstimate(provider, modelID, body, typeAdapter))
 	if !ok {
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
 		spanError(ctx, errRateLimited)
@@ -319,14 +320,24 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered, reservation)
 }
 
+// mediaScanMinBytes is the smallest body requestTokenEstimate scans for
+// media. A smaller body can overcount by at most 4096 input tokens, about
+// one output cap, and the reservation is settled when the call ends, so the
+// scan and its allocations are paid only where media can inflate the
+// reservation by much.
+const mediaScanMinBytes = 16 << 10
+
 // requestTokenEstimate is what a request reserves on provider's token
-// bucket: its body size over bytesPerToken as the input
-// estimate, plus its output cap. The cap is the request's own, lowered to
-// the model's maxOutputTokens when that is smaller (the provider generates
-// no more than its ceiling); the model's maxOutputTokens when the request
-// sets none; or outputCapUnknown when neither exists. A provider with no
+// bucket: an input estimate plus its output cap. For a body of
+// mediaScanMinBytes or more, the input estimate is inputEstimate under
+// adapter's media rule, the one the stream estimate applies to the body the
+// provider receives; a smaller body counts whole, over bytesPerToken. The
+// cap is the request's own, lowered to the model's maxOutputTokens when that
+// is smaller (the provider generates no more than its ceiling); the model's
+// maxOutputTokens when the request sets none; or outputCapUnknown when
+// neither exists. A provider with no
 // tokensPerMinute reserves nothing, and its body is not read for the cap.
-func requestTokenEstimate(provider *kaalmv1beta1.ModelProvider, modelID string, body []byte) tokenEstimate {
+func requestTokenEstimate(provider *kaalmv1beta1.ModelProvider, modelID string, body []byte, adapter providerAdapter) tokenEstimate {
 	if provider.Spec.RateLimits.TokensPerMinute <= 0 {
 		return tokenEstimate{}
 	}
@@ -337,7 +348,11 @@ func requestTokenEstimate(provider *kaalmv1beta1.ModelProvider, modelID string, 
 	if !ok {
 		outputCap = outputCapUnknown
 	}
-	return tokenEstimate{Input: int64(len(body) / bytesPerToken), Output: outputCap}
+	input := int64(len(body) / bytesPerToken)
+	if len(body) >= mediaScanMinBytes {
+		input = inputEstimate(body, adapter.mediaMembers())
+	}
+	return tokenEstimate{Input: input, Output: outputCap}
 }
 
 // settleCallerLeft ends a request whose caller left before the gateway

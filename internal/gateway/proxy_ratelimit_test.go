@@ -524,3 +524,146 @@ func TestProxy_TokensPerMinuteCallerLeftAfterFinalEventSettlesUsage(t *testing.T
 		})
 	}
 }
+
+// mediaSuffix closes the media string and the members around it in every
+// mediaRequest body.
+const mediaSuffix = `"}}]}]}`
+
+// mediaRequest builds a request body of exactly the bytes prefix, media, and
+// mediaSuffix, and returns it with the media's length.
+func mediaRequest(prefix, media string) ([]byte, int) {
+	return []byte(prefix + media + mediaSuffix), len(media)
+}
+
+// TestRequestTokenEstimate_LeavesOutMedia: a body of mediaScanMinBytes or
+// more reserves its size less its media, under the primary type's media
+// rule, over four as the input; a smaller body, or media under another
+// format's rule, counts whole, and a provider with no tokensPerMinute
+// reserves nothing.
+func TestRequestTokenEstimate_LeavesOutMedia(t *testing.T) {
+	big := strings.Repeat("A", 20000)
+	anthropicBody, anthropicMedia := mediaRequest(
+		`{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"what is this"},`+
+			`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`, big)
+	openaiPrefix := `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"what is this"},` +
+		`{"type":"image_url","image_url":{"url":"`
+	openaiBody, openaiMedia := mediaRequest(openaiPrefix, "data:image/png;base64,"+big)
+	audioBody, audioMedia := mediaRequest(
+		`{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[`+
+			`{"type":"input_audio","input_audio":{"format":"wav","data":"`, big)
+	vertexBody, vertexMedia := mediaRequest(
+		`{"generationConfig":{"maxOutputTokens":10},"contents":[{"role":"user","parts":[{"text":"what is this"},`+
+			`{"inlineData":{"mimeType":"image/png","data":"`, big)
+	smallBody, _ := mediaRequest(openaiPrefix, "data:image/png;base64,"+strings.Repeat("A", 8000))
+	pad := mediaScanMinBytes - len(openaiPrefix) - len(mediaSuffix) - len("data:image/png;base64,")
+	edgeBody, edgeMedia := mediaRequest(openaiPrefix, "data:image/png;base64,"+strings.Repeat("A", pad))
+	if len(edgeBody) != mediaScanMinBytes {
+		t.Fatalf("edge body is %d bytes, want %d", len(edgeBody), mediaScanMinBytes)
+	}
+
+	for _, tc := range []struct {
+		name         string
+		providerType string
+		tpm          int32
+		body         []byte
+		want         tokenEstimate
+	}{
+		{"anthropic image", kaalmv1beta1.ProviderTypeAnthropic, 1000, anthropicBody,
+			tokenEstimate{Input: int64((len(anthropicBody) - anthropicMedia) / 4), Output: 10}},
+		{"openai image data URL", kaalmv1beta1.ProviderTypeOpenAI, 1000, openaiBody,
+			tokenEstimate{Input: int64((len(openaiBody) - openaiMedia) / 4), Output: 10}},
+		{"openai input audio", kaalmv1beta1.ProviderTypeOpenAI, 1000, audioBody,
+			tokenEstimate{Input: int64((len(audioBody) - audioMedia) / 4), Output: 10}},
+		{"openai-compatible image data URL", kaalmv1beta1.ProviderTypeOpenAICompatible, 1000, openaiBody,
+			tokenEstimate{Input: int64((len(openaiBody) - openaiMedia) / 4), Output: 10}},
+		{"google-vertex inline data", kaalmv1beta1.ProviderTypeGoogleVertex, 1000, vertexBody,
+			tokenEstimate{Input: int64((len(vertexBody) - vertexMedia) / 4), Output: 10}},
+		{"anthropic media on an openai provider counts", kaalmv1beta1.ProviderTypeOpenAI, 1000, anthropicBody,
+			tokenEstimate{Input: int64(len(anthropicBody) / 4), Output: 10}},
+		{"body under the threshold is not scanned", kaalmv1beta1.ProviderTypeOpenAI, 1000, smallBody,
+			tokenEstimate{Input: int64(len(smallBody) / 4), Output: 10}},
+		{"body at the threshold is scanned", kaalmv1beta1.ProviderTypeOpenAI, 1000, edgeBody,
+			tokenEstimate{Input: int64((len(edgeBody) - edgeMedia) / 4), Output: 10}},
+		{"no tokensPerMinute reserves nothing", kaalmv1beta1.ProviderTypeOpenAI, 0, openaiBody, tokenEstimate{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, ok := adapterForProviderType(tc.providerType)
+			if !ok {
+				t.Fatalf("no adapter for %q", tc.providerType)
+			}
+			provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+				Type:       tc.providerType,
+				RateLimits: kaalmv1beta1.ModelProviderRateLimits{TokensPerMinute: tc.tpm},
+			}}
+			if got := requestTokenEstimate(provider, "m1", tc.body, adapter); got != tc.want {
+				t.Errorf("estimate = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequestTokenEstimate_AgreesWithStreamEstimate: for a body of
+// mediaScanMinBytes or more, the reservation's input is the stream
+// estimate's input for the same body and provider type.
+func TestRequestTokenEstimate_AgreesWithStreamEstimate(t *testing.T) {
+	big := strings.Repeat("A", 20000)
+	for _, tc := range []struct {
+		providerType string
+		body         string
+	}{
+		{kaalmv1beta1.ProviderTypeAnthropic, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
+			`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + big + `"}}]}]}`},
+		{kaalmv1beta1.ProviderTypeOpenAI, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
+			`{"type":"image_url","image_url":{"url":"data:image/png;base64,` + big + `"}}]}]}`},
+		{kaalmv1beta1.ProviderTypeGoogleVertex, `{"contents":[{"role":"user","parts":[` +
+			`{"inlineData":{"mimeType":"image/png","data":"` + big + `"}}]}]}`},
+	} {
+		t.Run(tc.providerType, func(t *testing.T) {
+			adapter, _ := adapterForProviderType(tc.providerType)
+			provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+				Type:       tc.providerType,
+				RateLimits: kaalmv1beta1.ModelProviderRateLimits{TokensPerMinute: 1000},
+			}}
+			body := []byte(tc.body)
+			reserved := requestTokenEstimate(provider, "m1", body, adapter).Input
+			if estimated := adapter.streamEstimator(body).estimateInput(); reserved != estimated {
+				t.Errorf("reservation input = %d, stream estimate input = %d", reserved, estimated)
+			}
+		})
+	}
+}
+
+// TestProxy_TokensPerMinuteMediaReservesNothing: a request with a base64
+// image reserves its text and its output cap, not the image's bytes, so the
+// next request for the same model is admitted. The provider reports no
+// usage, so the bucket keeps exactly what admission took.
+func TestProxy_TokensPerMinuteMediaReservesNothing(t *testing.T) {
+	h := tpmHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	cert := agentCert(t, h.ca)
+	client := h.client(&cert)
+	dataURL := "data:image/png;base64," + strings.Repeat("A", 32768)
+	body := map[string]any{"model": "prov/m1", "max_tokens": 10, "messages": []any{map[string]any{
+		"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "what is this"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL}},
+		},
+	}}}
+	resp := postJSON(t, client, h.url("/v1/chat/completions"), body, nil)
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("request with an image = %d, want 200", resp.StatusCode)
+	}
+	raw, _ := json.Marshal(body)
+	waitTokenLevel(t, h, float64(1000-(int64((len(raw)-len(dataURL))/4)+10)))
+
+	next := postJSON(t, client, h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	_, _ = io.ReadAll(next.Body)
+	_ = next.Body.Close()
+	if next.StatusCode != http.StatusOK {
+		t.Errorf("request after the image = %d, want 200", next.StatusCode)
+	}
+}
