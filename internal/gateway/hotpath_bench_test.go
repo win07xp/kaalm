@@ -711,8 +711,8 @@ func mediaBodyBytes(n int) []byte {
 }
 
 // mediaScanBodies are the bodies the admission media scan benchmarks run
-// on: text-16KiB is the smallest body that is scanned, and the 1 MiB
-// bodies show the scan's cost per byte on text and on base64 media.
+// on: text-16KiB is a text body just over the scan threshold, and the
+// 1 MiB bodies show the scan's cost per byte on text and on base64 media.
 func mediaScanBodies() []struct {
 	name string
 	body []byte
