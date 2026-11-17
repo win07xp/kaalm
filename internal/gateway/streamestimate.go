@@ -238,16 +238,21 @@ func parentMatches(m mediaMember, opener []byte) bool {
 	return m.parent == nil || (opener != nil && bytes.Equal(opener, m.parent))
 }
 
-// isMediaType reports whether the media type t, compared as written (escapes
-// raw), is an image, audio, or video type: its first six bytes are
-// "image/", "audio/", or "video/" under ASCII case folding. Parameters after
-// the type are ignored.
+// isMediaType reports whether the media type t, as written between its
+// quotes, is an image, audio, or video type: it starts with "image",
+// "audio", or "video" under ASCII case folding, then a slash. The slash may
+// be written `\/`, as encoders such as PHP's json_encode do by default; any
+// other escape is compared raw, so the value counts. Parameters after the
+// type are ignored.
 func isMediaType(t []byte) bool {
 	if len(t) < 6 {
 		return false
 	}
-	p := t[:6]
-	return bytes.EqualFold(p, []byte("image/")) || bytes.EqualFold(p, []byte("audio/")) || bytes.EqualFold(p, []byte("video/"))
+	p := t[:5]
+	if !bytes.EqualFold(p, []byte("image")) && !bytes.EqualFold(p, []byte("audio")) && !bytes.EqualFold(p, []byte("video")) {
+		return false
+	}
+	return t[5] == '/' || bytes.HasPrefix(t[5:], []byte(`\/`))
 }
 
 // jsonMembersLen sums the value lengths of every member of data named one of
