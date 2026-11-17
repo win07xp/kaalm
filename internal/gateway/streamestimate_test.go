@@ -400,7 +400,11 @@ func TestMediaLen_TypeRule(t *testing.T) {
 	}{
 		{"vertex inlineData video", `{"inlineData":{"data":"abc","mimeType":"video/mp4"}}`, 3},
 		{"vertex inline_data text", `{"inline_data":{"mime_type":"text/plain","data":"abc"}}`, 0},
-		{"vertex camel type on the snake member", `{"inline_data":{"mimeType":"image/png","data":"abc"}}`, 0},
+		{"vertex camel type on the snake member", `{"inline_data":{"mimeType":"image/png","data":"abc"}}`, 3},
+		{"vertex snake type on the camel member", `{"inlineData":{"data":"abc","mime_type":"audio/wav"}}`, 3},
+		{"vertex both type spellings, last one decides", `{"inlineData":{"mime_type":"image/png","data":"abc","mimeType":"application/pdf"}}`, 0},
+		{"vertex mixed spelling pdf", `{"inline_data":{"mimeType":"application/pdf","data":"abc"}}`, 0},
+		{"vertex mimeType with an escaped slash", `{"inlineData":{"mimeType":"image\/png","data":"abc"}}`, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := mediaLen([]byte(tc.body), vertexMediaMembers); got != tc.want {

@@ -108,8 +108,8 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
 // with only usageMetadata or a finishReason adds nothing; text in grounding
 // metadata counts too, a small overcount used only when usage is missing.
 // The input estimate leaves out the data of inline parts (inlineData or
-// inline_data) whose mimeType is an image, audio, or video type; a PDF or
-// text part counts.
+// inline_data) whose mimeType or mime_type is an image, audio, or video
+// type; a PDF or text part counts.
 func (a vertexAdapter) streamEstimator(request []byte) streamEstimator {
 	return newContentEstimator(request, vertexContentMembers, nil, a.mediaMembers())
 }
@@ -118,9 +118,13 @@ func (vertexAdapter) mediaMembers() []mediaMember { return vertexMediaMembers }
 
 var (
 	vertexContentMembers = [][]byte{[]byte("text"), []byte("args")}
-	vertexMediaMembers   = []mediaMember{
+	// A protobuf JSON parser accepts either spelling of each field on its
+	// own, so each object spelling takes both type spellings.
+	vertexMediaMembers = []mediaMember{
 		{parent: []byte("inlineData"), name: []byte("data"), typeMember: []byte("mimeType")},
+		{parent: []byte("inlineData"), name: []byte("data"), typeMember: []byte("mime_type")},
 		{parent: []byte("inline_data"), name: []byte("data"), typeMember: []byte("mime_type")},
+		{parent: []byte("inline_data"), name: []byte("data"), typeMember: []byte("mimeType")},
 	}
 )
 
