@@ -211,7 +211,7 @@ The provider reports a call's tokens only when it answers. If the gateway counte
 
 The estimate is an input estimate plus an output cap:
 
-- **Input:** the request body's size in bytes, less its base64 media, divided by 4, about four bytes per token ([Media in the input estimate](#media-in-the-input-estimate)).
+- **Input:** the request body's size in bytes, less its images, audio, and video, divided by 4, about four bytes per token ([Media in the input estimate](#media-in-the-input-estimate)).
 - **Output cap**, the first of these that exists:
   1. The request's own cap (`max_completion_tokens` or `max_tokens`, or `generationConfig.maxOutputTokens` for Vertex, which also reads the snake_case spelling `generation_config.max_output_tokens`), lowered to the model's `maxOutputTokens` when that is smaller, because the provider never generates more than its ceiling. A member counts only when a copy spelled exactly as above holds a positive number. The cap is then the largest positive value among all copies of that member, case variants included, because an upstream that matches names case-insensitively and keeps the last copy may apply any of them. A case variant alone (`Max_Tokens`) is no cap, because an upstream that matches names exactly applies none. A copy of a member in any spelling that holds no cap (`0`, a negative number, `null`, or a string) makes that member set no cap, because an upstream that keeps that copy applies none. For the Vertex `generationConfig` member, a copy that is not an object or holds no `maxOutputTokens` does the same. When a member sets no cap, the next member is tried. When none sets a cap, the call reserves the model's `maxOutputTokens`, or one replica share when the model declares none.
   2. The model's `maxOutputTokens`, when the request sets no cap.
@@ -223,11 +223,17 @@ The reservation may push the bucket below 0, so an estimate larger than the limi
 
 #### Media in the input estimate
 
-The input leaves out base64 media because a provider bills an image at a few thousand tokens at most, while its base64 bytes over 4 would count a 1 MiB image as about 262,000 tokens. That reservation would hold the (namespace, model) key at the debt clamp until the call settles, so other callers would get `429 rate_limited` for up to about a minute.
+The input leaves out images, audio, and video because a provider bills them by dimensions or duration, not by bytes. An image costs at most about 1,600 tokens at Anthropic and 258 per tile at Gemini, and audio costs 32 tokens per second at Gemini. Counting a base64 image at its bytes over 4 would charge a 1 MiB image about 262,000 tokens. That reservation would hold the (namespace, model) key at the debt clamp until the call settles, so other callers would get `429 rate_limited` for up to about a minute.
 
-- **Which members are media:** the primary provider's adapter decides, and it is the same list the stream estimate uses ([Provider adapters](provider-routing.md#provider-adapters)).
-- **Small bodies count whole:** a body under 16 KiB is not scanned for media. It can overcount by at most 4096 input tokens, about one output cap, and settling corrects the reservation when the call ends. The scan runs only where media can inflate the reservation by much.
-- **Agreement with the stream estimate:** for a body of 16 KiB or more, the input equals the stream estimate's input for the same body and provider ([Estimated usage](request-handling.md#streaming-responses)). A stream that finishes with no usage then settles at about what it reserved on the input side.
+- **What is left out:** a base64 value whose media type is an image, audio, or video type, that is, a type that starts with `image/`, `audio/`, or `video/`.
+- **What counts:** documents (PDF and text sources, OpenAI `file_data`, and Vertex PDF or text inline data), and any value whose type is missing or is not one of the three. A document counts because a provider bills it by its text and pages, 1,500 to 3,000 tokens per PDF page at Anthropic and 258 at Gemini. Leaving documents out would admit many large-document calls together, and the limit would not hold. Counting them overcounts a scanned PDF by up to about ten times, which delays the next call instead of admitting too many.
+- **Where the type is read:** the type must sit in the same object as `data`, or open the data URL. A type in a parent or nested object does not apply, and a type member may come before or after `data`.
+  - Anthropic: `source.media_type`, beside `data`.
+  - Vertex: `inlineData.mimeType` or `inline_data.mime_type`, beside `data`.
+  - OpenAI and OpenAI-compatible: the type at the start of a data URL, as in `data:image/png;base64,...`, in `url`, `image_url`, or `file_data`. The URL must start with lowercase `data:`, so raw base64 in `file_data` counts. The `data` of `input_audio` is always audio.
+- **Which format's rule applies:** the request's format, which is the path the agent called ([Request format detection](request-handling.md#request-format-detection)). The body at admission is in that format even when the primary provider is of another type and receives a translation ([Crossing formats](fallback.md#crossing-formats)). An image keeps its type through translation, so the translated body's stream estimate leaves out the same media.
+- **Small bodies count whole:** a body under 16 KiB is not scanned for media. It can overcount by at most 4096 input tokens, about one output cap, and settling corrects the reservation when the call ends. The scan runs only where media can inflate the reservation by much. The stream estimate applies the same rule at every size.
+- **Agreement with the stream estimate:** for a body of 16 KiB or more that the provider receives in the request's format, the input equals the stream estimate's input for the same body ([Estimated usage](request-handling.md#streaming-responses)). A stream that finishes with no usage then settles at about what it reserved on the input side. Across a crossing, both leave out the same media, and the byte counts differ by the translated body's envelope.
 
 #### Settling the reservation
 
@@ -261,6 +267,7 @@ For the token bucket the wait is a worst case: a call that settles below its res
 
 - **The bound holds when the output cap holds.** A call whose provider generates past its declared ceiling overshoots by the difference ([The bound](#the-bound)).
 - **The split is approximate.** The per-replica split is approximate, as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the reservation and its settle land only on the replica that served the call.
+- **Images, audio, and video are not reserved.** Their tokens count only when the call settles, so concurrent calls that carry them can overshoot the bound by what the provider bills for them ([Media in the input estimate](#media-in-the-input-estimate)).
 - **Only input plus output tokens count.** The settled charge is the input plus output count from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, `prompt_tokens` already includes cached prompt tokens, so cache hits count. A response with no usage counts on `kaalm_llm_usage_missing_total`, and [Settling the reservation](#settling-the-reservation) gives its charge.
 - **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `requestsPerMinute` and the full `tokensPerMinute`. Together, tenants can still reach the provider's own rate limit, so these limits do not keep a shared provider key under it.
 
