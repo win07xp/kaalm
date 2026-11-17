@@ -525,71 +525,98 @@ func TestProxy_TokensPerMinuteCallerLeftAfterFinalEventSettlesUsage(t *testing.T
 	}
 }
 
-// mediaSuffix closes the media string and the members around it in every
+// mediaSuffix closes the media string and the members around it in a
 // mediaRequest body.
 const mediaSuffix = `"}}]}]}`
 
 // mediaRequest builds a request body of exactly the bytes prefix, media, and
-// mediaSuffix, and returns it with the media's length.
-func mediaRequest(prefix, media string) ([]byte, int) {
-	return []byte(prefix + media + mediaSuffix), len(media)
+// suffix (mediaSuffix when none is given), and returns it with the media's
+// length.
+func mediaRequest(prefix, media string, suffix ...string) ([]byte, int) {
+	end := mediaSuffix
+	if len(suffix) > 0 {
+		end = suffix[0]
+	}
+	return []byte(prefix + media + end), len(media)
 }
 
 // TestRequestTokenEstimate_LeavesOutMedia: a body of mediaScanMinBytes or
-// more reserves its size less its media, under the primary type's media
-// rule, over four as the input; a smaller body, or media under another
-// format's rule, counts whole, and a provider with no tokensPerMinute
+// more reserves its size less its images, audio, and video, under the
+// request format's media rule, over four as the input; documents count, a
+// smaller body counts whole, and a provider with no tokensPerMinute
 // reserves nothing.
 func TestRequestTokenEstimate_LeavesOutMedia(t *testing.T) {
 	big := strings.Repeat("A", 20000)
+	anthropicPrefix := `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"what is this"},`
 	anthropicBody, anthropicMedia := mediaRequest(
-		`{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"what is this"},`+
-			`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`, big)
+		anthropicPrefix+`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`, big)
+	anthropicAfterBody, anthropicAfterMedia := mediaRequest(
+		anthropicPrefix+`{"type":"image","source":{"type":"base64","data":"`, big, `","media_type":"image/png"}}]}]}`)
+	anthropicTextDoc, _ := mediaRequest(
+		anthropicPrefix+`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"`, big)
+	anthropicPDF, _ := mediaRequest(
+		anthropicPrefix+`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"`, big)
 	openaiPrefix := `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"what is this"},` +
 		`{"type":"image_url","image_url":{"url":"`
 	openaiBody, openaiMedia := mediaRequest(openaiPrefix, "data:image/png;base64,"+big)
+	openaiPDF, _ := mediaRequest(
+		`{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[`+
+			`{"type":"file","file":{"filename":"a.pdf","file_data":"`, "data:application/pdf;base64,"+big)
 	audioBody, audioMedia := mediaRequest(
 		`{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[`+
 			`{"type":"input_audio","input_audio":{"format":"wav","data":"`, big)
-	vertexBody, vertexMedia := mediaRequest(
-		`{"generationConfig":{"maxOutputTokens":10},"contents":[{"role":"user","parts":[{"text":"what is this"},`+
-			`{"inlineData":{"mimeType":"image/png","data":"`, big)
+	vertexPrefix := `{"generationConfig":{"maxOutputTokens":10},"contents":[{"role":"user","parts":[{"text":"what is this"},`
+	vertexBody, vertexMedia := mediaRequest(vertexPrefix+`{"inlineData":{"mimeType":"image/png","data":"`, big)
+	vertexVideo, vertexVideoMedia := mediaRequest(vertexPrefix+`{"inline_data":{"mime_type":"video/mp4","data":"`, big)
+	vertexText, _ := mediaRequest(vertexPrefix+`{"inlineData":{"mimeType":"text/plain","data":"`, big)
+	vertexPDF, _ := mediaRequest(vertexPrefix+`{"inlineData":{"mimeType":"application/pdf","data":"`, big)
 	smallBody, _ := mediaRequest(openaiPrefix, "data:image/png;base64,"+strings.Repeat("A", 8000))
 	pad := mediaScanMinBytes - len(openaiPrefix) - len(mediaSuffix) - len("data:image/png;base64,")
 	edgeBody, edgeMedia := mediaRequest(openaiPrefix, "data:image/png;base64,"+strings.Repeat("A", pad))
 	if len(edgeBody) != mediaScanMinBytes {
 		t.Fatalf("edge body is %d bytes, want %d", len(edgeBody), mediaScanMinBytes)
 	}
+	left := func(body []byte, media int) tokenEstimate {
+		return tokenEstimate{Input: int64((len(body) - media) / 4), Output: 10}
+	}
+	whole := func(body []byte) tokenEstimate { return tokenEstimate{Input: int64(len(body) / 4), Output: 10} }
 
 	for _, tc := range []struct {
 		name         string
 		providerType string
+		adapter      providerAdapter
 		tpm          int32
 		body         []byte
 		want         tokenEstimate
 	}{
-		{"anthropic image", kaalmv1beta1.ProviderTypeAnthropic, 1000, anthropicBody,
-			tokenEstimate{Input: int64((len(anthropicBody) - anthropicMedia) / 4), Output: 10}},
-		{"openai image data URL", kaalmv1beta1.ProviderTypeOpenAI, 1000, openaiBody,
-			tokenEstimate{Input: int64((len(openaiBody) - openaiMedia) / 4), Output: 10}},
-		{"openai input audio", kaalmv1beta1.ProviderTypeOpenAI, 1000, audioBody,
-			tokenEstimate{Input: int64((len(audioBody) - audioMedia) / 4), Output: 10}},
-		{"openai-compatible image data URL", kaalmv1beta1.ProviderTypeOpenAICompatible, 1000, openaiBody,
-			tokenEstimate{Input: int64((len(openaiBody) - openaiMedia) / 4), Output: 10}},
-		{"google-vertex inline data", kaalmv1beta1.ProviderTypeGoogleVertex, 1000, vertexBody,
-			tokenEstimate{Input: int64((len(vertexBody) - vertexMedia) / 4), Output: 10}},
-		{"anthropic media on an openai provider counts", kaalmv1beta1.ProviderTypeOpenAI, 1000, anthropicBody,
-			tokenEstimate{Input: int64(len(anthropicBody) / 4), Output: 10}},
-		{"body under the threshold is not scanned", kaalmv1beta1.ProviderTypeOpenAI, 1000, smallBody,
-			tokenEstimate{Input: int64(len(smallBody) / 4), Output: 10}},
-		{"body at the threshold is scanned", kaalmv1beta1.ProviderTypeOpenAI, 1000, edgeBody,
-			tokenEstimate{Input: int64((len(edgeBody) - edgeMedia) / 4), Output: 10}},
-		{"no tokensPerMinute reserves nothing", kaalmv1beta1.ProviderTypeOpenAI, 0, openaiBody, tokenEstimate{}},
+		{"anthropic image", kaalmv1beta1.ProviderTypeAnthropic, nil, 1000, anthropicBody, left(anthropicBody, anthropicMedia)},
+		{"anthropic image with the type after the data", kaalmv1beta1.ProviderTypeAnthropic, nil, 1000,
+			anthropicAfterBody, left(anthropicAfterBody, anthropicAfterMedia)},
+		{"anthropic text document counts", kaalmv1beta1.ProviderTypeAnthropic, nil, 1000, anthropicTextDoc, whole(anthropicTextDoc)},
+		{"anthropic pdf counts", kaalmv1beta1.ProviderTypeAnthropic, nil, 1000, anthropicPDF, whole(anthropicPDF)},
+		{"openai image data URL", kaalmv1beta1.ProviderTypeOpenAI, nil, 1000, openaiBody, left(openaiBody, openaiMedia)},
+		{"openai input audio", kaalmv1beta1.ProviderTypeOpenAI, nil, 1000, audioBody, left(audioBody, audioMedia)},
+		{"openai file_data pdf counts", kaalmv1beta1.ProviderTypeOpenAI, nil, 1000, openaiPDF, whole(openaiPDF)},
+		{"openai-compatible image data URL", kaalmv1beta1.ProviderTypeOpenAICompatible, nil, 1000,
+			openaiBody, left(openaiBody, openaiMedia)},
+		{"google-vertex inline data", kaalmv1beta1.ProviderTypeGoogleVertex, nil, 1000, vertexBody, left(vertexBody, vertexMedia)},
+		{"google-vertex inline_data video", kaalmv1beta1.ProviderTypeGoogleVertex, nil, 1000,
+			vertexVideo, left(vertexVideo, vertexVideoMedia)},
+		{"google-vertex text counts", kaalmv1beta1.ProviderTypeGoogleVertex, nil, 1000, vertexText, whole(vertexText)},
+		{"google-vertex pdf counts", kaalmv1beta1.ProviderTypeGoogleVertex, nil, 1000, vertexPDF, whole(vertexPDF)},
+		{"anthropic body on an openai provider uses the request format's rule", kaalmv1beta1.ProviderTypeOpenAI,
+			anthropicAdapter{}, 1000, anthropicBody, left(anthropicBody, anthropicMedia)},
+		{"body under the threshold is not scanned", kaalmv1beta1.ProviderTypeOpenAI, nil, 1000, smallBody, whole(smallBody)},
+		{"body at the threshold is scanned", kaalmv1beta1.ProviderTypeOpenAI, nil, 1000, edgeBody, left(edgeBody, edgeMedia)},
+		{"no tokensPerMinute reserves nothing", kaalmv1beta1.ProviderTypeOpenAI, nil, 0, openaiBody, tokenEstimate{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			adapter, ok := adapterForProviderType(tc.providerType)
-			if !ok {
-				t.Fatalf("no adapter for %q", tc.providerType)
+			adapter := tc.adapter
+			if adapter == nil {
+				var ok bool
+				if adapter, ok = adapterForProviderType(tc.providerType); !ok {
+					t.Fatalf("no adapter for %q", tc.providerType)
+				}
 			}
 			provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
 				Type:       tc.providerType,
@@ -604,21 +631,28 @@ func TestRequestTokenEstimate_LeavesOutMedia(t *testing.T) {
 
 // TestRequestTokenEstimate_AgreesWithStreamEstimate: for a body of
 // mediaScanMinBytes or more, the reservation's input is the stream
-// estimate's input for the same body and provider type.
+// estimate's input for the same body and provider type, with media or a
+// document.
 func TestRequestTokenEstimate_AgreesWithStreamEstimate(t *testing.T) {
 	big := strings.Repeat("A", 20000)
 	for _, tc := range []struct {
-		providerType string
-		body         string
+		name, providerType string
+		body               string
 	}{
-		{kaalmv1beta1.ProviderTypeAnthropic, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
+		{"anthropic image", kaalmv1beta1.ProviderTypeAnthropic, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
 			`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + big + `"}}]}]}`},
-		{kaalmv1beta1.ProviderTypeOpenAI, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
+		{"anthropic pdf", kaalmv1beta1.ProviderTypeAnthropic, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
+			`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` + big + `"}}]}]}`},
+		{"openai image", kaalmv1beta1.ProviderTypeOpenAI, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
 			`{"type":"image_url","image_url":{"url":"data:image/png;base64,` + big + `"}}]}]}`},
-		{kaalmv1beta1.ProviderTypeGoogleVertex, `{"contents":[{"role":"user","parts":[` +
+		{"openai file_data pdf", kaalmv1beta1.ProviderTypeOpenAI, `{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":[` +
+			`{"type":"file","file":{"filename":"a.pdf","file_data":"data:application/pdf;base64,` + big + `"}}]}]}`},
+		{"vertex image", kaalmv1beta1.ProviderTypeGoogleVertex, `{"contents":[{"role":"user","parts":[` +
 			`{"inlineData":{"mimeType":"image/png","data":"` + big + `"}}]}]}`},
+		{"vertex pdf", kaalmv1beta1.ProviderTypeGoogleVertex, `{"contents":[{"role":"user","parts":[` +
+			`{"inlineData":{"mimeType":"application/pdf","data":"` + big + `"}}]}]}`},
 	} {
-		t.Run(tc.providerType, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			adapter, _ := adapterForProviderType(tc.providerType)
 			provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
 				Type:       tc.providerType,
@@ -665,5 +699,108 @@ func TestProxy_TokensPerMinuteMediaReservesNothing(t *testing.T) {
 	_ = next.Body.Close()
 	if next.StatusCode != http.StatusOK {
 		t.Errorf("request after the image = %d, want 200", next.StatusCode)
+	}
+}
+
+// blockingUpstream answers every request with response once release is
+// closed, after recording its path and signalling arrived.
+func blockingUpstream(response string) (fn http.HandlerFunc, arrived chan struct{}, release chan struct{}, path *atomic.Value) {
+	arrived = make(chan struct{}, 4)
+	release = make(chan struct{})
+	path = &atomic.Value{}
+	fn = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		path.Store(r.URL.Path)
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(response))
+	}
+	return fn, arrived, release, path
+}
+
+// waitArrived waits for the upstream to receive a request.
+func waitArrived(t *testing.T, arrived chan struct{}, release chan struct{}) {
+	t.Helper()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the request did not reach the provider")
+	}
+}
+
+// TestProxy_TokensPerMinuteCrossingReservesByTheRequestFormat: an Anthropic
+// request with a base64 image on an openai primary reserves its text and its
+// output cap, not the image: the admission body is in the request's format,
+// so its rule finds the image, and the primary receives a translation.
+func TestProxy_TokensPerMinuteCrossingReservesByTheRequestFormat(t *testing.T) {
+	fn, arrived, release, path := blockingUpstream(`{"id":"chatcmpl-9","object":"chat.completion","model":"m1",
+	  "choices":[{"index":0,"message":{"role":"assistant","content":"A square."},"finish_reason":"stop"}],
+	  "usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`)
+	h := tpmHarness(t, fn)
+	cert := agentCert(t, h.ca)
+	client := h.client(&cert)
+	data := strings.Repeat("A", 32768)
+	body := map[string]any{"model": "prov/m1", "max_tokens": 10, "messages": []any{map[string]any{
+		"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "what is this"},
+			map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": "image/png", "data": data}},
+		},
+	}}}
+	status := make(chan int, 1)
+	go func() {
+		resp := postJSON(t, client, h.url("/v1/messages"), body, nil)
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		status <- resp.StatusCode
+	}()
+	waitArrived(t, arrived, release)
+	raw, _ := json.Marshal(body)
+	waitTokenLevel(t, h, float64(1000-(int64((len(raw)-len(data))/4)+10)))
+	close(release)
+	if got := <-status; got != http.StatusOK {
+		t.Errorf("request with an image = %d, want 200", got)
+	}
+	if got, _ := path.Load().(string); got != "/v1/chat/completions" {
+		t.Errorf("upstream path = %q, want /v1/chat/completions (a crossing)", got)
+	}
+}
+
+// TestProxy_TokensPerMinuteDocumentReservesItsBytes: a text document counts
+// at its bytes over four, so while the request runs its reservation holds
+// the bucket at the debt clamp and the next request is refused.
+func TestProxy_TokensPerMinuteDocumentReservesItsBytes(t *testing.T) {
+	fn, arrived, release, _ := blockingUpstream(`{"type":"message","usage":{"input_tokens":1,"output_tokens":1}}`)
+	h := tpmHarness(t, fn)
+	h.store.providers["prov"].Spec.Type = "anthropic"
+	cert := agentCert(t, h.ca)
+	client := h.client(&cert)
+	body := map[string]any{"model": "prov/m1", "max_tokens": 10, "messages": []any{map[string]any{
+		"role": "user", "content": []any{
+			map[string]any{"type": "document", "source": map[string]any{
+				"type": "text", "media_type": "text/plain", "data": strings.Repeat("a", 32768)}},
+			map[string]any{"type": "text", "text": "summarize"},
+		},
+	}}}
+	status := make(chan int, 1)
+	go func() {
+		resp := postJSON(t, client, h.url("/v1/messages"), body, nil)
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		status <- resp.StatusCode
+	}()
+	waitArrived(t, arrived, release)
+	// About 8,200 tokens reserved, clamped at minus one share.
+	waitTokenLevel(t, h, -1000)
+	expectTokenRateLimited(t, h, "60")
+	close(release)
+	if got := <-status; got != http.StatusOK {
+		t.Errorf("request with a document = %d, want 200", got)
 	}
 }

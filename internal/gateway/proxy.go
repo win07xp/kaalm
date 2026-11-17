@@ -205,14 +205,14 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Rate limit per (namespace, model), sharing the configured ceilings
 	// across live replicas. Under a token limit, the request's estimate (its
-	// body size less its media under the primary type's rule, over four,
-	// for a body of mediaScanMinBytes or more, plus its output cap or the
-	// model's maxOutputTokens, or one replica share when neither exists) is
-	// reserved on the bucket that admits it: the primary's limits and this
-	// model. The reservation is settled when the call ends, even when a
+	// body size less its images, audio, and video under the request format's
+	// rule, over four, for a body of mediaScanMinBytes or more, plus its
+	// output cap or the model's maxOutputTokens, or one replica share when
+	// neither exists) is reserved on the bucket that admits it: the
+	// primary's limits and this model. The reservation is settled when the call ends, even when a
 	// fallback serves the request.
 	ok, retryAfter, reservation := s.RateLimiter.Allow(provider, c.Namespace, modelID,
-		requestTokenEstimate(provider, modelID, body, typeAdapter))
+		requestTokenEstimate(provider, modelID, body, adapter))
 	if !ok {
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
 		spanError(ctx, errRateLimited)
@@ -328,10 +328,13 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 const mediaScanMinBytes = 16 << 10
 
 // requestTokenEstimate is what a request reserves on provider's token
-// bucket: an input estimate plus its output cap. For a body of
-// mediaScanMinBytes or more, the input estimate is inputEstimate under
-// adapter's media rule, the one the stream estimate applies to the body the
-// provider receives; a smaller body counts whole, over bytesPerToken. The
+// bucket: an input estimate plus its output cap. adapter is the request
+// path's adapter: the admission body is in its format, whether or not the
+// primary speaks it. For a body of mediaScanMinBytes or more, the input
+// estimate is inputEstimate under adapter's media rule, the rule the stream
+// estimate applies to the body the provider receives; an image keeps its
+// media type through a translation, so both leave out the same media. A
+// smaller body counts whole, over bytesPerToken. The
 // cap is the request's own, lowered to the model's maxOutputTokens when that
 // is smaller (the provider generates no more than its ceiling); the model's
 // maxOutputTokens when the request sets none; or outputCapUnknown when

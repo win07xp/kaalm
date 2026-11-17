@@ -24,9 +24,9 @@ const bytesPerToken = 4
 
 // contentEstimator is the stream estimator the adapters share, each with its
 // own member lists. Input is inputEstimate of the body the provider
-// received: it leaves out the values of the format's media members (base64
-// images, audio, and files), which the provider bills by its own rules; it
-// is computed only when asked for, since most streams report their input.
+// received: it leaves out the format's images, audio, and video, which the
+// provider bills by dimensions or duration; documents count. It is computed
+// only when asked for, since most streams report their input.
 // Output adds, per event, the byte length of the values of the format's
 // generated-content members over bytesPerToken, at least one token when the
 // event held any content; the value of a skipped member (such as log
@@ -42,14 +42,34 @@ type contentEstimator struct {
 	content int
 }
 
-// mediaMember names a request member whose string value is media and stays
-// out of the input estimate when it starts with prefix (any string value
-// when prefix is empty). With a parent, the member is name inside an object
-// that is the value of a member named parent, such as data inside
-// inlineData; a member named name anywhere else is text and counts.
+// mediaMember names a request member whose string value can be media. A
+// value stays out of the input estimate only when its media type is an
+// image, audio, or video type (see isMediaType), which the provider bills by
+// dimensions or duration; any other value, such as a document, counts. With
+// a parent, the member is name inside an object that is the value of a
+// member named parent, such as data inside inlineData; a member named name
+// anywhere else is text and counts.
 type mediaMember struct {
-	parent, name, prefix []byte
+	parent, name []byte
+	// typeMember names the sibling member, in the same object, that holds
+	// the value's media type, for kind mediaByType.
+	typeMember []byte
+	kind       mediaKind
 }
+
+// mediaKind says where a media member's type is read.
+type mediaKind uint8
+
+const (
+	// mediaByType: the sibling member typeMember holds the type, before or
+	// after the value.
+	mediaByType mediaKind = iota
+	// mediaDataURL: the value is a data URL, and its type follows "data:".
+	mediaDataURL
+	// mediaAlways: the member holds media by definition, such as the data
+	// of OpenAI's input_audio.
+	mediaAlways
+)
 
 func newContentEstimator(request []byte, content, skipped [][]byte, media []mediaMember) *contentEstimator {
 	return &contentEstimator{
@@ -81,28 +101,36 @@ func (e *contentEstimator) event(data []byte) {
 func (e *contentEstimator) estimateInput() int64 { return inputEstimate(e.request, e.media) }
 
 // inputEstimate is the input estimate the token reservation and the stream
-// estimate share: request's bytes less the values of its media members,
-// over bytesPerToken.
+// estimate share: request's bytes less its images, audio, and video under
+// the media rules (see mediaLen), over bytesPerToken.
 func inputEstimate(request []byte, media []mediaMember) int64 {
 	return int64((len(request) - mediaLen(request, media)) / bytesPerToken)
 }
 
 func (e *contentEstimator) estimateOutput() int64 { return e.output }
 
-// mediaLen sums the lengths of the string values of data's media members,
-// counted as jsonMembersLen counts a string. It walks data once, jumping
-// each string, and keeps a stack of the open objects and arrays with the
-// member name that opened each, so a parent rule matches a string member of
-// the innermost open object without walking that object again. A string
-// cut off before it ends ends the walk.
+// mediaLen sums the lengths of the string values of data's media members
+// whose media type is an image, audio, or video type, counted as
+// jsonMembersLen counts a string. It walks data once, jumping each string,
+// and keeps a frame per open object or array. A frame holds the member name
+// that opened it, so a parent rule matches a string member of the innermost
+// open object; and, for a mediaByType rule, the bytes of the object's values
+// and the verdict of its type member, decided when the object closes, so
+// the type member may come before or after the value and no object is
+// walked twice. Every copy of a value in an object is summed, and the last
+// copy of the type member decides, as parsers that keep the last copy do; a
+// copy that is not a string makes the type unknown, and the values count. A
+// string cut off before it ends ends the walk, and the objects still open
+// leave out nothing.
 func mediaLen(data []byte, media []mediaMember) int {
 	if len(media) == 0 {
 		return 0
 	}
 	total := 0
-	// openers holds, for each open object, the name of the member whose
-	// value it is (nil for an array, a top-level value, or an array item).
-	var openers [][]byte
+	// A request nests a handful of levels deep; the first sixteen frames
+	// need no allocation.
+	var stack [16]mediaFrame
+	frames := stack[:0]
 	// key is the member name whose value comes next, nil when none does.
 	var key []byte
 	for i := 0; i < len(data); i++ {
@@ -118,49 +146,108 @@ func mediaLen(data []byte, media []mediaMember) int {
 				i = next
 				continue
 			}
-			if key != nil {
-				var parent []byte
-				if len(openers) > 0 {
-					parent = openers[len(openers)-1]
-				}
-				if isMedia(media, parent, key, data[i+1:end]) {
-					total += end - i - 1
-				}
+			if key != nil && len(frames) > 0 {
+				total += mediaString(media, &frames[len(frames)-1], key, data[i+1:end])
 			}
 			key = nil
 			i = end
 		case '{':
-			openers = append(openers, key)
+			frames = append(frames, mediaFrame{opener: noteNonString(media, frames, key)})
 			key = nil
 		case '[':
-			openers = append(openers, nil)
+			noteNonString(media, frames, key)
+			frames = append(frames, mediaFrame{})
 			key = nil
 		case '}', ']':
-			if len(openers) > 0 {
-				openers = openers[:len(openers)-1]
+			if n := len(frames); n > 0 {
+				if f := frames[n-1]; f.media {
+					total += f.pending
+				}
+				frames = frames[:n-1]
 			}
 			key = nil
 		case ' ', '\t', '\n', '\r':
 		default:
+			noteNonString(media, frames, key)
 			key = nil
 		}
 	}
 	return total
 }
 
-// isMedia reports whether str, the string value of the member named key in
-// an object that is the value of a member named parent, is media under one
-// of the rules.
-func isMedia(media []mediaMember, parent, key, str []byte) bool {
+// mediaFrame is one open object or array in mediaLen's walk. opener is the
+// name of the member whose value it is (nil for an array, a top-level
+// value, or an array item). pending holds the bytes of the object's
+// mediaByType values, left out when the object closes if media, the
+// verdict of the last type member seen, is true.
+type mediaFrame struct {
+	opener  []byte
+	pending int
+	media   bool
+}
+
+// mediaString applies the rules to str, the string value of the member
+// named key in the object of frame f, and returns the bytes left out at
+// once. A mediaByType value goes to f's pending instead, and a type member
+// sets f's verdict.
+func mediaString(media []mediaMember, f *mediaFrame, key, str []byte) int {
 	for _, m := range media {
-		if !bytes.Equal(key, m.name) || !bytes.HasPrefix(str, m.prefix) {
+		if !parentMatches(m, f.opener) {
 			continue
 		}
-		if m.parent == nil || (parent != nil && bytes.Equal(parent, m.parent)) {
-			return true
+		switch {
+		case bytes.Equal(key, m.name):
+			switch m.kind {
+			case mediaAlways:
+				return len(str)
+			case mediaDataURL:
+				if t, ok := bytes.CutPrefix(str, []byte("data:")); ok && isMediaType(t) {
+					return len(str)
+				}
+			case mediaByType:
+				f.pending += len(str)
+				return 0
+			}
+		case m.kind == mediaByType && bytes.Equal(key, m.typeMember):
+			f.media = isMediaType(str)
 		}
 	}
-	return false
+	return 0
+}
+
+// noteNonString handles a value of the member named key that is not a
+// string, in the innermost open object: a type member with such a value
+// makes the object's type unknown. It returns key, the opener of an object
+// value.
+func noteNonString(media []mediaMember, frames []mediaFrame, key []byte) []byte {
+	if key == nil || len(frames) == 0 {
+		return key
+	}
+	f := &frames[len(frames)-1]
+	for _, m := range media {
+		if m.kind == mediaByType && bytes.Equal(key, m.typeMember) && parentMatches(m, f.opener) {
+			f.media = false
+		}
+	}
+	return key
+}
+
+// parentMatches reports whether rule m applies to a member of an object
+// that is the value of a member named opener.
+func parentMatches(m mediaMember, opener []byte) bool {
+	return m.parent == nil || (opener != nil && bytes.Equal(opener, m.parent))
+}
+
+// isMediaType reports whether the media type t, compared as written (escapes
+// raw), is an image, audio, or video type: its first six bytes are
+// "image/", "audio/", or "video/" under ASCII case folding. Parameters after
+// the type are ignored.
+func isMediaType(t []byte) bool {
+	if len(t) < 6 {
+		return false
+	}
+	p := t[:6]
+	return bytes.EqualFold(p, []byte("image/")) || bytes.EqualFold(p, []byte("audio/")) || bytes.EqualFold(p, []byte("video/"))
 }
 
 // jsonMembersLen sums the value lengths of every member of data named one of

@@ -107,8 +107,9 @@ func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) bool {
 // parts: text (answer and thought parts) and functionCall args. A chunk
 // with only usageMetadata or a finishReason adds nothing; text in grounding
 // metadata counts too, a small overcount used only when usage is missing.
-// The input estimate leaves out the base64 data of inline parts
-// (inlineData or inline_data).
+// The input estimate leaves out the data of inline parts (inlineData or
+// inline_data) whose mimeType is an image, audio, or video type; a PDF or
+// text part counts.
 func (a vertexAdapter) streamEstimator(request []byte) streamEstimator {
 	return newContentEstimator(request, vertexContentMembers, nil, a.mediaMembers())
 }
@@ -118,8 +119,8 @@ func (vertexAdapter) mediaMembers() []mediaMember { return vertexMediaMembers }
 var (
 	vertexContentMembers = [][]byte{[]byte("text"), []byte("args")}
 	vertexMediaMembers   = []mediaMember{
-		{parent: []byte("inlineData"), name: []byte("data")},
-		{parent: []byte("inline_data"), name: []byte("data")},
+		{parent: []byte("inlineData"), name: []byte("data"), typeMember: []byte("mimeType")},
+		{parent: []byte("inline_data"), name: []byte("data"), typeMember: []byte("mime_type")},
 	}
 )
 
