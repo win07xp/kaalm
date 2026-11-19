@@ -114,6 +114,11 @@ type providerAdapter interface {
 	// streamEstimator returns a new estimator for one stream, given the body
 	// the provider received, or nil when the adapter estimates nothing.
 	streamEstimator(request []byte) streamEstimator
+	// mediaMembers lists the request members whose string values can be
+	// media; the value's media type decides whether it stays out of the
+	// input estimates (see mediaLen). The token reservation and the stream
+	// estimate both use it.
+	mediaMembers() []mediaMember
 	// streamUsageOption reports whether a streaming request in this format
 	// needs stream_options.include_usage set for the stream to carry usage.
 	streamUsageOption() bool
@@ -260,16 +265,17 @@ func mayBeAnthropicStreamEvent(data []byte) bool {
 // (thinking_delta). message_start, content_block_start with empty text,
 // message_delta, and message_stop hold no such member with content, so
 // they add nothing. The input estimate leaves out the data of a block's
-// source: the base64 data of image and document blocks, and also the plain
-// text of a document with a text source, an undercount used only for a
-// stream cut before message_start.
-func (anthropicAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, anthropicContentMembers, nil, anthropicMediaMembers)
+// source whose media_type is an image, audio, or video type; a document's
+// data (PDF or text) and a source with no media_type count.
+func (a anthropicAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, anthropicContentMembers, nil, a.mediaMembers())
 }
+
+func (anthropicAdapter) mediaMembers() []mediaMember { return anthropicMediaMembers }
 
 var (
 	anthropicContentMembers = [][]byte{[]byte("text"), []byte("partial_json"), []byte("thinking")}
-	anthropicMediaMembers   = []mediaMember{{parent: []byte("source"), name: []byte("data")}}
+	anthropicMediaMembers   = []mediaMember{{parent: []byte("source"), name: []byte("data"), typeMember: []byte("media_type")}}
 )
 
 func (anthropicAdapter) streamUsageOption() bool { return false }
@@ -351,11 +357,14 @@ func mayCarryOpenAIUsage(data []byte) bool {
 // is missing. Log probabilities are skipped, since they repeat the content
 // with token metadata. The role chunk (empty content), the finish chunk,
 // the usage chunk, and [DONE] hold no such member with content, so they add
-// nothing. The input estimate leaves out base64 media: data URLs (image_url
-// and its url, file_data) and the data of input_audio.
-func (openaiAdapter) streamEstimator(request []byte) streamEstimator {
-	return newContentEstimator(request, openaiContentMembers, openaiSkippedMembers, openaiMediaMembers)
+// nothing. The input estimate leaves out data URLs (url, image_url, and
+// file_data) whose type is an image, audio, or video type, and the data of
+// input_audio; a file_data PDF counts.
+func (a openaiAdapter) streamEstimator(request []byte) streamEstimator {
+	return newContentEstimator(request, openaiContentMembers, openaiSkippedMembers, a.mediaMembers())
 }
+
+func (openaiAdapter) mediaMembers() []mediaMember { return openaiMediaMembers }
 
 var (
 	openaiContentMembers = [][]byte{
@@ -364,10 +373,10 @@ var (
 	}
 	openaiSkippedMembers = [][]byte{[]byte("logprobs")}
 	openaiMediaMembers   = []mediaMember{
-		{name: []byte("url"), prefix: []byte("data:")},
-		{name: []byte("image_url"), prefix: []byte("data:")},
-		{name: []byte("file_data")},
-		{parent: []byte("input_audio"), name: []byte("data")},
+		{name: []byte("url"), kind: mediaDataURL},
+		{name: []byte("image_url"), kind: mediaDataURL},
+		{name: []byte("file_data"), kind: mediaDataURL},
+		{parent: []byte("input_audio"), name: []byte("data"), kind: mediaAlways},
 	}
 )
 

@@ -52,8 +52,8 @@ func TestStreamEstimator_InputIsRequestBytesOverFour(t *testing.T) {
 	}
 }
 
-// The input estimate leaves out each adapter's base64 media values, so a
-// request is estimated by its text alone.
+// The input estimate leaves out each adapter's images, audio, and video, so
+// a request is estimated by its text alone.
 func TestStreamEstimator_InputLeavesOutMedia(t *testing.T) {
 	b64 := strings.Repeat("iVBORw0KGgo", 1000)
 	dataURL := "data:image/png;base64," + b64
@@ -69,24 +69,32 @@ func TestStreamEstimator_InputLeavesOutMedia(t *testing.T) {
 		{"openai input_audio", providerTypeOpenAI,
 			`{"model":"gpt-4o-audio","messages":[{"role":"user","content":[{"type":"text","text":"transcribe"},` +
 				`{"type":"input_audio","input_audio":{"data":"%s","format":"wav"}}]}],"stream":true}`, b64},
-		{"openai file part", providerTypeOpenAI,
-			`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"summarize"},` +
-				`{"type":"file","file":{"filename":"a.pdf","file_data":"%s"}}]}],"stream":true}`,
-			"data:application/pdf;base64," + b64},
+		{"openai video_url data URL", providerTypeOpenAICompatible,
+			`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"what happens"},` +
+				`{"type":"video_url","video_url":{"url":"%s"}}]}],"stream":true}`, "data:video/mp4;base64," + b64},
+		{"openai file part holding an image", providerTypeOpenAI,
+			`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"what is this"},` +
+				`{"type":"file","file":{"filename":"a.png","file_data":"%s"}}]}],"stream":true}`, dataURL},
 		{"anthropic image source", providerTypeAnthropic,
 			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
 				`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"%s"}},` +
 				`{"type":"text","text":"what is this"}]}],"stream":true}`, b64},
-		{"anthropic document source", providerTypeAnthropic,
+		{"anthropic image source with the type after the data", providerTypeAnthropic,
 			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
-				`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"%s"}},` +
-				`{"type":"text","text":"summarize"}]}],"stream":true}`, b64},
+				`{"type":"image","source":{"type":"base64","data":"%s","media_type":"image/jpeg"}},` +
+				`{"type":"text","text":"what is this"}]}],"stream":true}`, b64},
 		{"vertex inlineData", providerTypeVertex,
 			`{"contents":[{"role":"user","parts":[{"text":"what is this"},` +
 				`{"inlineData":{"mimeType":"image/png","data":"%s"}}]}]}`, b64},
 		{"vertex inline_data", providerTypeVertex,
 			`{"contents":[{"role":"user","parts":[{"text":"what is this"},` +
 				`{"inline_data":{"mime_type":"image/png","data":"%s"}}]}]}`, b64},
+		{"vertex inlineData audio", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"text":"transcribe"},` +
+				`{"inlineData":{"mimeType":"audio/mpeg","data":"%s"}}]}]}`, b64},
+		{"vertex inline_data video", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"text":"what happens"},` +
+				`{"inline_data":{"mime_type":"video/mp4","data":"%s"}}]}]}`, b64},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,6 +102,49 @@ func TestStreamEstimator_InputLeavesOutMedia(t *testing.T) {
 			want := int64((len(request) - len(tc.media)) / bytesPerToken)
 			if in, _ := estimateOf(t, tc.typ, request); in != want {
 				t.Errorf("input estimate = %d, want %d (the request without its media)", in, want)
+			}
+		})
+	}
+}
+
+// The input estimate counts documents (PDF and text) and values whose media
+// type is missing: the whole request over four.
+func TestStreamEstimator_InputCountsDocuments(t *testing.T) {
+	b64 := strings.Repeat("JVBERi0xLjQK", 1000)
+	cases := []struct {
+		name, typ, template, value string
+	}{
+		{"openai file part", providerTypeOpenAI,
+			`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"summarize"},` +
+				`{"type":"file","file":{"filename":"a.pdf","file_data":"%s"}}]}],"stream":true}`,
+			"data:application/pdf;base64," + b64},
+		{"openai file_data without a data URL", providerTypeOpenAI,
+			`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"summarize"},` +
+				`{"type":"file","file":{"filename":"a.pdf","file_data":"%s"}}]}],"stream":true}`, b64},
+		{"anthropic document source", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
+				`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"%s"}},` +
+				`{"type":"text","text":"summarize"}]}],"stream":true}`, b64},
+		{"anthropic text document source", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
+				`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"%s"}},` +
+				`{"type":"text","text":"summarize"}]}],"stream":true}`, strings.Repeat("plain document text ", 500)},
+		{"anthropic image source without a media type", providerTypeAnthropic,
+			`{"model":"claude-x","max_tokens":10,"messages":[{"role":"user","content":[` +
+				`{"type":"image","source":{"type":"base64","data":"%s"}}]}],"stream":true}`, b64},
+		{"vertex inlineData text", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"text":"summarize"},` +
+				`{"inlineData":{"mimeType":"text/plain","data":"%s"}}]}]}`, b64},
+		{"vertex inlineData pdf", providerTypeVertex,
+			`{"contents":[{"role":"user","parts":[{"text":"summarize"},` +
+				`{"inlineData":{"mimeType":"application/pdf","data":"%s"}}]}]}`, b64},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := fmt.Sprintf(tc.template, tc.value)
+			want := int64(len(request) / bytesPerToken)
+			if in, _ := estimateOf(t, tc.typ, request); in != want {
+				t.Errorf("input estimate = %d, want %d (the whole request)", in, want)
 			}
 		})
 	}
@@ -255,7 +306,7 @@ func TestJSONMembersLen(t *testing.T) {
 // mediaLen counts a parent rule's string member only at the parent
 // object's own level.
 func TestMediaLen_ParentRule(t *testing.T) {
-	media := []mediaMember{{parent: []byte("source"), name: []byte("data")}}
+	media := []mediaMember{{parent: []byte("source"), name: []byte("data"), kind: mediaAlways}}
 	cases := []struct {
 		name, obj string
 		want      int
@@ -278,6 +329,140 @@ func TestMediaLen_ParentRule(t *testing.T) {
 				t.Errorf("mediaLen(%s) = %d, want %d", body, got, tc.want)
 			}
 		})
+	}
+}
+
+// mediaLen leaves out a typed member's value only when the type member
+// beside it, before or after it in the same object, names an image, audio,
+// or video type. Every copy of the value is summed, the last copy of the
+// type member decides, and a type that is missing, not a string, or another
+// type counts the value.
+func TestMediaLen_TypeRule(t *testing.T) {
+	cases := []struct {
+		name, obj string
+		want      int
+	}{
+		{"type before data", `{"type":"base64","media_type":"image/png","data":"abc"}`, 3},
+		{"type after data", `{"data":"abc","media_type":"image/png"}`, 3},
+		{"upper case type", `{"media_type":"IMAGE/PNG","data":"abc"}`, 3},
+		{"type with parameters", `{"media_type":"image/png;base64","data":"abc"}`, 3},
+		{"audio", `{"media_type":"audio/wav","data":"abc"}`, 3},
+		{"video", `{"media_type":"video/mp4","data":"abc"}`, 3},
+		{"pdf", `{"media_type":"application/pdf","data":"abc"}`, 0},
+		{"text", `{"type":"text","media_type":"text/plain","data":"abc"}`, 0},
+		{"no slash", `{"media_type":"image","data":"abc"}`, 0},
+		{"leading space", `{"media_type":" image/png","data":"abc"}`, 0},
+		{"escaped slash", `{"media_type":"image\/png","data":"abc"}`, 3},
+		{"escaped slash, audio", `{"media_type":"AUDIO\/wav","data":"abc"}`, 3},
+		{"escaped slash, pdf", `{"media_type":"application\/pdf","data":"abc"}`, 0},
+		{"other escape in the type", `{"media_type":"image` + "\\" + `u002fpng","data":"abc"}`, 0},
+		{"backslash without a slash", `{"media_type":"image\\png","data":"abc"}`, 0},
+		{"missing type", `{"type":"base64","data":"abc"}`, 0},
+		{"number type", `{"media_type":5,"data":"abc"}`, 0},
+		{"object type", `{"media_type":{"a":1},"data":"abc"}`, 0},
+		{"array type", `{"media_type":["image/png"],"data":"abc"}`, 0},
+		{"null type", `{"data":"abc","media_type":null}`, 0},
+		{"last type copy wins, not media", `{"media_type":"image/png","data":"abc","media_type":"application/pdf"}`, 0},
+		{"last type copy wins, media", `{"media_type":"application/pdf","data":"abc","media_type":"image/png"}`, 3},
+		{"non-string last type copy", `{"media_type":"image/png","data":"abc","media_type":null}`, 0},
+		{"data copies summed", `{"media_type":"image/png","data":"abc","data":"de"}`, 5},
+		{"type in a nested object", `{"data":"abc","n":{"media_type":"image/png"}}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"source":` + tc.obj + `,"data":"text"}`
+			if got := mediaLen([]byte(body), anthropicMediaMembers); got != tc.want {
+				t.Errorf("mediaLen(%s) = %d, want %d", body, got, tc.want)
+			}
+		})
+	}
+	t.Run("type in the parent object", func(t *testing.T) {
+		body := `{"media_type":"image/png","source":{"data":"abc"}}`
+		if got := mediaLen([]byte(body), anthropicMediaMembers); got != 0 {
+			t.Errorf("mediaLen(%s) = %d, want 0", body, got)
+		}
+	})
+	t.Run("body cut off inside the data", func(t *testing.T) {
+		body := `{"source":{"media_type":"image/png","data":"abc`
+		if got := mediaLen([]byte(body), anthropicMediaMembers); got != 0 {
+			t.Errorf("mediaLen(%s) = %d, want 0", body, got)
+		}
+	})
+	t.Run("body cut off after the data", func(t *testing.T) {
+		body := `{"source":{"media_type":"image/png","data":"abc",`
+		if got := mediaLen([]byte(body), anthropicMediaMembers); got != 0 {
+			t.Errorf("mediaLen(%s) = %d, want 0", body, got)
+		}
+	})
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"vertex inlineData video", `{"inlineData":{"data":"abc","mimeType":"video/mp4"}}`, 3},
+		{"vertex inline_data text", `{"inline_data":{"mime_type":"text/plain","data":"abc"}}`, 0},
+		{"vertex camel type on the snake member", `{"inline_data":{"mimeType":"image/png","data":"abc"}}`, 3},
+		{"vertex snake type on the camel member", `{"inlineData":{"data":"abc","mime_type":"audio/wav"}}`, 3},
+		{"vertex both type spellings, last one decides", `{"inlineData":{"mime_type":"image/png","data":"abc","mimeType":"application/pdf"}}`, 0},
+		{"vertex mixed spelling pdf", `{"inline_data":{"mimeType":"application/pdf","data":"abc"}}`, 0},
+		{"vertex mimeType with an escaped slash", `{"inlineData":{"mimeType":"image\/png","data":"abc"}}`, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mediaLen([]byte(tc.body), vertexMediaMembers); got != tc.want {
+				t.Errorf("mediaLen(%s) = %d, want %d", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+// mediaLen leaves out a data URL only when the type after data: is an
+// image, audio, or video type; input_audio data is always audio.
+func TestMediaLen_DataURL(t *testing.T) {
+	cases := []struct {
+		name, value string
+		media       bool
+	}{
+		{"image", "data:image/png;base64,abc", true},
+		{"upper case type", "data:IMAGE/PNG;base64,abc", true},
+		{"video", "data:video/mp4;base64,abc", true},
+		{"escaped slash", `data:image\/png;base64,abc`, true},
+		{"escaped slash, pdf", `data:application\/pdf;base64,abc`, false},
+		{"pdf", "data:application/pdf;base64,abc", false},
+		{"no type", "data:;base64,abc", false},
+		{"upper case scheme", "DATA:image/png;base64,abc", false},
+		{"remote URL", "https://example.com/a.png", false},
+		{"raw base64", "iVBORw0KGgo", false},
+	}
+	for _, member := range []string{"url", "image_url", "file_data"} {
+		for _, tc := range cases {
+			t.Run(member+" "+tc.name, func(t *testing.T) {
+				body := `{"part":{"` + member + `":"` + tc.value + `"},"text":"x"}`
+				want := 0
+				if tc.media {
+					want = len(tc.value)
+				}
+				if got := mediaLen([]byte(body), openaiMediaMembers); got != want {
+					t.Errorf("mediaLen(%s) = %d, want %d", body, got, want)
+				}
+			})
+		}
+	}
+	body := `{"input_audio":{"format":"wav","data":"abc"}}`
+	if got := mediaLen([]byte(body), openaiMediaMembers); got != 3 {
+		t.Errorf("mediaLen(%s) = %d, want 3", body, got)
+	}
+}
+
+// mediaLen decides a typed object once, when it closes, so an object with
+// many data members costs one pass.
+func TestMediaLen_ManySiblingsIsOnePass(t *testing.T) {
+	const copies = 200_000
+	body := `{"source":{"media_type":"image/png",` + strings.Repeat(`"data":"abcdefgh",`, copies) + `"data":"abcdefgh"}}`
+	start := time.Now()
+	if got, want := mediaLen([]byte(body), anthropicMediaMembers), 8*(copies+1); got != want {
+		t.Errorf("mediaLen = %d, want %d", got, want)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("mediaLen took %s on %d data members, want under a second", took, copies+1)
 	}
 }
 

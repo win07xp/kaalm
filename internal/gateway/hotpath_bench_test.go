@@ -683,3 +683,82 @@ func BenchmarkAccumulateStreamUsage(b *testing.B) {
 		})
 	}
 }
+
+// textBodyBytes is a chat completion request of about n bytes of text
+// messages.
+func textBodyBytes(n int) []byte {
+	line := strings.Repeat("context line. ", 70)
+	messages := make([]any, 0, n/len(line)+1)
+	for size := 0; size < n; size += len(line) {
+		messages = append(messages, map[string]any{"role": "user", "content": line})
+	}
+	raw, _ := json.Marshal(map[string]any{"model": "m1", "messages": messages, "max_tokens": 512})
+	return raw
+}
+
+// mediaBodyBytes is a chat completion request with one user message: a text
+// part and an image_url data URL of about n base64 bytes.
+func mediaBodyBytes(n int) []byte {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	data := strings.Repeat(alphabet, n/len(alphabet)+1)[:n]
+	raw, _ := json.Marshal(map[string]any{"model": "m1", "max_tokens": 512, "messages": []any{map[string]any{
+		"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "what is this"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64," + data}},
+		},
+	}}})
+	return raw
+}
+
+// mediaScanBodies are the bodies the admission media scan benchmarks run
+// on: text-16KiB is a text body just over the scan threshold, and the
+// 1 MiB bodies show the scan's cost per byte on text and on base64 media.
+func mediaScanBodies() []struct {
+	name string
+	body []byte
+} {
+	return []struct {
+		name string
+		body []byte
+	}{
+		{"text-16KiB", textBodyBytes(mediaScanMinBytes)},
+		{"text-1MiB", textBodyBytes(1 << 20)},
+		{"media-1MiB", mediaBodyBytes(1 << 20)},
+	}
+}
+
+// BenchmarkRequestTokenEstimate measures the whole admission estimate on a
+// provider with tokensPerMinute: the output-cap walk plus the media scan.
+func BenchmarkRequestTokenEstimate(b *testing.B) {
+	maxOutput := int64(64)
+	provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+		Type:       kaalmv1beta1.ProviderTypeOpenAI,
+		RateLimits: kaalmv1beta1.ModelProviderRateLimits{TokensPerMinute: 2_000_000_000},
+		Models:     []kaalmv1beta1.ModelProviderModel{{ID: "m1", MaxOutputTokens: &maxOutput}},
+	}}
+	for _, c := range mediaScanBodies() {
+		b.Run(c.name, func(b *testing.B) {
+			b.SetBytes(int64(len(c.body)))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if est := requestTokenEstimate(provider, "m1", c.body, openaiAdapter{}); est.Output != 64 {
+					b.Fatalf("estimate %+v", est)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkMediaLen measures the media scan alone on the same bodies, so its
+// share of the admission estimate shows.
+func BenchmarkMediaLen(b *testing.B) {
+	for _, c := range mediaScanBodies() {
+		b.Run(c.name, func(b *testing.B) {
+			b.SetBytes(int64(len(c.body)))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_ = mediaLen(c.body, openaiMediaMembers)
+			}
+		})
+	}
+}
