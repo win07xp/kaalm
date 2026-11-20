@@ -19,12 +19,14 @@ import (
 //
 // Capabilities come from closing over the Agent: a.Memory for state that
 // survives hibernation, a.Gateway for LLM calls through the gateway (POST a
-// qualified model request to /v1/chat/completions; the gateway proxies to
-// your ModelProviders).
+// qualified model request on the path for the provider's type; the gateway
+// rejects a path of another format with 400).
 func handler(a *agentruntime.Agent) agentruntime.Handler {
 	// With KAALM_STARTER_MODEL set (a qualified "{providerRef}/{modelId}"
 	// name), a message starting "ask " is answered by that model through
-	// the gateway instead of echoed; see askModel below.
+	// the gateway instead of echoed; see askModel below. askModel speaks
+	// the OpenAI chat format, so the model must be on an openai or
+	// openai-compatible provider.
 	model := os.Getenv("KAALM_STARTER_MODEL")
 	return func(ctx context.Context, env agentruntime.Envelope) (agentruntime.Response, error) {
 		// Count this caller's messages in persistent memory. It is the
@@ -60,10 +62,11 @@ type gatewayPoster interface {
 	Post(ctx context.Context, path string, body any) (*http.Response, error)
 }
 
-// askModel sends one chat completion through the gateway. Passing the
-// handler's ctx is what keeps the call on the message's trace: the runtime
-// forwards the delivery's trace context on every gateway call made with it
-// (runtime contract item 8).
+// askModel sends one chat completion through the gateway on
+// /v1/chat/completions, the path for an openai or openai-compatible
+// provider. Passing the handler's ctx is what keeps the call on the
+// message's trace: the runtime forwards the delivery's trace context on
+// every gateway call made with it (runtime contract item 8).
 func askModel(ctx context.Context, g gatewayPoster, model, prompt string) (string, error) {
 	resp, err := g.Post(ctx, "/v1/chat/completions", map[string]any{
 		"model":    model,

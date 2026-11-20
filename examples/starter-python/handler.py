@@ -11,8 +11,11 @@ Capabilities come from the kaalm module (docs/src/runtime/base-images.md):
 
 - ``kaalm.gateway``: POST LLM requests through the gateway with the Pod's
   mTLS identity, e.g.
-  ``await kaalm.gateway.post("/v1/chat/completions", json={...})`` with a
-  qualified model name like ``anthropic-shared/claude-opus-4-6``.
+  ``await kaalm.gateway.post("/v1/messages", json={...})`` with a
+  qualified model name like ``anthropic-shared/claude-opus-4-6``. The path
+  must be the one for the provider's type: ``/v1/messages`` for an
+  anthropic provider, ``/v1/chat/completions`` for an openai or
+  openai-compatible one; the gateway rejects any other path with 400.
 - ``kaalm.memory``: persistent key/value state, backed by the PVC when
   spec.persistence is enabled (and hence surviving hibernation), in-memory
   otherwise.
