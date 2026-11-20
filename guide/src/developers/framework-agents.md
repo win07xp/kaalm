@@ -90,7 +90,7 @@ change in the client code.
    `base_url` and timeout. `ChatAnthropic` has no
    parameter for a CA file, so set the `SSL_CERT_FILE` environment variable
    to `/var/run/ca/ca.crt` in the container's `env`. It replaces the public
-   CAs for every HTTPS client in the process. If the process also calls
+   CAs for the whole process, not only for this model. If the process also calls
    public HTTPS endpoints, point `SSL_CERT_FILE` at a bundle file that holds
    the public CAs and the gateway CA. In this factory, the `base_url` has no
    `/v1`, because `ChatAnthropic` wraps the Anthropic SDK:
