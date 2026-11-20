@@ -95,7 +95,10 @@ The built-in echo handler makes no model call, so an echo reply proves the
 delivery path, not the LLM path. A handler you add calls models through the
 gateway using a qualified name, for example `anthropic-shared/claude-opus-4-6`
 in the standard `model` field of an Anthropic or OpenAI-format request. The
-gateway holds the API key, so the agent never sees it ([Request handling](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/request-handling.md)
+request's format must be the provider's type: `/v1/messages` for `anthropic`,
+`/v1/chat/completions` for `openai` and `openai-compatible` ([One wire fact to
+respect](framework-agents.md#level-1-gateway-only-zero-conversion) explains
+why). The gateway holds the API key, so the agent never sees it ([Request handling](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/request-handling.md)
 covers the checks). The base images' `kaalm.gateway` client is already pointed
 at the LLM path.
 
