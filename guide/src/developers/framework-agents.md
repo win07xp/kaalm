@@ -76,6 +76,38 @@ change in the client code.
    [Level 2](#level-2-full-lifecycle-the-framework-inside-the-handler).
    In another language, build the client so it reads the file for each
    request's credential, or rebuild the client when the file changes.
+
+   LangChain's `ChatAnthropic` takes neither `http_client` nor
+   `http_async_client`: it builds its own HTTP clients, so the hook above
+   can't reach it. Build the model from a factory that reads the token file
+   and passes the token in `default_headers`, and call the factory for each
+   graph run or request, not once at import: a model kept across a token
+   change keeps sending the old token. If a run can outlast the token it
+   started with, call the factory for each model call instead. The header
+   goes out on both the sync and the async path, so one factory covers
+   `invoke` and `ainvoke`. A model for each run reuses the sync HTTP client,
+   because `langchain-anthropic` shares it between models with the same
+   `base_url` and timeout. `ChatAnthropic` has no
+   parameter for a CA file, so set the `SSL_CERT_FILE` environment variable
+   to `/var/run/ca/ca.crt` in the container's `env`. It replaces the public
+   CAs for every HTTPS client in the process. If the process also calls
+   public HTTPS endpoints, point `SSL_CERT_FILE` at a bundle file that holds
+   the public CAs and the gateway CA. In this factory, the `base_url` has no
+   `/v1`, because `ChatAnthropic` wraps the Anthropic SDK:
+
+   ```python
+   from langchain_anthropic import ChatAnthropic
+
+   def make_model():
+       with open("/var/run/token/token") as f:
+           token = f.read().strip()
+       return ChatAnthropic(
+           model="anthropic-shared/claude-sonnet-4-6",
+           base_url="https://kaalm-gateway.kaalm-system.svc:8443",
+           api_key="managed-by-kaalm",
+           default_headers={"Authorization": "Bearer " + token},
+       )
+   ```
 3. **Qualify the model name.** `openai-shared/gpt-5.2` instead of
    `gpt-5.2`: the gateway reads the provider from the prefix and injects the
    real credential. Whatever key your client was configured with is
