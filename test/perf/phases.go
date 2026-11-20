@@ -56,13 +56,17 @@ type gatewayLeg struct {
 	Concurrency int    `json:"concurrency"`
 	// Client is what the loadgen saw. On a stream leg its latencyMs is time
 	// to last byte and its ttfbMs time to first byte.
-	Client            *loadResult `json:"client"`
-	GatewaySideMs     stats       `json:"gatewaySideMs"`
-	GatewayRequests   float64     `json:"gatewayRequests"`
-	SpendUSD          float64     `json:"spendUsd"`
-	BudgetUtilization float64     `json:"budgetUtilization"`
-	// UsageMissing counts successful answers that carried no usage and so
-	// settled at zero spend.
+	Client          *loadResult `json:"client"`
+	GatewaySideMs   stats       `json:"gatewaySideMs"`
+	GatewayRequests float64     `json:"gatewayRequests"`
+	SpendUSD        float64     `json:"spendUsd"`
+	// SpendEstimatedUSD is the share of SpendUSD that is the gateway's
+	// estimate, for streams whose usage the provider did not report in full.
+	SpendEstimatedUSD float64 `json:"spendEstimatedUsd,omitempty"`
+	BudgetUtilization float64 `json:"budgetUtilization"`
+	// UsageMissing counts successful answers whose usage the provider did
+	// not report in full. A non-streamed answer settles at zero spend, a
+	// stream at the gateway's estimate, whose dollars SpendEstimatedUSD totals.
 	UsageMissing float64 `json:"usageMissing,omitempty"`
 	// GatewayCPUPerRequestMs is the gateway's process CPU over the leg,
 	// summed across replicas, divided by the requests the gateway counted.
@@ -70,9 +74,9 @@ type gatewayLeg struct {
 	GatewayUsageMax        usage   `json:"gatewayUsageMax"`
 	// GatewayPodsChanged is set when the gateway Pods differed between the
 	// leg's two scrapes. The gateway-side figures (gatewaySideMs,
-	// gatewayRequests, gatewayCpuPerRequestMs, spend, budget, and missing
-	// usage) are then left out, because counters from different Pods do not
-	// subtract.
+	// gatewayRequests, gatewayCpuPerRequestMs, spend, estimated spend,
+	// budget, and missing usage) are then left out, because counters from
+	// different Pods do not subtract.
 	GatewayPodsChanged bool `json:"gatewayPodsChanged,omitempty"`
 }
 
@@ -525,7 +529,8 @@ type legScrapes struct {
 
 // runLeg runs one leg: a gateway scrape, the loadgen Job with the usage
 // sampler running, and a second scrape. The common figures land on the
-// returned gatewayLeg; LLM legs also get spend, budget, and missing usage.
+// returned gatewayLeg; LLM legs also get spend, estimated spend, budget, and
+// missing usage.
 func (h *harness) runLeg(ctx context.Context, spec legSpec, mtlsSecret string) (gatewayLeg, legScrapes, error) {
 	before, err := h.scrapeGateway(ctx)
 	if err != nil {
@@ -589,6 +594,7 @@ func gatewayFigures(leg *gatewayLeg, spec legSpec, before, after *snapshot) {
 	leg.GatewayCPUPerRequestMs = cpuPerRequestMs(counterDelta(before, after, metricProcessCPU, nil), leg.GatewayRequests)
 	if spec.counter == metricLLMRequests {
 		leg.SpendUSD = round3(counterDelta(before, after, "kaalm_llm_spend_usd_total", spec.labels))
+		leg.SpendEstimatedUSD = round3(counterDelta(before, after, "kaalm_llm_spend_estimated_usd_total", spec.labels))
 		leg.BudgetUtilization = after.gauge("kaalm_llm_budget_utilization", spec.labels)
 		leg.UsageMissing = counterDelta(before, after, "kaalm_llm_usage_missing_total", spec.labels)
 	}
@@ -820,8 +826,9 @@ func (h *harness) runStream(ctx context.Context) error {
 			return fmt.Errorf("stream %w", err)
 		}
 		if ttfb := leg.Client.TTFBMs; ttfb != nil {
-			h.logf("  time to first byte p50 %.1f ms p99 %.1f ms; spend %.3f USD, %.0f answers without usage",
-				ttfb.P50, ttfb.P99, leg.SpendUSD, leg.UsageMissing)
+			h.logf("  time to first byte p50 %.1f ms p99 %.1f ms; "+
+				"spend %.3f USD, %.3f USD of it estimated, %.0f answers without usage",
+				ttfb.P50, ttfb.P99, leg.SpendUSD, leg.SpendEstimatedUSD, leg.UsageMissing)
 		}
 		res.Legs = append(res.Legs, leg)
 	}

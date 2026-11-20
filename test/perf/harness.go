@@ -477,8 +477,10 @@ func (h *harness) printTable() {
 			}
 			fmt.Printf("  %-50s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f",
 				l.Name, l.Client.RPS, ttfb.P50, l.Client.LatencyMs.P50, ttfb.P99, l.Client.LatencyMs.P99)
-			fmt.Printf("  statuses %v  spend %.3f USD  usage missing %.0f  gw %.3f ms CPU/req, peak %.0f MiB\n",
-				l.Client.Statuses, l.SpendUSD, l.UsageMissing, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.MemMiB)
+			fmt.Printf("  statuses %v  spend %.3f USD  estimated %.3f USD  usage missing %.0f"+
+				"  gw %.3f ms CPU/req, peak %.0f MiB\n",
+				l.Client.Statuses, l.SpendUSD, l.SpendEstimatedUSD, l.UsageMissing,
+				l.GatewayCPUPerRequestMs, l.GatewayUsageMax.MemMiB)
 			if l.GatewayPodsChanged {
 				fmt.Println(podsChangedNote)
 			}
