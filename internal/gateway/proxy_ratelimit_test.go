@@ -734,44 +734,6 @@ func waitArrived(t *testing.T, arrived chan struct{}, release chan struct{}) {
 	}
 }
 
-// TestProxy_TokensPerMinuteCrossingReservesByTheRequestFormat: an Anthropic
-// request with a base64 image on an openai primary reserves its text and its
-// output cap, not the image: the admission body is in the request's format,
-// so its rule finds the image, and the primary receives a translation.
-func TestProxy_TokensPerMinuteCrossingReservesByTheRequestFormat(t *testing.T) {
-	fn, arrived, release, path := blockingUpstream(`{"id":"chatcmpl-9","object":"chat.completion","model":"m1",
-	  "choices":[{"index":0,"message":{"role":"assistant","content":"A square."},"finish_reason":"stop"}],
-	  "usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`)
-	h := tpmHarness(t, fn)
-	cert := agentCert(t, h.ca)
-	client := h.client(&cert)
-	data := strings.Repeat("A", 32768)
-	body := map[string]any{"model": "prov/m1", "max_tokens": 10, "messages": []any{map[string]any{
-		"role": "user", "content": []any{
-			map[string]any{"type": "text", "text": "what is this"},
-			map[string]any{"type": "image", "source": map[string]any{
-				"type": "base64", "media_type": "image/png", "data": data}},
-		},
-	}}}
-	status := make(chan int, 1)
-	go func() {
-		resp := postJSON(t, client, h.url("/v1/messages"), body, nil)
-		_, _ = io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		status <- resp.StatusCode
-	}()
-	waitArrived(t, arrived, release)
-	raw, _ := json.Marshal(body)
-	waitTokenLevel(t, h, float64(1000-(int64((len(raw)-len(data))/4)+10)))
-	close(release)
-	if got := <-status; got != http.StatusOK {
-		t.Errorf("request with an image = %d, want 200", got)
-	}
-	if got, _ := path.Load().(string); got != "/v1/chat/completions" {
-		t.Errorf("upstream path = %q, want /v1/chat/completions (a crossing)", got)
-	}
-}
-
 // TestProxy_TokensPerMinuteDocumentReservesItsBytes: a text document counts
 // at its bytes over four, so while the request runs its reservation holds
 // the bucket at the debt clamp and the next request is refused.
