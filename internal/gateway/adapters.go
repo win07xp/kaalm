@@ -137,7 +137,7 @@ type providerAdapter interface {
 func adapterForPath(urlPath string) (providerAdapter, bool) {
 	path, _, _ := strings.Cut(urlPath, "?") // strip any query string for matching
 	switch path {
-	case "/v1/messages":
+	case pathMessages:
 		return anthropicAdapter{}, true
 	case "/v1/chat/completions", "/v1/completions":
 		return openaiAdapter{}, true
@@ -152,6 +152,9 @@ func adapterForPath(urlPath string) (providerAdapter, bool) {
 	// that is not a Vertex call lands here.
 	return nil, false
 }
+
+// pathMessages is the Anthropic Messages API path.
+const pathMessages = "/v1/messages"
 
 // Provider type enum values (ModelProvider.spec.type).
 const (
@@ -173,6 +176,20 @@ func adapterForProviderType(providerType string) (providerAdapter, bool) {
 		return vertexAdapter{}, true
 	}
 	return nil, false
+}
+
+// inboundPathsForType names the paths a provider type is called on, for the
+// error that answers a request on another format's path.
+func inboundPathsForType(providerType string) string {
+	switch providerType {
+	case providerTypeAnthropic:
+		return pathMessages
+	case providerTypeOpenAI, providerTypeOpenAICompatible:
+		return "/v1/chat/completions or /v1/completions"
+	case providerTypeVertex:
+		return "a Vertex :generateContent or :streamGenerateContent path"
+	}
+	return ""
 }
 
 // ---- Anthropic ----

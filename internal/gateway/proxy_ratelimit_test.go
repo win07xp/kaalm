@@ -52,7 +52,11 @@ func tpmHarness(t *testing.T, upstreamFn http.HandlerFunc) *harness {
 func expectTokenRateLimited(t *testing.T, h *harness, retryAfter string) {
 	t.Helper()
 	cert := agentCert(t, h.ca)
-	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	path := "/v1/chat/completions"
+	if h.store.providers["prov"].Spec.Type == providerTypeAnthropic {
+		path = pathMessages // the primary is called only in its own format
+	}
+	resp := postJSON(t, h.client(&cert), h.url(path), map[string]any{"model": "prov/m1"}, nil)
 	if resp.StatusCode != http.StatusTooManyRequests {
 		_ = resp.Body.Close()
 		t.Fatalf("request after the debit = %d, want 429", resp.StatusCode)
@@ -731,44 +735,6 @@ func waitArrived(t *testing.T, arrived chan struct{}, release chan struct{}) {
 	case <-time.After(5 * time.Second):
 		close(release)
 		t.Fatal("the request did not reach the provider")
-	}
-}
-
-// TestProxy_TokensPerMinuteCrossingReservesByTheRequestFormat: an Anthropic
-// request with a base64 image on an openai primary reserves its text and its
-// output cap, not the image: the admission body is in the request's format,
-// so its rule finds the image, and the primary receives a translation.
-func TestProxy_TokensPerMinuteCrossingReservesByTheRequestFormat(t *testing.T) {
-	fn, arrived, release, path := blockingUpstream(`{"id":"chatcmpl-9","object":"chat.completion","model":"m1",
-	  "choices":[{"index":0,"message":{"role":"assistant","content":"A square."},"finish_reason":"stop"}],
-	  "usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`)
-	h := tpmHarness(t, fn)
-	cert := agentCert(t, h.ca)
-	client := h.client(&cert)
-	data := strings.Repeat("A", 32768)
-	body := map[string]any{"model": "prov/m1", "max_tokens": 10, "messages": []any{map[string]any{
-		"role": "user", "content": []any{
-			map[string]any{"type": "text", "text": "what is this"},
-			map[string]any{"type": "image", "source": map[string]any{
-				"type": "base64", "media_type": "image/png", "data": data}},
-		},
-	}}}
-	status := make(chan int, 1)
-	go func() {
-		resp := postJSON(t, client, h.url("/v1/messages"), body, nil)
-		_, _ = io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		status <- resp.StatusCode
-	}()
-	waitArrived(t, arrived, release)
-	raw, _ := json.Marshal(body)
-	waitTokenLevel(t, h, float64(1000-(int64((len(raw)-len(data))/4)+10)))
-	close(release)
-	if got := <-status; got != http.StatusOK {
-		t.Errorf("request with an image = %d, want 200", got)
-	}
-	if got, _ := path.Load().(string); got != "/v1/chat/completions" {
-		t.Errorf("upstream path = %q, want /v1/chat/completions (a crossing)", got)
 	}
 }
 

@@ -178,11 +178,14 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		attribute.String("kaalm.namespace", c.Namespace),
 		attribute.String("kaalm.workload", workloadKey(c)))
 	defer endSpan(nil)
-	typeAdapter, ok := adapterForProviderType(provider.Spec.Type)
-	if !ok {
-		writeError(w, http.StatusBadRequest, errorBody{
-			Type: errInvalidRequest, Provider: providerName,
-			Message: fmt.Sprintf("provider type %q is not supported by this gateway build", provider.Spec.Type)}, 0)
+	// The route-shaped 400s from primaryAdapter run after route
+	// authorization, so a caller never learns the type of a provider it may
+	// not use, and before budget admission and the rate limit, so a rejected
+	// request takes no slot, reservation, or spend.
+	typeAdapter, invalid := primaryAdapter(provider, providerName, adapter)
+	if invalid != nil {
+		spanError(ctx, errInvalidRequest)
+		writeError(w, http.StatusBadRequest, *invalid, 0)
 		return
 	}
 
@@ -320,6 +323,26 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered, reservation)
 }
 
+// primaryAdapter is the adapter for the primary provider's type, or the
+// invalid_request error for a type this build does not support or for a
+// request whose path format is not the type's. The primary is called only
+// in its own format: translation exists for a fallback candidate of another
+// format, so a chain survives a vendor outage, not for calling a primary in
+// another format.
+func primaryAdapter(provider *kaalmv1beta1.ModelProvider, providerName string, adapter providerAdapter) (providerAdapter, *errorBody) {
+	typeAdapter, ok := adapterForProviderType(provider.Spec.Type)
+	if !ok {
+		return nil, &errorBody{Type: errInvalidRequest, Provider: providerName,
+			Message: fmt.Sprintf("provider type %q is not supported by this gateway build", provider.Spec.Type)}
+	}
+	if typeAdapter.formatName() != adapter.formatName() {
+		return nil, &errorBody{Type: errInvalidRequest, Provider: providerName,
+			Message: fmt.Sprintf("provider %q is type %q; call it on %s",
+				providerName, provider.Spec.Type, inboundPathsForType(provider.Spec.Type))}
+	}
+	return typeAdapter, nil
+}
+
 // mediaScanMinBytes is the smallest body requestTokenEstimate scans for
 // media. A smaller body can overcount by at most 4096 input tokens, about
 // one output cap, and the reservation is settled when the call ends, so the
@@ -328,8 +351,9 @@ const mediaScanMinBytes = 16 << 10
 
 // requestTokenEstimate is what a request reserves on provider's token
 // bucket: an input estimate plus its output cap. adapter is the request
-// path's adapter: the admission body is in its format, whether or not the
-// primary speaks it. For a body of mediaScanMinBytes or more, the input
+// path's adapter: the admission body is in its format, which is also the
+// primary's, since a request on another format's path is rejected before
+// admission. For a body of mediaScanMinBytes or more, the input
 // estimate is inputEstimate under adapter's media rule, the rule the stream
 // estimate applies to the body the provider receives; an image keeps its
 // media type through a translation, so both leave out the same media. A

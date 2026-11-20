@@ -213,7 +213,7 @@ func formatForType(providerType string) llmtranslate.Format {
 // crossing candidate is forwarded on.
 func canonicalPath(format llmtranslate.Format) string {
 	if format == llmtranslate.FormatAnthropic {
-		return "/v1/messages"
+		return pathMessages
 	}
 	return "/v1/chat/completions"
 }
