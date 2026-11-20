@@ -15,7 +15,8 @@ Capabilities come from the kaalm module (docs/src/runtime/base-images.md):
   qualified model name like ``anthropic-shared/claude-opus-4-6``. The path
   must be the one for the provider's type: ``/v1/messages`` for an
   anthropic provider, ``/v1/chat/completions`` for an openai or
-  openai-compatible one; the gateway rejects any other path with 400.
+  openai-compatible one; the gateway rejects a path of another format
+  with 400.
 - ``kaalm.memory``: persistent key/value state, backed by the PVC when
   spec.persistence is enabled (and hence surviving hibernation), in-memory
   otherwise.
