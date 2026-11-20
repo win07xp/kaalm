@@ -85,7 +85,7 @@ A fallback edge may cross API formats: an `anthropic` provider may name an `open
 
 An inbound `/v1/completions` request, the legacy completions format, is never translated into another format. Any candidate of another format is ineligible for that request, like a request the other format cannot express ([What does not](#what-does-not)).
 
-The primary is always spoken to in the caller's format, so nothing changes until the walk reaches a candidate of the other format. There, and only there, the gateway rewrites the request into the candidate's format before forwarding and rewrites the response back, streaming or not, so the caller never sees a format it did not ask for. Translation happens before the first byte, so a stream that has started does not fall back, translated or not ([Streaming responses](request-handling.md#streaming-responses)).
+The primary is always spoken to in the caller's format: a request whose path format is not the primary's is rejected before admission and never reaches the walk ([Request flow](request-handling.md#request-flow), step 4). Nothing changes until the walk reaches a candidate of the other format. There, and only there, the gateway rewrites the request into the candidate's format before forwarding and rewrites the response back, streaming or not, so the caller never sees a format it did not ask for. Translation happens before the first byte, so a stream that has started does not fall back, translated or not ([Streaming responses](request-handling.md#streaming-responses)).
 
 ### The model on the other side
 

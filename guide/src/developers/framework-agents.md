@@ -84,8 +84,10 @@ change in the client code.
 One wire fact to respect: the primary provider must speak your client's
 format. An OpenAI-format client targets a provider of `spec.type` `openai`
 or `openai-compatible`, an Anthropic-format client an `anthropic` provider.
-The gateway translates only on a cross-format fallback, where it rewrites
-the answer back into your client's format.
+A request on the other format's path is rejected with `400 invalid_request`,
+and the message names the path to use. The gateway translates only on a
+cross-format fallback, where it rewrites the answer back into your client's
+format.
 
 What you get: the API key leaves your pods, and the namespace's budgets,
 rate limits, and fallback apply to every call. What it does not: no Agent
