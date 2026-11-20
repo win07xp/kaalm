@@ -34,10 +34,11 @@ it reaches the runtime's capabilities:
   ModelProviders. Use the path that matches the provider's type:
   `/v1/chat/completions` for `openai` or `openai-compatible`, and
   `/v1/messages` for `anthropic`. The gateway rejects a path of another
-  format with `400 invalid_request`. The starter's `ask` feature posts to
-  `/v1/chat/completions`, so `KAALM_STARTER_MODEL` must name a model on an
-  `openai` or `openai-compatible` provider. A model on an `anthropic`
-  provider makes `ask` fail with "gateway returned 400".
+  format with `400 invalid_request`. The starter uses this for its `ask`
+  feature: with `KAALM_STARTER_MODEL` set to a qualified model name, it
+  answers a message that starts with `ask ` through that model on
+  `/v1/chat/completions`, so the model must be on an `openai` or
+  `openai-compatible` provider.
 
 `main.go` only starts the runtime with your handler and doesn't need
 changes.
