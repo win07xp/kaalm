@@ -27,9 +27,11 @@ One required function: `handle_message(envelope)` in `handler.py`, sync or
 async. An image that runs as an AgentTask may also define an optional
 `async def run_task()` in the same file. Capabilities come from `import kaalm`:
 
-- `await kaalm.gateway.post("/v1/chat/completions", json={...})` calls an LLM
+- `await kaalm.gateway.post("/v1/messages", json={...})` calls an LLM
   through the gateway with the Pod's mTLS identity (use a qualified model
-  name like `anthropic-shared/claude-opus-4-6`).
+  name like `anthropic-shared/claude-opus-4-6`). Use the path that
+  matches the provider's type: `/v1/messages` for `anthropic`, and
+  `/v1/chat/completions` for `openai` or `openai-compatible`.
 - `kaalm.memory.get/put/delete` is persistent state: PVC-backed when
   `spec.persistence` is enabled (so it survives hibernation), in-memory
   otherwise.

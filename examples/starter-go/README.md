@@ -30,8 +30,14 @@ it reaches the runtime's capabilities:
 - `a.Memory`: persistent key-value state (PVC-backed when the Agent enables
   persistence), for anything that must survive hibernation.
 - `a.Gateway`: the preconfigured mTLS client. To call an LLM, POST a
-  qualified model request to `/v1/chat/completions` through it; the gateway
-  proxies to your ModelProviders.
+  qualified model request through it; the gateway proxies to your
+  ModelProviders. Use the path that matches the provider's type:
+  `/v1/chat/completions` for `openai` or `openai-compatible`, and
+  `/v1/messages` for `anthropic`. The gateway rejects a path of another
+  format with `400 invalid_request`. The starter's `ask` feature posts to
+  `/v1/chat/completions`, so `KAALM_STARTER_MODEL` must name a model on an
+  `openai` or `openai-compatible` provider. A model on an `anthropic`
+  provider makes `ask` fail with "gateway returned 400".
 
 `main.go` only starts the runtime with your handler and doesn't need
 changes.
