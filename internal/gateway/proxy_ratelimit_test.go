@@ -52,7 +52,11 @@ func tpmHarness(t *testing.T, upstreamFn http.HandlerFunc) *harness {
 func expectTokenRateLimited(t *testing.T, h *harness, retryAfter string) {
 	t.Helper()
 	cert := agentCert(t, h.ca)
-	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	path := "/v1/chat/completions"
+	if h.store.providers["prov"].Spec.Type == providerTypeAnthropic {
+		path = pathMessages // the primary is called only in its own format
+	}
+	resp := postJSON(t, h.client(&cert), h.url(path), map[string]any{"model": "prov/m1"}, nil)
 	if resp.StatusCode != http.StatusTooManyRequests {
 		_ = resp.Body.Close()
 		t.Fatalf("request after the debit = %d, want 429", resp.StatusCode)
