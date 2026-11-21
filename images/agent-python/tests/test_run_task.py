@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 
 import aiohttp
 import pytest
@@ -315,25 +314,10 @@ async def test_start_task_work_ignores_run_task_outside_task_mode(monkeypatch):
     assert agent.start_task_work() == []
 
 
-def _task_cert(tmp_path):
-    cert, key = tmp_path / "tls.crt", tmp_path / "tls.key"
-    subprocess.run(
-        [
-            "openssl", "req", "-x509", "-newkey", "ec",
-            "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "1",
-            "-subj", "/CN=workload", "-addext", "subjectAltName=DNS:job.default.task.kaalm.io",
-            "-keyout", str(key), "-out", str(cert),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    return cert, key
-
-
-def test_build_binds_complete_task_and_run_task(tmp_path, monkeypatch, handler_dir):
+def test_build_binds_complete_task_and_run_task(tmp_path, monkeypatch, handler_dir, workload_cert):
     """build() binds kaalm.complete_task to the Agent's own coroutine before
     the handler import, and hands the handler's run_task to the Agent."""
-    cert, key = _task_cert(tmp_path)
+    cert, key = workload_cert
     monkeypatch.setenv("KAALM_TLS_CERT", str(cert))
     monkeypatch.setenv("KAALM_TLS_KEY", str(key))
     monkeypatch.setenv("KAALM_CA_CERT", str(cert))
@@ -359,11 +343,13 @@ def test_build_binds_complete_task_and_run_task(tmp_path, monkeypatch, handler_d
 
 
 @pytest.mark.parametrize("raises, code", [(False, 0), (True, 1)])
-async def test_serve_returns_the_exit_code_task_outcome(tmp_path, monkeypatch, handler_dir, raises, code):
+async def test_serve_returns_the_exit_code_task_outcome(
+    tmp_path, monkeypatch, handler_dir, workload_cert, raises, code
+):
     """End to end through serve(): the server starts, run_task runs, the
     gateway answers TaskNotAgentReported, and serve() shuts down cleanly and
     returns the process exit code."""
-    cert, key = _task_cert(tmp_path)
+    cert, key = workload_cert
     monkeypatch.setenv("KAALM_TLS_CERT", str(cert))
     monkeypatch.setenv("KAALM_TLS_KEY", str(key))
     monkeypatch.setenv("KAALM_CA_CERT", str(cert))
