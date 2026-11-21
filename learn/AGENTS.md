@@ -8,7 +8,7 @@ details. Build with `make books` (which runs `make docs-check` first);
 ## Status
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
-recently for 2.1.0 (pass one).
+recently for 2.1.0 (both passes).
 
 Pass one for 2.1.0 (2026-10-28, against locally built artifacts) walked every
 chapter clean on a fresh k3d cluster, and every command and block of output
@@ -16,12 +16,11 @@ matched the pages apart from pod hashes, ages, IPs, and timestamps. The wake in
 the sleep chapter took 2.47 seconds, so the page's "about 3 seconds" holds.
 Only the version pin changed.
 
-Pass two for 2.0.1 (2026-10-21, after the tag) walked every chapter clean on a
+Pass two for 2.1.0 (2026-10-28, after the tag) walked every chapter clean on a
 fresh k3d cluster, with the chart from the OCI registry and every image pulled
-from ghcr.io. The wake took 3.05 seconds. One difference was "Giving it a
-job": the task reached `Succeeded` at 14 seconds, where the page shows about
-3, because the cluster pulled the Go image for the first time. The page fix is
-tracked in the v2.1.0 polish list.
+from ghcr.io. The wake took 2.46 seconds. "Giving it a job" reached
+`Succeeded` at 3 seconds, as the page shows, with the Go image pulled in 1.18
+seconds.
 
 The 2.0.0 walks caught the channel Secret missing the
 `kaalm.io/channel-credential` label (every request returned 401), the provider
