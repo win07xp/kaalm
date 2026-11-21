@@ -12,9 +12,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Dockerfile test stage installs this extra. langchain-anthropic is pinned:
+# the suite checks the private ChatAnthropic properties
+# kaalm.langchain_chat_anthropic replaces, so a bump is a deliberate re-check.
 test = [
     "pytest>=8.0",
     "pytest-aiohttp>=1.0",
+    "langchain-anthropic==1.7.12",
 ]
 
 [build-system]
