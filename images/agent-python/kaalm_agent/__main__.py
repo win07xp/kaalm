@@ -32,7 +32,7 @@ from aiohttp import web
 
 import kaalm
 
-from . import loader, tracecontext
+from . import langchain, loader, tracecontext
 from .gateway import GatewayClient
 from .httpclient import make_http_async_client, make_http_client
 from .memory import Store, UserMemory, ensure_json
@@ -353,13 +353,19 @@ def build() -> Agent:
     # Bind the ABI before the handler import: a handler's top-level
     # `import kaalm` must observe bound members. The http client factories
     # close over the reloader so every client they mint follows rotation.
+    # The LangChain factory closes over those factories and the gateway URL.
+    http_client = functools.partial(make_http_client, reloader)
+    http_async_client = functools.partial(make_http_async_client, reloader)
     kaalm._bind(
         gateway=gateway,
         memory=UserMemory(store),
-        http_client=functools.partial(make_http_client, reloader),
-        http_async_client=functools.partial(make_http_async_client, reloader),
+        http_client=http_client,
+        http_async_client=http_async_client,
         trace_context=tracecontext.current,
         complete_task=agent.complete_task,
+        langchain_chat_anthropic=functools.partial(
+            langchain.make_chat_anthropic, http_client, http_async_client, gateway_url
+        ),
     )
 
     loaded = loader.load_or_exit(log)

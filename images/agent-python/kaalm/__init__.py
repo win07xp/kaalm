@@ -1,7 +1,7 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 """The handler-facing ABI of the Kaalm reference base images.
 
-Exactly seven members (docs/src/runtime/base-images.md), and the surface is
+Exactly eight members (docs/src/runtime/base-images.md), and the surface is
 append-only within a minor release series:
 
 - ``kaalm.gateway``: a preconfigured client for $KAALM_GATEWAY_ENDPOINT
@@ -17,6 +17,17 @@ append-only within a minor release series:
   clients). Their names mirror the ``http_client=`` / ``http_async_client=``
   keyword arguments the framework SDKs take; extra keyword arguments pass
   through to the chosen package's client constructor.
+- ``kaalm.langchain_chat_anthropic(**kwargs)``: an instance of a LangChain
+  ``ChatAnthropic`` subclass whose sync and async Anthropic clients are
+  ``http_client(package="httpx2")`` and ``http_async_client(package="httpx2")``
+  (``ChatAnthropic`` takes no ``http_client`` argument). ``base_url`` defaults
+  to $KAALM_GATEWAY_ENDPOINT and ``api_key`` to the placeholder
+  ``managed-by-kaalm``; other keyword arguments pass through to
+  ``ChatAnthropic``, and ``anthropic_proxy`` is rejected. The image does not
+  bundle LangChain: ``langchain_anthropic`` is imported on the call, which
+  raises ImportError with an install hint when it is absent, and RuntimeError
+  when the installed release no longer builds its clients in the private
+  properties the subclass replaces.
 - ``kaalm.trace_context()``: the W3C trace context of the message being
   handled, as a ``{"traceparent": ..., "tracestate": ...}`` dict (empty
   outside message handling). The runtime already forwards it on every
@@ -44,7 +55,10 @@ from typing import Any
 
 _bound: dict[str, Any] = {}
 
-_MEMBERS = ("complete_task", "gateway", "http_async_client", "http_client", "memory", "trace_context")
+_MEMBERS = (
+    "complete_task", "gateway", "http_async_client", "http_client", "langchain_chat_anthropic", "memory",
+    "trace_context",
+)
 
 
 class TaskAlreadyCompleted(Exception):
@@ -60,6 +74,7 @@ def _bind(
     http_async_client: Any,
     trace_context: Any,
     complete_task: Any,
+    langchain_chat_anthropic: Any,
 ) -> None:
     """Called once by the runtime at startup, before the handler is imported."""
     _bound["gateway"] = gateway
@@ -68,6 +83,7 @@ def _bind(
     _bound["http_async_client"] = http_async_client
     _bound["trace_context"] = trace_context
     _bound["complete_task"] = complete_task
+    _bound["langchain_chat_anthropic"] = langchain_chat_anthropic
 
 
 def __getattr__(name: str) -> Any:
