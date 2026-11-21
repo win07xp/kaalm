@@ -79,10 +79,7 @@ change in the client code.
 
    LangChain's `ChatAnthropic` takes neither `http_client` nor
    `http_async_client`: it builds its own HTTP clients, so the hook above
-   can't reach it. This route is for a Deployment outside Kaalm. On the base
-   image, use
-   [`kaalm.langchain_chat_anthropic()`](#use-chatanthropic-on-the-base-image)
-   instead. Build the model from a factory that reads the token file
+   can't reach it. Build the model from a factory that reads the token file
    and passes the token in `default_headers`, and call the factory for each
    graph run or request, not once at import: a model kept across a token
    change keeps sending the old token. If a run can outlast the token it
@@ -111,6 +108,10 @@ change in the client code.
            default_headers={"Authorization": "Bearer " + token},
        )
    ```
+
+   This token route is for a Deployment outside Kaalm. On the base image,
+   use [`kaalm.langchain_chat_anthropic()`](#use-chatanthropic-on-the-base-image)
+   instead.
 3. **Qualify the model name.** `openai-shared/gpt-5.2` instead of
    `gpt-5.2`: the gateway reads the provider from the prefix and injects the
    real credential. Whatever key your client was configured with is

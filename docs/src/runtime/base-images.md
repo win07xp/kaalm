@@ -71,7 +71,7 @@ The second package exists because the Anthropic SDK 2.0 and later accepts only h
 
 `kaalm.langchain_chat_anthropic` defaults `base_url` to `$KAALM_GATEWAY_ENDPOINT`, without `/v1` because the Anthropic SDK adds the path, and `api_key` to the placeholder `managed-by-kaalm`. An explicit `base_url` or `api_key` wins, and so does the field-name spelling `anthropic_api_url` or `anthropic_api_key`. Every other keyword argument passes to `ChatAnthropic`. `anthropic_proxy` raises `TypeError`, and `ANTHROPIC_PROXY` in the environment has no effect, for the reason given for the factories: a proxy would route around the identity-bearing transport.
 
-The image does not bundle `langchain-anthropic`, so a `FROM` build installs it. Without it, the call raises `ImportError` that names the package. If the installed `langchain-anthropic` release no longer builds its clients in the private properties the subclass replaces, the call raises `RuntimeError` instead of returning a model without the Pod's identity. The failure shows at the call, not as `401` answers from the gateway.
+The image does not bundle `langchain-anthropic`, so a `FROM` build installs it. Without it, the call raises `ImportError` that names the package. If the installed `langchain-anthropic` release no longer builds its clients in the private properties the subclass replaces, the call raises `RuntimeError` instead of returning a model without the Pod's identity. The failure shows at the call that builds the model, not later as failed model calls.
 
 This surface is append-only within a minor release series: a handler written against one `X.Y` tag runs unchanged on every `X.Y.z`.
 
