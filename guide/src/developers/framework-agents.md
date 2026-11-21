@@ -79,7 +79,10 @@ change in the client code.
 
    LangChain's `ChatAnthropic` takes neither `http_client` nor
    `http_async_client`: it builds its own HTTP clients, so the hook above
-   can't reach it. Build the model from a factory that reads the token file
+   can't reach it. This route is for a Deployment outside Kaalm. On the base
+   image, use
+   [`kaalm.langchain_chat_anthropic()`](#use-chatanthropic-on-the-base-image)
+   instead. Build the model from a factory that reads the token file
    and passes the token in `default_headers`, and call the factory for each
    graph run or request, not once at import: a model kept across a token
    change keeps sending the old token. If a run can outlast the token it
@@ -132,7 +135,9 @@ book's tiered on-ramp (Operations, Deployment). Level 2 moves up a tier.
 On the base image, the framework is a `pip install` in a `FROM` build and
 the graph runs inside `handle_message(envelope)`. The base image keeps
 providing the contract code; your handler builds its model clients from
-two ABI members made for exactly this:
+three ABI members made for exactly this: `kaalm.http_client()`,
+`kaalm.http_async_client()`, and `kaalm.langchain_chat_anthropic()`. For an
+SDK that takes an HTTP client, pass the first two:
 
 ```python
 model = ChatOpenAI(
@@ -169,6 +174,36 @@ Identity, rotation, and the arguments the factories reject are the same for
 either package. The design book's
 [Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-image)
 states the contract.
+
+### Use ChatAnthropic on the base image
+
+LangChain's `ChatAnthropic` takes neither `http_client` nor
+`http_async_client`, so the factories above can't reach it. Built the Level 1
+way, with a token in `default_headers`, it gets `401` from a Kaalm-managed
+Pod, because the gateway requires such a Pod to authenticate with its
+certificate. Add `pip install langchain-anthropic` to the `FROM` build, then
+build the model with `kaalm.langchain_chat_anthropic()`:
+
+```python
+model = kaalm.langchain_chat_anthropic(model=os.environ["KAALM_MODEL"])
+```
+
+The result is a `ChatAnthropic`, so the rest of your graph is unchanged. Its
+sync and async clients carry the pod's identity and follow rotation, so
+`invoke` and `ainvoke` both work. Write the handler as `async def`, as above.
+
+- `base_url` defaults to `$KAALM_GATEWAY_ENDPOINT`, with no `/v1`, and
+  `api_key` to the placeholder `managed-by-kaalm`. Pass either one to
+  override it.
+- Other `ChatAnthropic` arguments, such as `temperature`, `max_tokens`,
+  `timeout`, and `default_headers`, pass through.
+- `anthropic_proxy` raises `TypeError`, because a proxy would route around
+  the pod's identity. The design book's
+  [Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-image)
+  gives the reason.
+
+If `langchain-anthropic` isn't installed, the call raises an `ImportError`
+that names it. Install the package in the `FROM` build.
 
 Three worked examples live in the repository, each runnable and each proving a
 different combination:
