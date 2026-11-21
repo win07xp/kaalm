@@ -100,12 +100,20 @@ def test_explicit_arguments_pass_through():
     assert params["timeout"] == 7
 
 
-def test_field_name_spellings_pass_through_without_defaults():
+def test_field_name_spellings_pass_through_without_defaults(monkeypatch):
     """ChatAnthropic accepts the field names too; the factory adds no default
     beside them, so pydantic never sees both spellings."""
     model = Factories().model(model="m", anthropic_api_url="https://other", anthropic_api_key="k")
     assert model.anthropic_api_url == "https://other"
     assert model.anthropic_api_key.get_secret_value() == "k"
+
+    # ChatAnthropic resolves both spellings without an error, so the model's
+    # fields cannot show an added default: check what the factory passes.
+    passed: dict = {}
+    with monkeypatch.context() as m:
+        m.setattr(langchain, "_model_class", lambda *_: lambda **kw: passed.update(kw))
+        Factories().model(model="m", anthropic_api_url="https://other", anthropic_api_key="k")
+    assert passed == {"model": "m", "anthropic_api_url": "https://other", "anthropic_api_key": "k"}
 
 
 MESSAGE = {
@@ -152,10 +160,14 @@ def test_missing_package_raises_import_error_with_hint(monkeypatch):
 def test_other_missing_module_is_not_blamed_on_langchain(monkeypatch):
     """A missing dependency of langchain_anthropic surfaces unchanged, so the
     hint never names the wrong package."""
-    monkeypatch.delitem(sys.modules, "langchain_anthropic")
+    # Drop the submodules too, so the import of langchain_anthropic itself
+    # reaches the missing anthropic package.
+    for name in [n for n in sys.modules if n == "langchain_anthropic" or n.startswith("langchain_anthropic.")]:
+        monkeypatch.delitem(sys.modules, name)
     monkeypatch.setitem(sys.modules, "anthropic", None)
     with pytest.raises(ModuleNotFoundError) as excinfo:
         Factories().model(model="m")
+    assert excinfo.value.name == "anthropic"
     assert "pip install langchain-anthropic" not in str(excinfo.value)
 
 
