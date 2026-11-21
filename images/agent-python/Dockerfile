@@ -20,10 +20,10 @@ COPY kaalm/ ./kaalm/
 RUN pip install --no-cache-dir --no-deps .
 
 FROM base AS test
-# langchain-anthropic is pinned, and only here: the suite checks the private
-# ChatAnthropic properties kaalm.langchain_chat_anthropic replaces, so a bump
-# is a deliberate re-check. The final image does not bundle LangChain.
-RUN pip install --no-cache-dir pytest pytest-aiohttp "langchain-anthropic==1.7.12"
+# The test dependencies are the package's test extra, so a local
+# `pip install ".[test]"` runs the same suite. The final image does not
+# bundle them.
+RUN pip install --no-cache-dir ".[test]"
 COPY tests/ ./tests/
 RUN pytest -q tests
 
