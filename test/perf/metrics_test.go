@@ -135,6 +135,63 @@ func TestGatewayFiguresLeftOutWhenPodsChanged(t *testing.T) {
 	}
 }
 
+func TestGatewayFiguresReadSpendAndEstimate(t *testing.T) {
+	// An LLM leg reads spend, the estimated share of it, and missing usage
+	// for its own provider only; another provider's series do not count.
+	fast := func(extra ...string) map[string]string {
+		l := map[string]string{"provider": "perf-fast", "namespace": "perf"}
+		for i := 0; i+1 < len(extra); i += 2 {
+			l[extra[i]] = extra[i+1]
+		}
+		return l
+	}
+	slow := map[string]string{"provider": "perf-slow", "namespace": "perf"}
+	snap := func(cpu, requests, spend, estimated, missing float64, pods ...string) *snapshot {
+		return &snapshot{metrics: map[string][]sample{
+			metricProcessCPU:  {{labels: map[string]string{}, value: cpu}},
+			metricLLMRequests: {{labels: fast(), value: requests}, {labels: slow, value: requests * 2}},
+			"kaalm_llm_spend_usd_total": {
+				{labels: fast(), value: spend}, {labels: slow, value: spend * 3},
+			},
+			"kaalm_llm_spend_estimated_usd_total": {
+				{labels: fast(), value: estimated}, {labels: slow, value: estimated * 3},
+			},
+			"kaalm_llm_usage_missing_total": {
+				{labels: fast("model", "m"), value: missing},
+				{labels: map[string]string{"provider": "perf-slow", "model": "m"}, value: missing * 3},
+			},
+		}, pods: pods}
+	}
+	before := snap(10, 900, 2, 0.1, 1, "gw-a")
+	after := snap(12, 1000, 3.2345, 0.5, 4, "gw-a")
+	spec := legSpec{histogram: "h", counter: metricLLMRequests, labels: map[string]string{"provider": "perf-fast"}}
+
+	leg := gatewayLeg{}
+	gatewayFigures(&leg, spec, before, after)
+	if leg.SpendUSD != 1.235 || leg.SpendEstimatedUSD != 0.4 || leg.UsageMissing != 3 {
+		t.Errorf("leg = %+v, want spend 1.235, estimated 0.4, usage missing 3", leg)
+	}
+
+	t.Run("tool leg reads no spend", func(t *testing.T) {
+		toolSpec := spec
+		toolSpec.counter = metricToolCalls
+		leg := gatewayLeg{}
+		gatewayFigures(&leg, toolSpec, before, after)
+		if leg.SpendUSD != 0 || leg.SpendEstimatedUSD != 0 || leg.UsageMissing != 0 {
+			t.Errorf("leg = %+v, want no spend figures on a tool leg", leg)
+		}
+	})
+
+	t.Run("pods changed leaves the figures out", func(t *testing.T) {
+		changed := snap(12, 1000, 3.2345, 0.5, 4, "gw-b")
+		leg := gatewayLeg{}
+		gatewayFigures(&leg, spec, before, changed)
+		if !leg.GatewayPodsChanged || leg.SpendUSD != 0 || leg.SpendEstimatedUSD != 0 || leg.UsageMissing != 0 {
+			t.Errorf("leg = %+v, want gatewayPodsChanged and no spend figures", leg)
+		}
+	})
+}
+
 func TestCountGoroutinesInProfile(t *testing.T) {
 	profile := []byte("goroutine profile: total 9\n" +
 		"3 @ 0x43a1 0x44b2 0x4c03\n" +
