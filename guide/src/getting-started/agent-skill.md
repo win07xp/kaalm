@@ -5,8 +5,8 @@ Kaalm tasks for you. You ask in plain words, and the agent runs the commands,
 shows you each change before it makes it, and checks the result. This page
 covers how to install the skill, what to ask it, and the rules it follows.
 
-The skill is a Claude Code plugin. Other agents that load skill folders can use
-it by copying the folder.
+The skill is a Claude Code plugin. Other coding agents can install it with the
+`skills` CLI.
 
 ## Install the skill at your Kaalm version
 
@@ -18,8 +18,23 @@ tag that matches the Kaalm on your cluster. In Claude Code, run:
 /plugin install kaalm@kaalm
 ```
 
-Replace `X.Y.Z` with your Kaalm version. For another agent, copy
-`plugins/kaalm/skills/kaalm` from that tag into the agent's skills folder.
+For another coding agent, use the `skills` CLI, which needs Node.js:
+
+```bash
+npx skills add win07xp/kaalm@vX.Y.Z
+```
+
+Replace `X.Y.Z` with your Kaalm version in either route. The CLI installs the
+skill into the coding agents it detects on your machine. To choose the agents,
+add `--agent` with a name, such as `--agent cursor`. The install goes into the
+current folder; add `-g` to install it for your user instead.
+
+Keep the `@vX.Y.Z` tag. Without it, the CLI installs from the default branch,
+which can describe behavior that no release has yet. The skill is also listed at
+[skills.sh](https://skills.sh/win07xp/kaalm).
+
+If the CLI does not support your agent, copy `plugins/kaalm/skills/kaalm` from
+the tag into the agent's skills folder.
 
 ## Move the skill when Kaalm moves
 
@@ -42,8 +57,10 @@ cluster to that version. So:
   ```
 
   Replace `X.Y.Z` with the new version. If the agent still reports the old
-  version, restart the session or reload plugins. For another agent, replace
-  the copied folder with the one from the new tag.
+  version, restart the session or reload plugins. For another agent, run
+  `npx skills add win07xp/kaalm@vX.Y.Z` with the new tag. It replaces the
+  installed copy. If you copied the folder by hand, replace it with the one from
+  the new tag.
 
 To confirm the skill and the cluster agree, ask the agent to check the Kaalm
 version.

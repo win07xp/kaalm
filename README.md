@@ -99,9 +99,13 @@ you run, then install the plugin:
 /plugin install kaalm@kaalm
 ```
 
-Replace `X.Y.Z` with your Kaalm version. For another agent, copy
-[`plugins/kaalm/skills/kaalm`](plugins/kaalm/skills/kaalm) from that tag into
-the agent's skills folder.
+For another coding agent, use the `skills` CLI (needs Node.js):
+
+```bash
+npx skills add win07xp/kaalm@vX.Y.Z
+```
+
+Replace `X.Y.Z` with your Kaalm version.
 
 ## Contributing
 
