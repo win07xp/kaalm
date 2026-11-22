@@ -43,14 +43,17 @@ Cilium job for hostname egress.
 
 ## Next
 
-The next milestone is **v2.1.0**. Its main item is the isolation work: the
-`agentSandbox` runtime backend
-([#167](https://github.com/win07xp/kaalm/issues/167)). It starts when the
-upstream conditions the issue lists hold. One of them is a quarter of
-stable releases on upstream's v1beta1 line, so the start is no earlier than
-late November 2026. The milestone also carries a Claude Code coding agent
-as a proof of concept ([#476](https://github.com/win07xp/kaalm/issues/476)). The full list is on the
-[milestone](https://github.com/win07xp/kaalm/milestone/9).
+The next milestone is **v2.3.0**. Its main item is pluggable runtime
+backends. The work starts with a spike on using Google's Agent Substrate, a
+runtime, as a backend
+([#632](https://github.com/win07xp/kaalm/issues/632)). The `agentSandbox`
+backend ([#167](https://github.com/win07xp/kaalm/issues/167)) is in the same
+milestone. It starts when the upstream conditions the issue lists hold. One
+is a quarter of stable releases on upstream's v1beta1 line, so the start is
+no earlier than late November 2026. The milestone also carries a Claude Code
+coding agent as a proof of concept
+([#476](https://github.com/win07xp/kaalm/issues/476)). The full list is on the
+[milestone](https://github.com/win07xp/kaalm/milestone/12).
 
 ## Beyond
 
