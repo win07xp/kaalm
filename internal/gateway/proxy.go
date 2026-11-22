@@ -85,6 +85,11 @@ var hopByHopHeaders = []string{"Connection", "TE", "Upgrade", "Proxy-Authorizati
 // would be forwarded verbatim into third-party provider logs.
 var authMaterialHeaders = []string{"Authorization", "X-Api-Key", "Api-Key", "X-Goog-Api-Key"}
 
+// billingHeaders name the Google project billed and charged quota for the
+// call. The provider's service account, not the caller, decides whose project
+// pays, so they are dropped for every upstream; no other provider reads them.
+var billingHeaders = []string{"X-Goog-User-Project"}
+
 // workloadKey attributes spend to the attested workload. Token-mode callers
 // (gateway-only tier) carry a namespace but no workload identity and land in
 // the visible unattributed bucket, so per-workload rows still sum to the
@@ -792,13 +797,16 @@ func (s *Server) settleUsage(
 }
 
 // copyForwardedHeaders applies the forwarded-header contract: strip inbound
-// auth material, drop hop-by-hop headers, pin Accept-Encoding to identity so
-// usage extraction can read the response.
+// auth material and the caller's billing project, drop hop-by-hop headers,
+// pin Accept-Encoding to identity so usage extraction can read the response.
 func copyForwardedHeaders(dst, src http.Header) {
 	for name, values := range src {
 		dst[name] = append([]string(nil), values...)
 	}
 	for _, h := range authMaterialHeaders {
+		dst.Del(h)
+	}
+	for _, h := range billingHeaders {
 		dst.Del(h)
 	}
 	// Headers named by the Connection header are also hop-by-hop.

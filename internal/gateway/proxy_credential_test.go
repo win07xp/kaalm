@@ -190,3 +190,19 @@ func TestCopyForwardedHeaders_StripsEveryCredentialHeader(t *testing.T) {
 		t.Error("Content-Type was not forwarded")
 	}
 }
+
+// The caller's billing project is dropped for every upstream: the provider's
+// service account, not the caller, decides whose Google project pays.
+func TestCopyForwardedHeaders_StripsBillingProject(t *testing.T) {
+	src := http.Header{}
+	src.Set("X-Goog-User-Project", "other-project")
+	src.Set("Content-Type", "application/json")
+	dst := http.Header{}
+	copyForwardedHeaders(dst, src)
+	if v := dst.Get("X-Goog-User-Project"); v != "" {
+		t.Errorf("X-Goog-User-Project forwarded as %q, want stripped", v)
+	}
+	if dst.Get("Content-Type") != "application/json" {
+		t.Error("Content-Type was not forwarded")
+	}
+}

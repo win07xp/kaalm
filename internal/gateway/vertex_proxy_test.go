@@ -191,7 +191,7 @@ func TestLLMProxy_VertexGenerateContent(t *testing.T) {
 	h, cert := vertexHarness(t, vertexJSON)
 
 	resp := postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(),
-		map[string]string{"X-Goog-Api-Key": "caller-key"})
+		map[string]string{"X-Goog-Api-Key": "caller-key", "X-Goog-User-Project": "other-project"})
 	got, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -218,6 +218,9 @@ func TestLLMProxy_VertexGenerateContent(t *testing.T) {
 	}
 	if got := call.header.Get("X-Goog-Api-Key"); got != "" {
 		t.Errorf("the caller's x-goog-api-key reached the upstream: %q", got)
+	}
+	if got := call.header.Get("X-Goog-User-Project"); got != "" {
+		t.Errorf("the caller's x-goog-user-project reached the upstream: %q", got)
 	}
 	if _, ok := call.body["contents"]; !ok || call.body["model"] != nil {
 		t.Errorf("upstream body %s, want the caller's contents and no model member", call.raw)
