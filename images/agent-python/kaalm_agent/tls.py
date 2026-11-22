@@ -5,6 +5,8 @@ The kubelet rotates a projected volume by atomically renaming the ``..data``
 symlink under the mount directory. The leaf files are never rewritten in place,
 so a leaf-path watch never fires. This module watches the mount DIRECTORY and
 rebuilds both SSL contexts on the ``..data`` swap (runtime contract item 4).
+The HTTPS listener is started once on a context that points every new
+handshake at the current server context, so it follows rotation too.
 """
 
 from __future__ import annotations
@@ -26,7 +28,12 @@ DEFAULT_OPERATOR_NAMESPACE = "kaalm-system"
 
 
 class CertReloader:
-    """Holds the server and client SSL contexts, rebuilt on rotation."""
+    """Holds the server and client SSL contexts, rebuilt on rotation.
+
+    Each reload builds new contexts instead of loading files into the old
+    ones, so a replaced CA stops being trusted. The listener reaches the
+    current server context through ``listener_context()``.
+    """
 
     def __init__(self, cert_file: str, key_file: str, ca_file: str, log: Callable[[str], None]):
         self._cert_file = cert_file
@@ -44,14 +51,18 @@ class CertReloader:
         self.generation = 0
         self.reload()
 
+    def _new_server_context(self) -> ssl.SSLContext:
+        # Request a client cert but do not require one, so kubelet probes
+        # (which present none) still complete the handshake. Per-path
+        # enforcement happens in the /v1/message handler.
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(self._cert_file, self._key_file)
+        ctx.load_verify_locations(self._ca_file)
+        ctx.verify_mode = ssl.CERT_OPTIONAL
+        return ctx
+
     def reload(self) -> None:
-        # Server context: request a client cert but do not require one, so
-        # kubelet probes (which present none) still complete the handshake.
-        # Per-path enforcement happens in the /v1/message handler.
-        server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        server_ctx.load_cert_chain(self._cert_file, self._key_file)
-        server_ctx.load_verify_locations(self._ca_file)
-        server_ctx.verify_mode = ssl.CERT_OPTIONAL
+        server_ctx = self._new_server_context()
 
         # Client context: present the agent cert and trust the CA for
         # outbound gateway calls.
@@ -86,6 +97,34 @@ class CertReloader:
         with self._lock:
             assert self._server_ctx is not None
             return self._server_ctx
+
+    def listener_context(self) -> ssl.SSLContext:
+        """Return the context to start the HTTPS listener with.
+
+        asyncio hands every accepted connection the context the listener was
+        created with, so replacing ``server_context`` alone never reaches the
+        listener. This context's SNI callback switches each handshake to the
+        current server context. OpenSSL runs the callback for every
+        ClientHello, with or without a server name: the kubelet dials the Pod
+        IP and sends none, and the gateway sends the agent Service DNS.
+
+        The current context is a rebuilt one, not this one mutated, because
+        ``load_verify_locations`` only adds to a context's trust store: a
+        mutated context would keep trusting a replaced CA.
+        """
+        ctx = self._new_server_context()
+        ctx.sni_callback = self._use_current_server_context
+        return ctx
+
+    def _use_current_server_context(
+        self,
+        ssl_object: ssl.SSLObject | ssl.SSLSocket,
+        server_name: str | None,
+        initial_context: ssl.SSLContext,
+    ) -> None:
+        # Open connections keep the material they were handshaken with; only
+        # new handshakes switch.
+        ssl_object.context = self.server_context
 
     @property
     def client_context(self) -> ssl.SSLContext:
