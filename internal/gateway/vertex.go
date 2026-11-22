@@ -142,7 +142,10 @@ type vertexPath struct {
 // the v1 and v1beta1 versions (the google-genai SDK defaults to v1beta1)
 // and the generateContent and streamGenerateContent methods are served;
 // every segment must be present and non-empty, so a %2F the mux decoded
-// into an extra segment does not parse.
+// into an extra segment does not parse. No segment may be a dot segment
+// ("." or ".."): the mux cleans the escaped path only, so a percent-encoded
+// dot segment reaches the handler decoded, and an upstream that resolved it
+// would serve a path the gateway never accepted.
 func parseVertexPath(path string) (vertexPath, bool) {
 	seg := strings.Split(path, "/")
 	// "", version, projects, p, locations, l, publishers, ref, models, model:method
@@ -161,8 +164,10 @@ func parseVertexPath(path string) (vertexPath, bool) {
 		version: seg[1], project: seg[3], location: seg[5],
 		providerRef: seg[7], model: model, method: method,
 	}
-	if p.project == "" || p.location == "" || p.providerRef == "" || p.model == "" {
-		return vertexPath{}, false
+	for _, part := range []string{p.project, p.location, p.providerRef, p.model} {
+		if part == "" || part == "." || part == ".." {
+			return vertexPath{}, false
+		}
 	}
 	return p, true
 }

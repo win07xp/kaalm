@@ -41,6 +41,11 @@ func TestVertexPathsServed(t *testing.T) {
 			t.Errorf("%s: modelFromPath = %q, want prov/gemini-2.5-flash", path, got)
 		}
 	}
+	// A model id with an at sign is a plain segment, not a dot segment.
+	atSign := "/v1/projects/p/locations/us-east5/publishers/prov/models/claude-sonnet-4@20250514:generateContent"
+	if got := (vertexAdapter{}).modelFromPath(atSign); got != "prov/claude-sonnet-4@20250514" {
+		t.Errorf("%s: modelFromPath = %q, want prov/claude-sonnet-4@20250514", atSign, got)
+	}
 	notServed := []string{
 		// %2F decoded by the mux: one segment too many.
 		"/v1/projects/p/locations/l/publishers/google/models/prov/gemini:generateContent",
@@ -56,6 +61,17 @@ func TestVertexPathsServed(t *testing.T) {
 		"/v1/nonsense",
 		// %3F decoded by the mux: a '?' inside the method segment.
 		"/v1/projects/p/locations/l/publishers/prov/models/gemini:streamGenerateContent?alt=json",
+		// The mux cleans the escaped path, so a percent-encoded dot segment
+		// reaches the handler decoded, and an upstream that resolved it would
+		// serve a path the gateway never accepted.
+		"/v1/projects/./locations/l/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/../locations/l/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/./publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/../publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/./models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/../models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/.:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/..:generateContent",
 	}
 	for _, path := range notServed {
 		if a, ok := adapterForPath(path); ok {

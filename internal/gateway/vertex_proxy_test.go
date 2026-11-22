@@ -631,3 +631,39 @@ func TestLLMProxy_VertexUnrecognizedPath(t *testing.T) {
 		t.Errorf("%d requests reached the upstream, want 0", n)
 	}
 }
+
+// A dot segment in any caller-written Vertex segment, raw or percent-encoded,
+// is an unrecognized path: the gateway copies project and location into the
+// upstream URL, and an upstream that resolved the dot segment would serve a
+// path the gateway never accepted. Nothing reaches the token endpoint or the
+// upstream.
+func TestLLMProxy_VertexDotSegments(t *testing.T) {
+	paths := []string{
+		"/v1/projects/%2e%2e/locations/%2e%2e/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/%2e/locations/l/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/%2E%2E/publishers/prov/models/gemini:streamGenerateContent",
+		"/v1/projects/p/locations/l/publishers/%2e%2e/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/%2e%2e:generateContent",
+		"/v1/projects/.%2e/locations/l/publishers/prov/models/gemini:generateContent",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			h, cert := vertexHarness(t, vertexJSON)
+			resp := postJSON(t, h.client(cert), h.url(path), vertexRequestBody(), nil)
+			defer func() { _ = resp.Body.Close() }()
+			var envelope struct {
+				Error errorBody `json:"error"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+				t.Fatalf("status %d: %v", resp.StatusCode, err)
+			}
+			if resp.StatusCode != http.StatusBadRequest || envelope.Error.Type != errInvalidRequest ||
+				envelope.Error.Message != "unrecognized path" {
+				t.Errorf("got %d %+v, want 400 invalid_request \"unrecognized path\"", resp.StatusCode, envelope.Error)
+			}
+			if n := len(capturedUpstream(h)); n != 0 {
+				t.Errorf("%d requests reached the upstream, want 0", n)
+			}
+		})
+	}
+}
