@@ -191,7 +191,7 @@ func TestLLMProxy_VertexGenerateContent(t *testing.T) {
 	h, cert := vertexHarness(t, vertexJSON)
 
 	resp := postJSON(t, h.client(cert), h.url(vertexGeneratePath), vertexRequestBody(),
-		map[string]string{"X-Goog-Api-Key": "caller-key"})
+		map[string]string{"X-Goog-Api-Key": "caller-key", "X-Goog-User-Project": "other-project"})
 	got, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -218,6 +218,9 @@ func TestLLMProxy_VertexGenerateContent(t *testing.T) {
 	}
 	if got := call.header.Get("X-Goog-Api-Key"); got != "" {
 		t.Errorf("the caller's x-goog-api-key reached the upstream: %q", got)
+	}
+	if got := call.header.Get("X-Goog-User-Project"); got != "" {
+		t.Errorf("the caller's x-goog-user-project reached the upstream: %q", got)
 	}
 	if _, ok := call.body["contents"]; !ok || call.body["model"] != nil {
 		t.Errorf("upstream body %s, want the caller's contents and no model member", call.raw)
@@ -629,5 +632,96 @@ func TestLLMProxy_VertexUnrecognizedPath(t *testing.T) {
 	}
 	if n := len(capturedUpstream(h)); n != 0 {
 		t.Errorf("%d requests reached the upstream, want 0", n)
+	}
+}
+
+// A dot segment in any caller-written Vertex segment, raw or percent-encoded,
+// is an unrecognized path: the gateway copies project and location into the
+// upstream URL, and an upstream that resolved the dot segment would serve a
+// path the gateway never accepted. Nothing reaches the token endpoint or the
+// upstream.
+func TestLLMProxy_VertexDotSegments(t *testing.T) {
+	paths := []string{
+		"/v1/projects/%2e%2e/locations/%2e%2e/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/%2e/locations/l/publishers/prov/models/gemini:generateContent",
+		"/v1/projects/p/locations/%2E%2E/publishers/prov/models/gemini:streamGenerateContent",
+		"/v1/projects/p/locations/l/publishers/%2e%2e/models/gemini:generateContent",
+		"/v1/projects/p/locations/l/publishers/prov/models/%2e%2e:generateContent",
+		"/v1/projects/.%2e/locations/l/publishers/prov/models/gemini:generateContent",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			h, cert := vertexHarness(t, vertexJSON)
+			resp := postJSON(t, h.client(cert), h.url(path), vertexRequestBody(), nil)
+			defer func() { _ = resp.Body.Close() }()
+			var envelope struct {
+				Error errorBody `json:"error"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+				t.Fatalf("status %d: %v", resp.StatusCode, err)
+			}
+			if resp.StatusCode != http.StatusBadRequest || envelope.Error.Type != errInvalidRequest ||
+				envelope.Error.Message != "unrecognized path" {
+				t.Errorf("got %d %+v, want 400 invalid_request \"unrecognized path\"", resp.StatusCode, envelope.Error)
+			}
+			if n := len(capturedUpstream(h)); n != 0 {
+				t.Errorf("%d requests reached the upstream, want 0", n)
+			}
+		})
+	}
+}
+
+// No caller-sent X-Goog-* header reaches a google-vertex upstream, however
+// the caller spells it. The upstream here honors X-Goog-FieldMask the way
+// Google does, by leaving usageMetadata out of the answer, so a forwarded
+// mask would settle the call at zero spend.
+func TestLLMProxy_VertexDropsGoogleHeaders(t *testing.T) {
+	h, cert := vertexHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("X-Goog-FieldMask") != "" {
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(vertexResponse))
+	})
+	raw, _ := json.Marshal(vertexRequestBody())
+	req, err := http.NewRequest(http.MethodPost, h.url(vertexGeneratePath), strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Goog-FieldMask", "candidates")
+	req.Header.Set("X-Goog-User-Project", "other-project")
+	req.Header.Set("X-Goog-Iam-Authorization-Token", "caller-token")
+	// Sent on the wire in lower case.
+	req.Header["x-goog-request-params"] = []string{"project=other-project"}
+	req.Header.Set("X-Http-Method-Override", "POST")
+	resp, err := h.client(cert).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+
+	_, calls := vertexCalls(capturedUpstream(h))
+	if len(calls) != 1 {
+		t.Fatalf("upstream saw %d calls, want 1", len(calls))
+	}
+	for name, values := range calls[0].header {
+		if strings.HasPrefix(strings.ToLower(name), "x-goog-") {
+			t.Errorf("the caller's %s reached the upstream: %q", name, values)
+		}
+	}
+	if got := calls[0].header.Get("Authorization"); got != "Bearer ya29.test" {
+		t.Errorf("upstream Authorization %q, want the minted token", got)
+	}
+	if got := calls[0].header.Get("X-Http-Method-Override"); got != "POST" {
+		t.Errorf("upstream X-Http-Method-Override %q, want it forwarded", got)
+	}
+	if u := waitUsage(t, h, "prov", "gemini"); u.InputTokens != 11 || u.OutputTokens != 22 {
+		t.Errorf("spend = %+v, want 11 in and 22 out", u)
 	}
 }
