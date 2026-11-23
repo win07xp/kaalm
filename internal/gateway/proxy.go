@@ -608,6 +608,15 @@ func (s *Server) forwardOnce(
 		dog.release()
 		return forwardResult{fallilable: true, class: class, err: err}
 	}
+	if dog.idle() {
+		// The bound passed before the headers came back. An upstream can
+		// answer the cancel by finishing its response, and those headers can
+		// reach the transport before the connection closes; they are the
+		// stall, not an answer.
+		_ = resp.Body.Close()
+		dog.release()
+		return forwardResult{fallilable: true, class: classTimeout, err: errUpstreamIdle}
+	}
 	dog.kick()
 	resp.Body = dog.watch(resp.Body)
 

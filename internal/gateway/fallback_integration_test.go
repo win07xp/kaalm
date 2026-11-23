@@ -506,6 +506,33 @@ func TestIntegration_PreHeaderStallWithNoFallbackIs504(t *testing.T) {
 	}
 }
 
+func TestIntegration_HeadersAfterTheIdleBoundAre504(t *testing.T) {
+	// An upstream can answer the cancel itself: it sees the connection
+	// close, finishes its handler, and its headers can reach the transport
+	// before the close completes. Headers that arrive after the bound passed
+	// are still the stall, not an answer.
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	h.server.upstream().Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    r,
+		}, nil
+	})
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("status %d, want 504", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderTimeout {
+		t.Errorf("error type %q", got)
+	}
+}
+
 func TestIntegration_CrossFormatStreamFailureUsesTheCallersShape(t *testing.T) {
 	// The OpenAI backup drops the connection mid-stream; the Anthropic caller
 	// gets an Anthropic error event, not a translated message_stop.
