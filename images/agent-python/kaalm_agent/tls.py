@@ -32,7 +32,8 @@ class CertReloader:
 
     Each reload builds new contexts instead of loading files into the old
     ones, so a replaced CA stops being trusted. The listener reaches the
-    current server context through ``listener_context()``.
+    current server context through ``listener_context()`` and resumes no
+    TLS session, so every handshake verifies the client against that CA.
     """
 
     def __init__(self, cert_file: str, key_file: str, ca_file: str, log: Callable[[str], None]):
@@ -59,6 +60,13 @@ class CertReloader:
         ctx.load_cert_chain(self._cert_file, self._key_file)
         ctx.load_verify_locations(self._ca_file)
         ctx.verify_mode = ssl.CERT_OPTIONAL
+        # No session resumption. A resumed handshake reuses the client
+        # certificate checked at the first one, so a session from before a
+        # rotation would carry a leaf signed by a replaced CA. Tickets are
+        # turned off here; _use_current_server_context refuses a handshake
+        # that resumes from the session cache, which TLS 1.2 still uses.
+        ctx.num_tickets = 0
+        ctx.options |= ssl.OP_NO_TICKET
         return ctx
 
     def reload(self) -> None:
@@ -121,10 +129,15 @@ class CertReloader:
         ssl_object: ssl.SSLObject | ssl.SSLSocket,
         server_name: str | None,
         initial_context: ssl.SSLContext,
-    ) -> None:
+    ) -> int | None:
+        # A resumed session skips client certificate verification against the
+        # current CA, so fail the handshake (see _new_server_context).
+        if ssl_object.session_reused:
+            return ssl.ALERT_DESCRIPTION_HANDSHAKE_FAILURE
         # Open connections keep the material they were handshaken with; only
         # new handshakes switch.
         ssl_object.context = self.server_context
+        return None
 
     @property
     def client_context(self) -> ssl.SSLContext:

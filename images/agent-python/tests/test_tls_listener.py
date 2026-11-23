@@ -8,6 +8,8 @@ listener is started once through serve() and never restarted."""
 from __future__ import annotations
 
 import asyncio
+import json
+import socket
 import ssl
 import subprocess
 from pathlib import Path
@@ -148,3 +150,54 @@ async def test_listener_verifies_clients_against_the_rotated_ca(rotating_runtime
         with pytest.raises(aiohttp.ClientError):
             async with s.post(url, json=body) as resp:
                 await resp.read()
+
+
+def _post_raw(port: int, ctx: ssl.SSLContext, session: ssl.SSLSession | None = None):
+    """POST /v1/message over a plain ssl socket, which can offer a saved TLS
+    session. Return (status line, the connection's session)."""
+    body = json.dumps({"messageId": "m1", "text": "hi"}).encode()
+    request = (
+        b"POST /v1/message HTTP/1.1\r\nHost: agent\r\nContent-Type: application/json\r\n"
+        b"Connection: close\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+    )
+    raw = socket.create_connection(("127.0.0.1", port), timeout=5)
+    with ctx.wrap_socket(raw, session=session) as conn:
+        conn.sendall(request)
+        data = b""
+        while chunk := conn.recv(65536):
+            data += chunk
+        return data.split(b"\r\n", 1)[0].decode(), conn.session
+
+
+@pytest.mark.parametrize(
+    "max_version", [ssl.TLSVersion.TLSv1_3, ssl.TLSVersion.TLSv1_2], ids=["tls13", "tls12"]
+)
+async def test_listener_does_not_resume_a_session_from_before_rotation(
+    rotating_runtime, max_version
+):
+    """A resumed handshake skips client certificate verification, so a session
+    saved under the old CA must not carry the old gateway leaf past a rotation."""
+    _, port, gen1, gen2, rotate = rotating_runtime
+    old = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    old.check_hostname = False
+    old.maximum_version = max_version
+    old.load_verify_locations(gen1["ca"])
+    old.load_cert_chain(gen1["gateway_crt"], gen1["gateway_key"])
+
+    status, saved = await asyncio.to_thread(_post_raw, port, old)
+    assert " 200 " in status
+
+    rotate()
+
+    try:
+        status, _ = await asyncio.to_thread(_post_raw, port, old, saved)
+    except (ssl.SSLError, OSError):
+        status = "handshake refused"
+    assert " 200 " not in status
+
+    # The listener still admits a full handshake with the new material.
+    url = f"https://127.0.0.1:{port}/v1/message"
+    new_gateway = (gen2["gateway_crt"], gen2["gateway_key"])
+    async with _session(gen2["ca"], new_gateway) as s:
+        async with s.post(url, json={"messageId": "m2", "text": "hi"}) as resp:
+            assert resp.status == 200
