@@ -187,6 +187,12 @@ async def test_listener_does_not_resume_a_session_from_before_rotation(
     status, saved = await asyncio.to_thread(_post_raw, port, old)
     assert " 200 " in status
 
+    if max_version == ssl.TLSVersion.TLSv1_3:
+        # The listener issues no session ticket, so a TLS 1.3 client that offers
+        # its saved session before any rotation falls back to a full handshake.
+        status, _ = await asyncio.to_thread(_post_raw, port, old, saved)
+        assert " 200 " in status
+
     rotate()
 
     try:
