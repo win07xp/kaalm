@@ -670,3 +670,58 @@ func TestLLMProxy_VertexDotSegments(t *testing.T) {
 		})
 	}
 }
+
+// No caller-sent X-Goog-* header reaches a google-vertex upstream, however
+// the caller spells it. The upstream here honors X-Goog-FieldMask the way
+// Google does, by leaving usageMetadata out of the answer, so a forwarded
+// mask would settle the call at zero spend.
+func TestLLMProxy_VertexDropsGoogleHeaders(t *testing.T) {
+	h, cert := vertexHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("X-Goog-FieldMask") != "" {
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(vertexResponse))
+	})
+	raw, _ := json.Marshal(vertexRequestBody())
+	req, err := http.NewRequest(http.MethodPost, h.url(vertexGeneratePath), strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Goog-FieldMask", "candidates")
+	req.Header.Set("X-Goog-User-Project", "other-project")
+	req.Header.Set("X-Goog-Iam-Authorization-Token", "caller-token")
+	// Sent on the wire in lower case.
+	req.Header["x-goog-request-params"] = []string{"project=other-project"}
+	req.Header.Set("X-Http-Method-Override", "POST")
+	resp, err := h.client(cert).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+
+	_, calls := vertexCalls(capturedUpstream(h))
+	if len(calls) != 1 {
+		t.Fatalf("upstream saw %d calls, want 1", len(calls))
+	}
+	for name, values := range calls[0].header {
+		if strings.HasPrefix(strings.ToLower(name), "x-goog-") {
+			t.Errorf("the caller's %s reached the upstream: %q", name, values)
+		}
+	}
+	if got := calls[0].header.Get("Authorization"); got != "Bearer ya29.test" {
+		t.Errorf("upstream Authorization %q, want the minted token", got)
+	}
+	if got := calls[0].header.Get("X-Http-Method-Override"); got != "POST" {
+		t.Errorf("upstream X-Http-Method-Override %q, want it forwarded", got)
+	}
+	if u := waitUsage(t, h, "prov", "gemini"); u.InputTokens != 11 || u.OutputTokens != 22 {
+		t.Errorf("spend = %+v, want 11 in and 22 out", u)
+	}
+}

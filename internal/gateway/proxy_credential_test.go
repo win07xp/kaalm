@@ -191,18 +191,31 @@ func TestCopyForwardedHeaders_StripsEveryCredentialHeader(t *testing.T) {
 	}
 }
 
-// The caller's billing project is dropped for every upstream: the provider's
-// service account, not the caller, decides whose Google project pays.
-func TestCopyForwardedHeaders_StripsBillingProject(t *testing.T) {
+// Every caller-sent X-Goog-* header is dropped, in any letter case and for
+// every upstream: Google reads them as billing, credential, routing, and
+// response-shape controls, and the provider's credential, not the caller,
+// decides those. Other headers still go through.
+func TestCopyForwardedHeaders_StripsGoogleHeaders(t *testing.T) {
 	src := http.Header{}
-	src.Set("X-Goog-User-Project", "other-project")
+	for _, h := range []string{"X-Goog-User-Project", "X-Goog-FieldMask", "X-Goog-Iam-Authority-Selector",
+		"X-Goog-Iam-Authorization-Token", "X-Goog-Request-Params", "X-Goog-Api-Client"} {
+		src.Set(h, "caller-value")
+	}
+	// A key that is not in canonical form, as a header map built by hand holds it.
+	src["x-goog-fieldmask"] = []string{"candidates"}
 	src.Set("Content-Type", "application/json")
+	src.Set("X-Http-Method-Override", "GET")
 	dst := http.Header{}
 	copyForwardedHeaders(dst, src)
-	if v := dst.Get("X-Goog-User-Project"); v != "" {
-		t.Errorf("X-Goog-User-Project forwarded as %q, want stripped", v)
+	for name, values := range dst {
+		if strings.HasPrefix(strings.ToLower(name), "x-goog-") {
+			t.Errorf("%s forwarded as %q, want stripped", name, values)
+		}
 	}
 	if dst.Get("Content-Type") != "application/json" {
 		t.Error("Content-Type was not forwarded")
+	}
+	if dst.Get("X-Http-Method-Override") != "GET" {
+		t.Error("X-Http-Method-Override was not forwarded")
 	}
 }

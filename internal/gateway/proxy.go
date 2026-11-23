@@ -85,10 +85,15 @@ var hopByHopHeaders = []string{"Connection", "TE", "Upgrade", "Proxy-Authorizati
 // would be forwarded verbatim into third-party provider logs.
 var authMaterialHeaders = []string{"Authorization", "X-Api-Key", "Api-Key", "X-Goog-Api-Key"}
 
-// billingHeaders name the Google project billed and charged quota for the
-// call. The provider's service account, not the caller, decides whose project
-// pays, so they are dropped for every upstream; no other provider reads them.
-var billingHeaders = []string{"X-Goog-User-Project"}
+// googleHeaderPrefix marks the headers Google APIs read as controls on the
+// call: the project billed (X-Goog-User-Project), alternate credentials
+// (X-Goog-Iam-*), routing (X-Goog-Request-Params), and the response shape
+// (X-Goog-FieldMask, which can drop usageMetadata and so the spend). With the
+// provider's minted token those choices belong to the provider, not the
+// caller, so every caller-sent header with this prefix is dropped. The drop
+// applies to every upstream: Anthropic and OpenAI do not read them, and an
+// openai-compatible endpoint hosted by Google would read them the same way.
+const googleHeaderPrefix = "x-goog-"
 
 // workloadKey attributes spend to the attested workload. Token-mode callers
 // (gateway-only tier) carry a namespace but no workload identity and land in
@@ -797,8 +802,10 @@ func (s *Server) settleUsage(
 }
 
 // copyForwardedHeaders applies the forwarded-header contract: strip inbound
-// auth material and the caller's billing project, drop hop-by-hop headers,
-// pin Accept-Encoding to identity so usage extraction can read the response.
+// auth material and every X-Goog-* header, drop hop-by-hop headers, pin
+// Accept-Encoding to identity so usage extraction can read the response.
+// forwardOnce calls it before setting its own headers (the injected
+// credential, Content-Type), so the drops never remove those.
 func copyForwardedHeaders(dst, src http.Header) {
 	for name, values := range src {
 		dst[name] = append([]string(nil), values...)
@@ -806,8 +813,12 @@ func copyForwardedHeaders(dst, src http.Header) {
 	for _, h := range authMaterialHeaders {
 		dst.Del(h)
 	}
-	for _, h := range billingHeaders {
-		dst.Del(h)
+	for name := range dst {
+		// Compared in any letter case: a header map built by hand need not
+		// hold canonical keys.
+		if len(name) >= len(googleHeaderPrefix) && strings.EqualFold(name[:len(googleHeaderPrefix)], googleHeaderPrefix) {
+			delete(dst, name)
+		}
 	}
 	// Headers named by the Connection header are also hop-by-hop.
 	for _, name := range strings.Split(src.Get("Connection"), ",") {
