@@ -390,7 +390,9 @@ async def serve(agent: Agent) -> int:
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", agent.health_port, ssl_context=agent.reloader.server_context)
+    # Started once; the listener context switches each new handshake to the
+    # current certificate and CA, so a rotation needs no restart.
+    site = web.TCPSite(runner, "0.0.0.0", agent.health_port, ssl_context=agent.reloader.listener_context())
     await site.start()
     log.info(
         "serving HTTPS on :%d (task-mode=%s, persistent-memory=%s)",
