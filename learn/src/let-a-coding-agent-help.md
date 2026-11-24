@@ -7,7 +7,7 @@ Kaalm.
 
 This chapter is the other one that cannot be walked end to end. What the agent
 says depends on the agent and on your cluster, so there is no captured output
-here, and the only commands are the two that install the skill. Treat it as a
+here, and the only commands are the ones that install the skill. Treat it as a
 signpost to a tool rather than a walkthrough.
 
 ## What it does for you
@@ -57,18 +57,27 @@ holds choices and names, never a key or any other secret.
 
 ## Install it
 
-The book is pinned to Kaalm 2.1.0, so install the skill from the 2.1.0 tag. In
+The book is pinned to Kaalm 2.2.0, so install the skill from the 2.2.0 tag. In
 Claude Code, run:
 
 ```text
-/plugin marketplace add win07xp/kaalm#v2.1.0
+/plugin marketplace add win07xp/kaalm#v2.2.0
 /plugin install kaalm@kaalm
 ```
 
-Other agents copy the skill folder,
-[`plugins/kaalm/skills/kaalm`](https://github.com/win07xp/kaalm/blob/v2.1.0/plugins/kaalm/skills/kaalm/SKILL.md),
-from that tag into their own skills folder. If the Kaalm on your cluster is
-another version, the agent warns you before it goes on.
+For another coding agent, use the `skills` command-line tool, which needs
+Node.js:
+
+```bash
+npx skills add win07xp/kaalm@v2.2.0
+```
+
+If the tool does not support your agent, the user guide's
+[Using the agent skill](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/agent-skill.md)
+shows how to copy the skill folder by hand.
+
+If the Kaalm on your cluster is another version, the agent warns you before it
+goes on.
 
 ## What to ask for
 
@@ -86,7 +95,7 @@ example:
 This chapter is a signpost, not a manual. The full versions:
 
 - The skill's entry point,
-  [SKILL.md](https://github.com/win07xp/kaalm/blob/v2.1.0/plugins/kaalm/skills/kaalm/SKILL.md),
+  [SKILL.md](https://github.com/win07xp/kaalm/blob/v2.2.0/plugins/kaalm/skills/kaalm/SKILL.md),
   lists every task it can do and the safety rules above.
 - [Using the agent skill](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/agent-skill.md)
   in the user guide, for installing at your Kaalm version, upgrading, and the

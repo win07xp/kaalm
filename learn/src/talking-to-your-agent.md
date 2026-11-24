@@ -65,7 +65,7 @@ label, the channel reports `Ready=False` with reason `SecretNotOptedIn` and
 every request gets a 401. The guide's
 [Connecting a channel](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/connecting-a-channel.md)
 covers who sets the label, and rule 45 in the design book's
-[AgentChannel validation rules](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation/channels.md)
+[Channel rules](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation/channels.md)
 gives the reason.
 
 ```bash

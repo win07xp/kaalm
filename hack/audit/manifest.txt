@@ -8,7 +8,14 @@
 # surfaces a release adds have no baseline here and get walked when they
 # appear.
 #
-# audited-commit: 1a6d77d2
+# audited-commit: 0b4eb9cd
+#
+# Re-walked for the v2.2.0 release: all 17 drifted verdicts re-checked. Two
+# findings were fixed before this commit: a Vertex request path could carry
+# dot segments to the provider (1.10), and the Python agent listener kept its
+# startup certificate and CA after a rotation (5.2). The files of the Vertex
+# format, the Vertex token mint, the token reservation, and the Python
+# runtime's listener joined the lines of the verdicts that examined them.
 #
 # Re-walked for the v2.0.1 release: every drifted verdict re-checked against
 # the v2.0.1 code, all holding, with the Pod wait's files joined to 4.6, 4.7,
@@ -24,36 +31,36 @@
 # 3.3 (the CRD conversion listener) is retired: the controller serves no
 # conversion webhook, so there is no surface left to check.
 1.1 internal/gateway/auth.go internal/gateway/tokenauth.go internal/gateway/kubestore.go internal/gateway/server.go internal/gateway/store.go internal/secretwatch/
-1.2 internal/gateway/proxy.go internal/gateway/adapters.go
-1.3 internal/gateway/proxy.go internal/gateway/fallback.go internal/gateway/requestbody.go
-1.4 internal/gateway/routing.go internal/gateway/proxy.go internal/gateway/fallback.go internal/gateway/requestbody.go internal/gateway/adapters.go
-1.5 internal/gateway/proxy.go internal/gateway/fallback.go
+1.2 internal/gateway/proxy.go internal/gateway/adapters.go internal/gateway/vertex.go internal/gateway/vertex_token.go internal/gateway/fallback.go
+1.3 internal/gateway/proxy.go internal/gateway/fallback.go internal/gateway/requestbody.go internal/gateway/adapters.go internal/gateway/vertex.go internal/gateway/streamestimate.go
+1.4 internal/gateway/routing.go internal/gateway/proxy.go internal/gateway/fallback.go internal/gateway/requestbody.go internal/gateway/adapters.go internal/gateway/vertex.go internal/gateway/ratelimit.go internal/gateway/streamestimate.go internal/gateway/server.go api/v1beta1/fallback.go
+1.5 internal/gateway/proxy.go internal/gateway/fallback.go internal/gateway/vertex.go internal/gcpauth/gcpauth.go internal/llmtranslate/response.go
 1.6 internal/gateway/mcpbroker.go internal/gateway/mcpsession.go internal/gateway/server.go internal/mcp/ internal/gateway/requestbody.go
 1.7 internal/gateway/auth.go internal/gateway/identity.go internal/gateway/completion.go internal/gateway/activity.go internal/gateway/kubestore.go internal/gateway/ratelimit.go
 1.8 internal/gateway/auth.go internal/gateway/identity.go internal/gateway/activity.go internal/gateway/spend.go internal/gateway/testchat.go
-1.9 internal/gateway/server.go
-1.10 internal/gateway/server.go internal/gateway/adapters.go internal/gateway/vertex.go internal/gateway/fallback.go internal/gateway/proxy.go api/v1beta1/fallback.go
+1.9 internal/gateway/server.go internal/gateway/proxy.go internal/gateway/errors.go internal/gateway/adapters.go internal/gateway/vertex.go
+1.10 internal/gateway/server.go internal/gateway/adapters.go internal/gateway/vertex.go internal/gateway/fallback.go internal/gateway/proxy.go api/v1beta1/fallback.go internal/gateway/vertex_token.go internal/gateway/routing.go internal/gateway/errors.go
 2.1 internal/gateway/user.go internal/gateway/platform.go internal/gateway/channelhealth.go
 2.2 internal/gateway/channelauth.go internal/gateway/user.go
 2.3 internal/gateway/discord.go
 2.4 internal/gateway/whatsapp.go internal/gateway/channelauth.go
 2.5 internal/gateway/async.go internal/gateway/channelauth.go
 2.6 internal/gateway/user.go
-3.1 internal/gateway/server.go cmd/gateway/main.go internal/gateway/metrics.go internal/gateway/mcpbroker.go charts/kaalm/templates/networkpolicy.yaml internal/gateway/readiness.go
+3.1 internal/gateway/server.go cmd/gateway/main.go internal/gateway/metrics.go internal/gateway/mcpbroker.go charts/kaalm/templates/networkpolicy.yaml internal/gateway/readiness.go internal/gateway/proxy.go internal/gateway/routing.go internal/gateway/vertex.go internal/gateway/adapters.go internal/gateway/usagescan.go
 3.2 internal/controller/activator.go cmd/manager/main.go internal/tlsutil/loader.go internal/controller/status_write_bound.go
 3.4 internal/console/
-3.5 agentruntime/agent.go images/agent-python/kaalm_agent/__main__.py images/agent-python/kaalm_agent/tls.py
+3.5 agentruntime/agent.go images/agent-python/kaalm_agent/__main__.py images/agent-python/kaalm_agent/tls.py images/agent-python/kaalm_agent/langchain.py
 3.6 internal/profiling/ cmd/gateway/main.go cmd/manager/main.go charts/kaalm/templates/networkpolicy.yaml
-4.1 internal/gateway/server.go internal/gateway/proxy.go internal/controller/health.go internal/controller/probe_client.go internal/controller/health_vertex.go internal/gateway/attempt_watchdog.go internal/gateway/vertex_token.go
+4.1 internal/gateway/server.go internal/gateway/proxy.go internal/controller/health.go internal/controller/probe_client.go internal/controller/health_vertex.go internal/gateway/attempt_watchdog.go internal/gateway/vertex_token.go internal/gateway/vertex.go internal/gateway/adapters.go internal/gateway/fallback.go internal/gcpauth/
 4.2 internal/gateway/async.go internal/callbackpolicy/policy.go
 4.3 internal/gateway/mcpbroker.go internal/gateway/server.go
 4.4 internal/gateway/discord.go internal/gateway/whatsapp.go internal/gateway/platform.go
 4.5 internal/gateway/tracing.go cmd/gateway/main.go internal/gateway/baseurl.go
 4.6 internal/gateway/user.go internal/gateway/pipeline_bound.go internal/gateway/podready.go
-4.7 internal/gateway/user.go internal/controller/agent_activity.go internal/controller/agentchannel_health.go internal/controller/health.go internal/controller/toolprovider_health.go internal/controller/health_vertex.go internal/gcpauth/ internal/controller/agent_controller.go internal/gateway/podready.go
+4.7 internal/gateway/user.go internal/controller/agent_activity.go internal/controller/agentchannel_health.go internal/controller/health.go internal/controller/toolprovider_health.go internal/controller/health_vertex.go internal/gcpauth/ internal/controller/agent_controller.go internal/gateway/podready.go internal/controller/probe_client.go
 4.8 internal/controller/ownership.go internal/controller/fqdn_policy.go internal/controller/secret_access.go internal/controller/dns_selector.go internal/secretwatch/ internal/controller/cni.go charts/kaalm/templates/rbac.yaml
 5.1 internal/gateway/channelauth.go internal/gateway/whatsapp.go internal/gateway/mcpsession.go
-5.2 internal/gateway/server.go internal/tlsutil/loader.go internal/gateway/async.go internal/gateway/platform.go
-5.3 internal/gateway/fallback.go internal/gateway/platform.go internal/eventrec/eventrec.go internal/controller/problem_list.go internal/controller/status_write_bound.go internal/controller/write_rejection.go internal/gateway/channelhealth.go internal/controller/agentchannel_controller.go internal/gateway/user.go internal/controller/agent_controller.go
+5.2 internal/gateway/server.go internal/tlsutil/loader.go internal/gateway/async.go internal/gateway/platform.go internal/gateway/proxy.go internal/gateway/vertex_token.go internal/gcpauth/gcpauth.go internal/controller/probe_client.go agentruntime/tls.go images/agent-python/kaalm_agent/tls.py images/agent-python/kaalm_agent/__main__.py
+5.3 internal/gateway/fallback.go internal/gateway/platform.go internal/eventrec/eventrec.go internal/controller/problem_list.go internal/controller/status_write_bound.go internal/controller/write_rejection.go internal/gateway/channelhealth.go internal/controller/agentchannel_controller.go internal/gateway/user.go internal/controller/agent_controller.go internal/gateway/proxy.go internal/gateway/vertex_token.go internal/gcpauth/gcpauth.go internal/controller/health.go internal/controller/health_vertex.go internal/controller/modelprovider_controller.go
 5.4 internal/gateway/bodylog.go internal/gateway/mcpbroker.go internal/gateway/errors.go
 5.5 cmd/gateway/main.go internal/callbackpolicy/policy.go internal/gateway/tracing.go internal/gateway/discord.go internal/gateway/whatsapp.go internal/gateway/baseurl.go

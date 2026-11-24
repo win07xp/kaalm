@@ -5,7 +5,7 @@ description: Use Kaalm, the Kubernetes operator that runs AI agents (kaalm.io re
 
 # Kaalm
 
-This skill matches Kaalm v2.1.0.
+This skill matches Kaalm v2.2.0.
 
 This skill holds procedures: what to run, in what order, and what to check. The facts live in Kaalm's books, which each procedure links. Read the linked page when a step fails or the user asks for more than the procedure covers.
 

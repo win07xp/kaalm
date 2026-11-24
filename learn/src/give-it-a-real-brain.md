@@ -117,8 +117,11 @@ preconfigured client, which the `import kaalm` at the top already gives you:
 address a model by its qualified name, `provider/model`, so here
 `anthropic-shared/claude-opus-4-6`. The gateway recognizes your agent by its
 certificate, checks it is allowed that provider, injects the API key, forwards
-the call, and records what it cost. The wire details of the request live in
-the guide's LLM chapter linked below.
+the call, and records what it cost. Send the request to the path for the
+provider's type, which is `/v1/messages` for an `anthropic` provider. The
+guide's
+[Your first agent](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/first-agent.md#4-how-the-agent-calls-a-model)
+explains the path rule and the other wire details of the request.
 
 That last sentence is the payoff for the earlier chapters:
 your code sends a normal-looking model request with no credential in it, and

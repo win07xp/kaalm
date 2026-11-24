@@ -10,11 +10,9 @@ single `helm install` from the published OCI chart. It has no upgrade path
 from 1.x or 0.x: a cluster on an earlier release removes it and installs
 2.0.0 ([Moving from 1.x or 0.x](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/upgrading.md#moving-from-1x-or-0x)).
 Upgrades within 2.x are two documented steps, the new CRDs and then
-`helm upgrade`. The latest release is v2.0.1, a patch release on 2.0.0 with
-no API, CRD schema, or chart value changes. Every acceptance scenario
-(S1 to S25) has a test that proves it on a real cluster. S21, the in-place
-upgrade, runs on every release PR, and the release tags only after it passed
-on the PR's head commit.
+`helm upgrade`. Every acceptance scenario (S1 to S25) has a test that proves
+it on a real cluster. S21, the in-place upgrade, runs on every release PR,
+and the release tags only after it passed on the PR's head commit.
 
 Every component of the design ships: all six CRDs, the reconciling
 controller (lifecycle, hibernation and wake, budgets, health probes,
@@ -43,14 +41,17 @@ Cilium job for hostname egress.
 
 ## Next
 
-The next milestone is **v2.1.0**. Its main item is the isolation work: the
-`agentSandbox` runtime backend
-([#167](https://github.com/win07xp/kaalm/issues/167)). It starts when the
-upstream conditions the issue lists hold. One of them is a quarter of
-stable releases on upstream's v1beta1 line, so the start is no earlier than
-late November 2026. The milestone also carries a Claude Code coding agent
-as a proof of concept ([#476](https://github.com/win07xp/kaalm/issues/476)). The full list is on the
-[milestone](https://github.com/win07xp/kaalm/milestone/9).
+The next milestone is **v2.3.0**. Its main item is pluggable runtime
+backends. The work starts with a spike on using Google's Agent Substrate, a
+runtime, as a backend
+([#632](https://github.com/win07xp/kaalm/issues/632)). The `agentSandbox`
+backend ([#167](https://github.com/win07xp/kaalm/issues/167)) is in the same
+milestone. It starts when the upstream conditions the issue lists hold. One
+is a quarter of stable releases on upstream's v1beta1 line, so the start is
+no earlier than late November 2026. The milestone also carries a Claude Code
+coding agent as a proof of concept
+([#476](https://github.com/win07xp/kaalm/issues/476)). The full list is on the
+[milestone](https://github.com/win07xp/kaalm/milestone/12).
 
 ## Beyond
 

@@ -10,7 +10,7 @@ and watch it fall asleep when nobody needs it and wake up when you say hello
 again, still remembering the conversation you had before it slept.
 
 Every command in the walked chapters was run, in order, on a fresh cluster
-against Kaalm 2.1.0, and the output you see is the output it printed. Two
+against Kaalm 2.2.0, and the output you see is the output it printed. Two
 chapters are signposts and say so: one needs a provider account, and one shows
 how a coding agent can help.
 

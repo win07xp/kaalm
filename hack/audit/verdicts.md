@@ -2,25 +2,27 @@
 
 This file is the human half of `manifest.txt`. The manifest holds the files each verdict examined and the audited commit, and `make audit-drift` checks them. This file holds the verdicts themselves and the corrections to them. The release PR updates it whenever the audited commit moves.
 
-The audited commit is `1a6d77d2`. Every verdict holds at that commit. The original walk covered 33 checklist items: 23 passed (several with reasoning now recorded in the threat model) and 10 produced findings. Every finding got its own issue. Nine were fixed and one was closed as a false finding, with its correction recorded below.
+The audited commit is `0b4eb9cd`. Every verdict holds at that commit. The original walk covered 33 checklist items: 23 passed (several with reasoning now recorded in the threat model) and 10 produced findings. Every finding got its own issue. Nine were fixed and one was closed as a false finding, with its correction recorded below.
 
 The 2.1.0 re-walk examined the 26 verdicts whose files had changed since `62538a58`. All hold, with no findings. Two surfaces were new: the gateway's per-Agent Pod wait cap and the Pod readiness tracker, which joined the files of verdict 4.6.
+
+The 2.2.0 re-walk examined the 17 verdicts whose files had changed since `1a6d77d2`. Fifteen hold. Two produced findings, both fixed before the audited commit: #640 (verdict 1.10) and #639 (verdict 5.2). The new surfaces were the Vertex request format, the Vertex access token mint, the token reservation's readers of the request body, and the path-format check on the primary provider. Each was walked under the verdict it belongs to and holds.
 
 To recompute a verdict, run `make audit-drift`. An empty diff means the verdict stands. A non-empty one names exactly what to re-walk, using `brief.md` and `checklist.md` in this directory.
 
 ## Verdicts
 
 Gateway cluster listener :8443
-- 1.1 dual-mode auth order: pass (2.0.0 delta: secretwatch stops on Forbidden and never serves a revoked cache, #549 fixed in PR #552; 2.1.0 re-walk: secretwatch lists each Secret by exact name and watches from that list, a refused list falls back to live GETs, and a refused GET returns the refusal, so a revoked grant is never served from cache)
-- 1.2 inbound auth header strip: pass
-- 1.3 body cap and JSON refusal: pass
-- 1.4 authz order and fallback re-check: pass (reasoning: What a denied caller learns; Fallback edges and allowedProviders)
-- 1.5 upstream error leakage: pass (reasoning: What flows back from a failed provider call)
+- 1.1 dual-mode auth order: pass (2.2.0 re-walk: the Vertex routes `/v1/projects/` and `/v1beta1/projects/` sit behind the same dual-mode wrapper, so a request is authenticated before its path is parsed; 2.0.0 delta: secretwatch stops on Forbidden and never serves a revoked cache, #549 fixed in PR #552; 2.1.0 re-walk: secretwatch lists each Secret by exact name and watches from that list, a refused list falls back to live GETs, and a refused GET returns the refusal, so a revoked grant is never served from cache)
+- 1.2 inbound auth header strip: pass (2.2.0 re-walk: the strip also removes `X-Goog-Api-Key` and every `X-Goog-*` header; `forwardOnce` is still the only upstream builder, and it injects the credential, the minted Vertex token included, after the strip on every candidate)
+- 1.3 body cap and JSON refusal: pass (2.2.0 re-walk: Vertex paths join format detection ahead of the body read, and the token reservation reads the capped, validated body only after authorization)
+- 1.4 authz order and fallback re-check: pass (2.2.0 re-walk: a Vertex path carries the qualified model into the same authorization chain, the path-format check runs after route authorization, and the rate limit reserves tokens before the dial; reasoning: What a denied caller learns; Fallback edges and allowedProviders)
+- 1.5 upstream error leakage: pass (2.2.0 re-walk: Vertex token failures and headers that arrive after the idle bound reduce to failure classes, and a relayed 4xx body is cut at 64 KiB; reasoning: What flows back from a failed provider call)
 - 1.6 MCP broker: pass (2.0.0 re-walk: a narrowed tools/list now keeps one `tools` list and one `name` per entry in every spelling, #547 fixed in PR #548)
 - 1.7 agent-report paths: finding #148 (missing live List-Pods fallback), fixed in PR #157; rest passes (2.1.0 re-walk: `/v1/task/complete` answers 413 for a body over 1 MiB, after all identity checks)
 - 1.8 controller/console SAN paths: pass
 - 1.9 catch-all: pass
-- 1.10 Vertex inbound: finding #147 (documented but unroutable), resolved in PR #164 (reserved type, docs aligned, dead branch removed)
+- 1.10 Vertex inbound: finding #147 (documented but unroutable), resolved in PR #164 (reserved type, docs aligned, dead branch removed). 2.2.0 re-walk: the gateway now serves the Vertex format, and the adapter table, the mux, and the docs agree that it is reachable; finding #640 (a dot segment in the project or location reached the provider's path), fixed in PR #641, which rejects a dot segment in every caller-written segment before routing and before the token mint
 
 Gateway user listener :8080
 - 2.1 route order: pass (2.1.0 re-walk: the per-Agent Pod wait cap is reached only after webhook, platform-signature, or console auth, counts waits for the channel's own Agent, frees its slot on every return path, and a non-positive flag stops the gateway at startup)
@@ -35,21 +37,21 @@ Other listeners
 - 3.2 controller :9443: pass on auth; finding #149 (TLS material snapshot at startup), fixed in PR #160
 - 3.3 conversion :9444: finding #152 (unbounded bodies), fixed in PR #162; accepted posture recorded (The conversion listener's posture). Retired: the controller serves no conversion webhook, so no surface is left to check
 - 3.4 console: pass (reasoning: Why SameSite is the CSRF control)
-- 3.5 agent-side listener: pass, both base images
+- 3.5 agent-side listener: pass, both base images (2.2.0 re-walk: the Python listener's per-handshake context switch from the #639 fix keeps `CERT_OPTIONAL` and the per-path SAN check)
 
 Outbound dial inventory
-- 4.1 provider baseUrl: finding #153 (redirects followed, x-api-key survives cross-host), fixed in PR #159; CA handling pass. CORRECTED: the probe CA verdict, see below
+- 4.1 provider baseUrl: finding #153 (redirects followed, x-api-key survives cross-host), fixed in PR #159; CA handling pass; 2.2.0 re-walk: the Vertex token mint dials the key's `token_uri`, sends only a signed assertion, and follows no redirect, and the minted token goes only to the approved `spec.endpoint` host. CORRECTED: the probe CA verdict, see below
 - 4.2 callbackUrl: pin and re-resolution pass; finding #154 (deny ranges missed 100.64.0.0/10 and 198.18.0.0/15), fixed in PR #163; the resolved-IP deliverable landed in PR #159
 - 4.3 ToolProvider endpoint: pass
 - 4.4 platform apiBaseUrl segments: finding #150 (Discord segments unescaped), fixed in PR #158; WhatsApp pass; finding #151 (64KiB event details), fixed in PR #161
 - 4.5 otlpEndpoint: pass
-- 4.6 gateway to agent Services: pass (2.0.1 re-walk: the Pod wait resolves the same Service name as delivery, and the pipeline bound covers it; 2.1.0 re-walk: the Pod readiness tracker in `podready.go` matches Pods by labels within the namespace, so a Pod that copies the labels changes only when the wait connects, never the dial target or namespace)
+- 4.6 gateway to agent Services: pass (2.0.1 re-walk: the Pod wait resolves the same Service name as delivery, and the pipeline bound covers it; 2.1.0 re-walk: the Pod readiness tracker in `podready.go` matches Pods by labels within the namespace, so a Pod that copies the labels changes only when the wait connects, never the dial target or namespace; 2.2.0 re-walk: the tracker also requires a controller owner reference to the Agent, so a Pod that only copies the labels no longer counts)
 - 4.7 controller dials: pass except the #149 and #153 sites above (2.0.1 re-walk: activity older than the Agent is ignored; dial targets unchanged)
 - 4.8 Secret access scope: pass (2.0.0 delta: the watch starts at the latest version, #550 fixed in PR #553; 2.1.0 re-walk: one name-selected list and one name-selected watch per Secret, resuming from the list, so the scope is unchanged and a refused list falls back to live GETs)
 
 Cross-cutting
 - 5.1 constant-time comparisons: pass
-- 5.2 trust pool rebuilds: finding #149 sites, fixed; rest pass
+- 5.2 trust pool rebuilds: finding #149 sites, fixed; rest pass; 2.2.0 re-walk: finding #639 (the Python agent listener kept its startup certificate and CA after a rotation), fixed in PR #642, which switches each handshake to the current context and resumes no TLS session; the agent runtimes' listener files joined the manifest line
 - 5.3 events and conditions: finding #151, fixed; rest pass (2.0.1 re-walk: the Pod wait's text reaches channel health cut to 1 KiB and carries no new caller-visible material)
 - 5.4 auth-failure logs: pass
 - 5.5 config injection: finding #155 (lenient parsing half-applied), fixed in PR #165; rest pass; 2.0.0 re-walk: the platform base URL parses as strictly as its use, #545 fixed in PR #546

@@ -8,13 +8,15 @@ details. Build with `make books` (which runs `make docs-check` first);
 ## Status
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
-recently for 2.1.0 (both passes).
+recently for 2.2.0 (pass one).
 
-Pass one for 2.1.0 (2026-10-28, against locally built artifacts) walked every
+Pass one for 2.2.0 (2026-11-23, against locally built artifacts) walked every
 chapter clean on a fresh k3d cluster, and every command and block of output
 matched the pages apart from pod hashes, ages, IPs, and timestamps. The wake in
-the sleep chapter took 2.47 seconds, so the page's "about 3 seconds" holds.
-Only the version pin changed.
+the sleep chapter took 2.46 seconds, so the page's "about 3 seconds" holds.
+Besides the version pin, three pages changed: the skill install passage in "Let
+a coding agent help", the request-path pointer in "Give it a real brain", and
+one link text in "Talking to your agent".
 
 Pass two for 2.1.0 (2026-10-28, after the tag) walked every chapter clean on a
 fresh k3d cluster, with the chart from the OCI registry and every image pulled
@@ -36,7 +38,7 @@ passes, and [RELEASING.md](../RELEASING.md) lists where each pass falls in the
 release. The walk history (what each pass caught) is in issues #77, #99, #115,
 #130, and #143.
 
-The install is pinned to `--version 2.1.0` on purpose: the pin is what makes
+The install is pinned to `--version 2.2.0` on purpose: the pin is what makes
 the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 
